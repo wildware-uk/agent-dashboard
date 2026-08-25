@@ -11,6 +11,8 @@
 	import type { Snippet } from 'svelte';
 	import Avatar from './Avatar.svelte';
 	import Markdown from './Markdown.svelte';
+	import UpdateActions from './UpdateActions.svelte';
+	import type { OwnerActions } from './actions';
 	import { timeLabel } from './days';
 	import { levelStyle } from './levels';
 	import type { UpdateView } from './types';
@@ -26,12 +28,19 @@
 		/** Arrived over the stream, so it animates in exactly once. */
 		isNew = false,
 		/** The media grid (design §7). Rendered by the media-in-the-UI slice. */
-		media
+		media,
+		/**
+		 * The owner's write calls (design §7). Given one, the card grows a pin and
+		 * a delete; without one it renders exactly as it always has, which is what
+		 * keeps every existing card spec honest.
+		 */
+		actions
 	}: {
 		update: UpdateView;
 		agentName?: string;
 		isNew?: boolean;
 		media?: Snippet<[UpdateView]>;
+		actions?: OwnerActions;
 	} = $props();
 
 	const level = $derived(levelStyle(update.level));
@@ -45,6 +54,7 @@
 	data-level={update.level}
 	data-update-id={update.id}
 	aria-label="{level.label} update from {poster}"
+	data-pinned={update.pinned ? 'true' : undefined}
 >
 	<!-- The level colour: the thing a long timeline is scanned by. -->
 	<span class="absolute inset-y-0 left-0 w-1.5 {level.bar}" aria-hidden="true"></span>
@@ -55,12 +65,29 @@
 		<header class="flex flex-wrap items-baseline gap-x-2 gap-y-1 text-sm">
 			<span class="font-medium text-content">{poster}</span>
 			<span class="rounded px-1.5 py-0.5 text-xs font-medium {level.badge}">{level.label}</span>
+			{#if update.pinned}
+				<!--
+					Stated on the card itself, not only in the ordering: a reader who
+					lands mid-feed has to be able to tell why this one is at the top.
+				-->
+				<span class="flex items-center gap-1 text-xs font-medium text-accent">
+					<svg class="size-3" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+						<path
+							d="M9.5 1.5 14.5 6.5l-1.8.4-2.3 2.3.7 3.6-1.1 1.1L6.6 10 3 13.6 2 12.6l3.6-3.6L1.7 5.1l1.1-1.1 3.6.7 2.3-2.3z"
+						/>
+					</svg>
+					Pinned
+				</span>
+			{/if}
 			<time
 				class="ml-auto text-xs text-content-muted"
 				datetime={new Date(update.createdAt).toISOString()}
 			>
 				{timeLabel(update.createdAt)}
 			</time>
+			{#if actions}
+				<UpdateActions {update} {actions} />
+			{/if}
 		</header>
 
 		{#if update.title}

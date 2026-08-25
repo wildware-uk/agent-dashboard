@@ -11,6 +11,7 @@ import {
 	insertMedia,
 	listMediaForUpdate,
 	listOrphanedMedia,
+	setMediaBytes,
 	setMediaStatus
 } from './media';
 
@@ -170,6 +171,25 @@ describe('listOrphanedMedia', () => {
 		expect(
 			listOrphanedMedia(db, { createdBefore: 1000, statuses: ['ready', 'failed'] }).map((m) => m.id)
 		).toEqual([failed.id]);
+	});
+});
+
+describe('setMediaBytes', () => {
+	it('records what actually arrived, which is not what was declared', () => {
+		const media = upload({ bytes: 4096, sha256: '' });
+
+		const stored = setMediaBytes(db, media.id, { bytes: 1234, sha256: 'deadbeef' })!;
+
+		expect(stored.bytes).toBe(1234);
+		expect(stored.sha256).toBe('deadbeef');
+		// Untouched: flipping to ready is the derivative pipeline's call, not the
+		// ingest's (design §6 step 5).
+		expect(stored.status).toBe('pending');
+		expect(findMediaById(db, media.id)!.sha256).toBe('deadbeef');
+	});
+
+	it('answers with nothing for an id that is not there', () => {
+		expect(setMediaBytes(db, 'nope', { bytes: 1, sha256: 'x' })).toBeUndefined();
 	});
 });
 

@@ -11,7 +11,7 @@ subscribers; `src/http/` turns them into an SSE stream.
 Notes carried from the design (§4):
 
 - Event types: `project.created`, `project.updated`, `update.created`,
-  `update.deleted`, `media.ready`, `task.created`, `task.updated`,
+  `update.updated`, `update.deleted`, `media.ready`, `task.created`, `task.updated`,
   `message.created`, `approval.created`, `approval.decided`, `agent.presence`.
 - Every event carries the global sequence number used as the SSE `id:`.
 - The last 500 events stay in a ring buffer so a reconnect with `Last-Event-ID`

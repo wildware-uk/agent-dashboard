@@ -32,8 +32,13 @@ Notes carried from the design (§7):
 | `Timeline.svelte`                   | The scroll container, the day groups, and the "N new" pill.                                  |
 | `UpdateCard.svelte`                 | One update: level colour, avatar, markdown, media region.                                    |
 | `Markdown.svelte`                   | The only `{@html}` in the client.                                                            |
-| `RightRail.svelte`                  | Placeholder for live agents and open tasks (§7).                                             |
+| `RightRail.svelte`                  | Live agents with their session metadata; open tasks still a placeholder (§7).                |
 | `timeline.svelte.ts`                | The client store: snapshot, stream, pending arrivals, paging.                                |
+| `presence.svelte.ts`                | The live-agents store: who is online, derived against a ticking clock (§4).                  |
+| `actions.ts`                        | The owner's write calls: create, rename, pin, archive, delete (§7).                          |
+| `NewProject.svelte`                 | Create a project from the browser.                                                           |
+| `ProjectActions.svelte`             | Per-project menu: pin, rename, re-describe, archive, unarchive.                              |
+| `UpdateActions.svelte`              | Per-card pin, and delete behind a confirmation.                                              |
 | `markdown.ts`                       | markdown-it with **`html: false`**.                                                          |
 | `avatar.ts`, `levels.ts`, `days.ts` | Pure helpers: name hash, level palette, day grouping.                                        |
 | `types.ts`                          | The wire shapes, declared here because this module may not import `$db`.                     |
@@ -54,6 +59,48 @@ transport shape everything it does:
 
 `update.deleted` is the exception that proves the rule: the id _is_ the whole
 payload, so the card is dropped with no request at all.
+
+## Presence in the browser
+
+`presence.svelte.ts` is the client half of "presence is derived, never a stored
+flag" (§4). It holds the rows the server sent and answers `online` against **its
+own clock**, ticking once a second, so an agent that has been quiet for 90s
+leaves the rail without any event arriving — because nothing happens when an
+agent goes quiet, and a rail that waited for something to happen would show a
+green dot beside a dead run.
+
+An `agent.presence` frame is a reason to refetch, like every other event. The
+slow poll alongside it is not redundant: a heartbeat inside the window
+deliberately publishes nothing, so without it the rail would sit on a heartbeat
+timestamp that ages until it looked offline.
+
+It opens its own `EventSource` today, which is one more connection than the page
+needs. `openStream` is injectable for exactly that reason: a later slice that
+consolidates the client stores should hand both of them the same stream.
+
+## The owner's actions
+
+`actions.ts` is the store's mirror: the store reads, it writes. Nothing in it
+touches client state, and that is the design's consistency rule rather than an
+omission — a write reaches the server, the server publishes, and the change comes
+back on the stream to _every_ tab including the one that made it. So a control
+awaits its call and then does nothing, there is no optimistic edit to reconcile,
+and the tab that acted cannot end up disagreeing with the tab that watched.
+
+The controls are opt-in: `Sidebar.svelte`, `Timeline.svelte` and
+`UpdateCard.svelte` grow them only when handed an `OwnerActions`, which is what
+keeps each of them renderable — and testable — with nothing behind it.
+`Shell.svelte` passes the real client down in production and a spec passes a fake.
+
+Two rules the components follow. Delete asks first, inline rather than through
+`window.confirm`, because a native dialog is untestable, unstyleable and blocks
+the tab including its stream. And a refused call keeps the form open holding what
+was typed, because retyping a description to discover the name was the problem is
+nobody's idea of a good time.
+
+Pinned updates sort first by being lifted clear of the day groups into their own
+section, not by being reordered inside one: an update pinned three weeks ago
+belongs at the top of the feed, not at the top of "3 August".
 
 The pill is not a decoration. While the reader cannot see the top of the
 timeline, arrivals are held in `pending` instead of being inserted, so nothing

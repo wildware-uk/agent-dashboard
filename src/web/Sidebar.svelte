@@ -9,6 +9,9 @@
 	 * the first time someone reuses it.
 	 */
 	import { resolve } from '$app/paths';
+	import NewProject from './NewProject.svelte';
+	import ProjectActions from './ProjectActions.svelte';
+	import type { OwnerActions } from './actions';
 	import type { ProjectView } from './types';
 
 	let {
@@ -16,11 +19,22 @@
 		/** The selected project's slug, or `null` for the whole timeline. */
 		activeSlug = null,
 		/** Called after a navigation, so the mobile drawer can close itself. */
-		onnavigate
+		onnavigate,
+		/**
+		 * The owner's write calls (design §7). Given one, the sidebar grows a
+		 * create form and a per-project menu; without one it is a read-only list.
+		 *
+		 * Opt-in rather than always-on because this component is also the drawer,
+		 * the empty state and every spec in `Sidebar.svelte.spec.ts` — and a
+		 * navigation component that cannot be rendered without a server behind it
+		 * is a component nobody can reason about.
+		 */
+		actions
 	}: {
 		projects: ProjectView[];
 		activeSlug?: string | null;
 		onnavigate?: () => void;
+		actions?: OwnerActions;
 	} = $props();
 
 	let showArchived = $state(false);
@@ -47,18 +61,29 @@
 	</a>
 
 	<div class="flex flex-col gap-1">
-		<h2 class="px-2 text-xs font-semibold tracking-wide text-content-muted uppercase">Projects</h2>
+		<div class="flex items-center justify-between gap-2">
+			<h2 class="px-2 text-xs font-semibold tracking-wide text-content-muted uppercase">
+				Projects
+			</h2>
+			{#if actions}
+				<NewProject {actions} />
+			{/if}
+		</div>
 		{#if active.length === 0}
 			<p class="px-2 py-1 text-content-muted">No projects yet.</p>
 		{:else}
 			<ul class="flex flex-col gap-0.5">
 				{#each active as project (project.id)}
-					<li>
+					<!--
+						`group` is what lets the manage menu stay invisible until the row is
+						hovered or focused, so the sidebar reads as navigation first.
+					-->
+					<li class="group flex items-center gap-1">
 						<a
 							href={href(project.slug)}
 							onclick={onnavigate}
 							aria-current={project.slug === activeSlug ? 'page' : undefined}
-							class="flex items-center gap-2 rounded px-2 py-1.5 hover:bg-surface-raised aria-[current=page]:bg-surface-raised aria-[current=page]:text-content"
+							class="flex min-w-0 flex-1 items-center gap-2 rounded px-2 py-1.5 hover:bg-surface-raised aria-[current=page]:bg-surface-raised aria-[current=page]:text-content"
 						>
 							{#if project.pinned}
 								<svg
@@ -75,6 +100,9 @@
 							{/if}
 							<span class="truncate">{project.name}</span>
 						</a>
+						{#if actions}
+							<ProjectActions {project} {actions} />
+						{/if}
 					</li>
 				{/each}
 			</ul>
@@ -102,15 +130,19 @@
 			{#if showArchived}
 				<ul class="flex flex-col gap-0.5">
 					{#each archived as project (project.id)}
-						<li>
+						<li class="group flex items-center gap-1">
 							<a
 								href={href(project.slug)}
 								onclick={onnavigate}
 								aria-current={project.slug === activeSlug ? 'page' : undefined}
-								class="flex items-center gap-2 rounded px-2 py-1.5 text-content-muted hover:bg-surface-raised aria-[current=page]:bg-surface-raised aria-[current=page]:text-content"
+								class="flex min-w-0 flex-1 items-center gap-2 rounded px-2 py-1.5 text-content-muted hover:bg-surface-raised aria-[current=page]:bg-surface-raised aria-[current=page]:text-content"
 							>
 								<span class="truncate">{project.name}</span>
 							</a>
+							<!-- Reachable here too, or an archived project could never come back. -->
+							{#if actions}
+								<ProjectActions {project} {actions} />
+							{/if}
 						</li>
 					{/each}
 				</ul>

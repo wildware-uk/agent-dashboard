@@ -7,17 +7,20 @@
  * already rendered a card can be told to drop it.
  */
 import {
+	attachMediaToUpdate,
 	findAgentById,
 	findSessionById,
 	findUpdateById,
 	insertUpdate,
 	listUpdates as listUpdateRows,
+	setUpdatePinned as setPinnedFlag,
 	softDeleteUpdate,
 	type Update,
 	type UpdateLevel
 } from '$db';
 import type { DomainContext } from './context';
 import { invalid, notFound } from './errors';
+import { assertAttachable } from './media';
 import { resolveProject } from './projects';
 import { optionalText, requiredText } from './text';
 
@@ -43,6 +46,16 @@ export type PostUpdateInput = {
 	title?: string | null;
 	level?: UpdateLevel;
 	sessionId?: string | null;
+	/**
+	 * Uploads to show on the card (design §5).
+	 *
+	 * Ids from `create_upload`, whose bytes have already landed. Checked before
+	 * anything is written and attached before the event goes out, so the post
+	 * either arrives complete or does not happen: an image the agent believes it
+	 * published must not be silently dropped. Media that lands *after* the post
+	 * is `attach_media`'s job instead.
+	 */
+	mediaIds?: readonly string[];
 };
 
 /** Post one update and announce it. */
@@ -63,6 +76,13 @@ export function postUpdate(ctx: DomainContext, input: PostUpdateInput): Update {
 		if (session.agentId !== agent.id) throw invalid('session belongs to another agent');
 	}
 
+	// Checked first: attaching after the insert would leave a posted update whose
+	// media quietly went missing.
+	const mediaIds =
+		input.mediaIds === undefined || input.mediaIds.length === 0
+			? []
+			: assertAttachable(ctx, { mediaIds: input.mediaIds, agentId: agent.id });
+
 	const update = insertUpdate(ctx.db, {
 		projectId: project.id,
 		agentId: agent.id,
@@ -72,6 +92,11 @@ export function postUpdate(ctx: DomainContext, input: PostUpdateInput): Update {
 		level: input.level ?? 'info',
 		createdAt: ctx.now()
 	});
+
+	if (mediaIds.length > 0) {
+		attachMediaToUpdate(ctx.db, { mediaIds, updateId: update.id, agentId: agent.id });
+	}
+
 	ctx.bus.publish('update.created', {
 		updateId: update.id,
 		projectId: update.projectId,
@@ -150,6 +175,35 @@ export function deleteUpdate(ctx: DomainContext, updateId: string): Update {
 	ctx.bus.publish('update.deleted', { updateId: update.id, projectId: update.projectId });
 
 	return findUpdateById(ctx.db, update.id)!;
+}
+
+/**
+ * Pin or unpin an update (design §7).
+ *
+ * Quiet when the flag already says what was asked for, for the same reason
+ * {@link deleteUpdate} is: a `update.updated` that changed nothing would make
+ * every open tab refetch a timeline that cannot have moved.
+ *
+ * A deleted update cannot be pinned. It is gone from every timeline, so pinning
+ * it would put a row nobody can see at the top of an order nobody can read.
+ *
+ * @throws {DomainError} `not_found` if there is no such live update.
+ */
+export function setUpdatePinned(ctx: DomainContext, updateId: string, pinned: boolean): Update {
+	const update = findUpdateById(ctx.db, updateId);
+	if (!update || update.deletedAt !== null) throw notFound(`no such update: ${updateId}`);
+	if (update.pinned === pinned) return update;
+
+	// The row was just read and this is a single-process deployment (design §2),
+	// so a missing row here would be a bug, not a race.
+	const saved = setPinnedFlag(ctx.db, update.id, pinned)!;
+	ctx.bus.publish('update.updated', {
+		updateId: saved.id,
+		projectId: saved.projectId,
+		pinned: saved.pinned
+	});
+
+	return saved;
 }
 
 function pageLimit(limit: number | undefined): number {

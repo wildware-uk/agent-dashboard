@@ -30,7 +30,8 @@ Notes carried from the design:
   granting an HttpOnly, Secure, SameSite=Lax signed cookie. Rate limited (§8).
 - Media is served from `/media/:id/:variant` with immutable cache headers,
   `X-Content-Type-Options: nosniff`, `Content-Disposition: inline`, and only
-  allowlisted mime types (§6).
+  allowlisted mime types (§6). Uploads arrive at `PUT /api/upload/:token`, which
+  is token-authed and session-exempt.
 - Per-token rate limits on `/mcp` and on uploads (§8).
 
 ## The dashboard shell (`routes/`)
@@ -46,6 +47,68 @@ refetch cannot drift apart — and reads the stream cursor _before_ the state, f
 the reason given in `stream/snapshot.ts`. The page hands that snapshot to
 `$web/Shell.svelte`, which adopts it and then goes live from that cursor.
 
+## The owner's write endpoints (`owner/`)
+
+`src/http/owner/` holds the handlers; the route files under `routes/api/` are
+thin mounts over them, so validation, error mapping and the event each write
+publishes are all tested without a server. Public entry point:
+`src/http/owner/index.ts`.
+
+| Route                             | Serves                                                                          |
+| --------------------------------- | ------------------------------------------------------------------------------- |
+| `POST /api/projects`              | Create a project. Idempotent on slug, like `create_project`.                    |
+| `PATCH /api/projects/[reference]` | Rename, re-describe, pin, archive or unarchive. `reference` is a slug or an id. |
+| `PATCH /api/updates/[id]`         | Pin or unpin one update. Nothing else about an update is editable.              |
+| `DELETE /api/updates/[id]`        | Soft delete one update (§3).                                                    |
+
+All four require the owner's session and answer `401 {"error":"unauthenticated"}`
+without it, checked in the handler as well as in the hook because these are the
+only endpoints that can destroy anything. A refusal carries the domain's own code
+(`invalid_argument`, `not_found`, `conflict`) as `400`, `404`, `409`, so the
+browser branches on one vocabulary whichever front door answered.
+
+Every success publishes exactly one event, because the domain publishes it — so a
+second open tab follows a rename, a pin, an archive or a delete over
+`GET /api/stream` with nothing to poll. `owner/live-sync.test.ts` is that claim as
+a test: real domain, real bus, real snapshot endpoint, two stores, one write.
+
+The `SameSite=Lax` session cookie is what makes these safe from cross-site
+forgery: a third-party page's request arrives with no session at all.
+
+## Media (`media/`)
+
+`src/http/media/` holds the two handlers; the route files are thin mounts over
+them. Public entry point: `src/http/media/index.ts`.
+
+| Route                       | Serves                                                        |
+| --------------------------- | ------------------------------------------------------------- |
+| `PUT /api/upload/[token]`   | An agent's raw bytes, against a single-use signed token (§6). |
+| `GET /media/[id]/[variant]` | The stored file, immutable and inline. Unknown anything: 404. |
+
+The upload route is **exempt from the session guard by name** in
+`auth/guard.ts`: an agent has an upload token, not the owner's cookie. That makes
+the token the whole authorisation, so every check lives in `$media` where the
+bytes are, and this layer only translates refusals into statuses an agent can act
+on — 403 for a spent or expired token, 413 for a body past the cap, 415 for bytes
+that are not the declared type. A 400 for all three would leave an agent retrying
+blind. There is a per-token rate limit (§8), keyed on the token id from the URL
+and applied before the signature is checked, so a client looping on one token
+cannot spend this server's time on HMACs and SQLite.
+
+Serving requires the owner's session, checked here as well as in the hook. The
+headers are the security and are asserted in `media/serve.test.ts`:
+`X-Content-Type-Options: nosniff`, `Content-Disposition: inline`,
+`Cache-Control: public, max-age=31536000, immutable` with an `ETag` from the
+sha256, `Content-Security-Policy: default-src 'none'; sandbox`, and
+`Accept-Ranges: none` — honest, because range requests are not implemented. Only
+the seven allowlisted types are ever emitted, and the id and variant are both
+closed sets, so no string from a URL reaches a path. The raw upload directory
+lives outside the served tree entirely.
+
+Behind a reverse proxy the upload route needs a body limit as large as
+`MAX_VIDEO_BYTES` and a generous read timeout, or the proxy refuses the upload
+before this server sees it. The snippet is in a comment at the route itself.
+
 ## The live transport (`stream/`)
 
 `src/http/stream/` holds the protocol; `routes/api/stream/` and
@@ -57,8 +120,15 @@ without a server. Public entry point: `src/http/stream/index.ts`.
 | `GET /api/stream`           | One SSE connection carrying every event type. `id:` is the global event seq. |
 | `GET /api/snapshot`         | Projects plus the newest timeline page, stamped with the seq it is good to.  |
 | `GET /api/snapshot/updates` | The timeline alone, for paging (`?cursor=`) or a scoped refetch.             |
+| `GET /api/snapshot/agents`  | Who is online right now, derived from heartbeats. No query, no pages.        |
 
-All three require the owner's session. The hook in `src/hooks.server.ts` already
+`/api/snapshot/agents` is the right rail's own read. Presence is derived and
+never stored (§4), so it takes no filter and no cursor: the answer is whoever has
+beaten within the window at the instant of the read. It is a separate route from
+`/api/snapshot` because the rail re-reads it often to keep heartbeat times fresh,
+and must not drag the timeline along each time.
+
+All of them require the owner's session. The hook in `src/hooks.server.ts` already
 refuses an unauthenticated `/api/...` request; each handler checks again for
 itself, because one stream connection carries everything happening in the
 deployment.

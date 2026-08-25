@@ -12,6 +12,8 @@
  * hide exactly the bugs these tests exist to catch.
  */
 import type { ProjectView, SnapshotResponse, UpdateView } from './types';
+import type { OwnerActions } from './actions';
+import type { AgentsSnapshot, LiveAgentView } from './presence.svelte';
 import type { StreamLike } from './timeline.svelte';
 
 /** A project row with sensible defaults. */
@@ -153,6 +155,119 @@ export function fakeApi(initial: FakeApiState) {
 		 * queue, so awaiting promises alone would return before the store had
 		 * applied anything.
 		 */
+		async settle(): Promise<void> {
+			for (let pass = 0; pass < 5; pass += 1) {
+				while (queue.length > 0) queue.shift()!();
+				await Promise.resolve();
+				await new Promise((resolve) => setTimeout(resolve, 0));
+			}
+		}
+	};
+}
+
+/** One call a control made, so a spec can assert what it asked the server for. */
+export type ActionCall = { name: string; args: unknown[] };
+
+/**
+ * A stand-in for {@link OwnerActions}.
+ *
+ * Records what a control asked for and answers with the row the endpoint would
+ * have returned, so a spec drives real clicks with no server and no `fetch`.
+ * `fail` makes the next call reject the way {@link ActionError} does, which is
+ * the case a control has to survive without losing what the owner typed.
+ */
+export function fakeActions(): {
+	calls: ActionCall[];
+	fail(error: Error): void;
+	actions: OwnerActions;
+} {
+	const calls: ActionCall[] = [];
+	let failure: Error | null = null;
+
+	function record<T>(name: string, args: unknown[], result: T): Promise<T> {
+		calls.push({ name, args });
+		return failure ? Promise.reject(failure) : Promise.resolve(result);
+	}
+
+	return {
+		calls,
+		fail(error: Error) {
+			failure = error;
+		},
+		actions: {
+			createProject: (input) =>
+				record('createProject', [input], aProject({ id: 'new', name: input.name })),
+			patchProject: (reference, patch) =>
+				record('patchProject', [reference, patch], aProject({ slug: reference, ...patch })),
+			setUpdatePinned: (id, pinned) =>
+				record('setUpdatePinned', [id, pinned], anUpdate({ id, pinned })),
+			deleteUpdate: (id) => record('deleteUpdate', [id], anUpdate({ id, deletedAt: 1 }))
+		}
+	};
+}
+
+/** A live agent as `GET /api/snapshot/agents` sends it. */
+export function aLiveAgent(overrides: Partial<LiveAgentView> = {}): LiveAgentView {
+	return {
+		agentId: 'a1',
+		name: 'scout',
+		sessionId: 's1',
+		startedAt: Date.UTC(2026, 7, 25, 10),
+		lastHeartbeatAt: Date.UTC(2026, 7, 25, 10),
+		sessions: 1,
+		host: 'wildware',
+		cwd: '/srv/ssd1/app',
+		model: 'opus',
+		...overrides
+	};
+}
+
+/**
+ * A fake `/api/snapshot/agents` plus the scheduling hook the presence store
+ * coalesces through.
+ *
+ * Presence has no pages and no filters, so this is deliberately simpler than
+ * {@link fakeApi}: the endpoint answers with whoever is online at the instant it
+ * is asked, which is exactly what `agents` is.
+ */
+export function fakeAgentsApi(initial: { seq?: number; agents?: LiveAgentView[] } = {}) {
+	let seq = initial.seq ?? 1;
+	let agents = initial.agents ?? [];
+	const calls: string[] = [];
+	const queue: (() => void)[] = [];
+	let status = 200;
+
+	return {
+		calls,
+		queue,
+
+		snapshot(): AgentsSnapshot {
+			return { seq, at: new Date().toISOString(), agents };
+		},
+
+		/** The server's answer is now this, at this stream cursor. */
+		replace(next: LiveAgentView[], nextSeq = seq + 1): void {
+			agents = next;
+			seq = nextSeq;
+		},
+
+		/** Make the next reads fail the way a dropped session or a restart would. */
+		breaks(nextStatus = 500): void {
+			status = nextStatus;
+		},
+
+		fetch(url: string): Promise<Response> {
+			calls.push(url);
+			if (status !== 200) return Promise.resolve(new Response('no', { status }));
+			return Promise.resolve(
+				new Response(JSON.stringify({ seq, at: new Date().toISOString(), agents }), {
+					status: 200,
+					headers: { 'content-type': 'application/json' }
+				})
+			);
+		},
+
+		/** Run every coalesced refetch and let its promises settle. */
 		async settle(): Promise<void> {
 			for (let pass = 0; pass < 5; pass += 1) {
 				while (queue.length > 0) queue.shift()!();

@@ -29,7 +29,7 @@ export { context, type Clock, type DomainContext } from './context';
  * types only: the arrow still points one way, and nothing here lets an adapter
  * reach a repository.
  */
-export type { Agent, Project, ProjectStatus, Update, UpdateLevel } from '$db';
+export type { Agent, Project, ProjectStatus, Session, SessionMeta, Update, UpdateLevel } from '$db';
 export {
 	DomainError,
 	conflict,
@@ -70,6 +70,28 @@ export {
 	type UpdateProjectInput
 } from './projects';
 export {
+	ALLOWED_MIMES,
+	FILENAME_MAX_LENGTH,
+	MEDIA_PER_UPDATE_MAX,
+	MEDIA_SWEEP_INTERVAL_MS,
+	UPLOAD_TOKEN_TTL_MS,
+	assertAttachable,
+	attachMedia,
+	checkedMediaIds,
+	createUpload,
+	ingestUpload,
+	readMediaVariant,
+	startMediaSweeper,
+	sweepMedia,
+	type AttachMediaInput,
+	type AttachMediaResult,
+	type CreateUploadInput,
+	type IngestUploadInput,
+	type IngestedMedia,
+	type MediaSweeperOptions,
+	type UploadGrant
+} from './media';
+export {
 	BODY_MAX_LENGTH,
 	DEFAULT_LIMIT,
 	MAX_LIMIT,
@@ -77,7 +99,38 @@ export {
 	deleteUpdate,
 	listUpdates,
 	postUpdate,
+	setUpdatePinned,
 	type ListUpdatesInput,
 	type PostUpdateInput,
 	type UpdatePage
 } from './updates';
+export {
+	CWD_MAX_LENGTH,
+	HEARTBEAT_INTERVAL_S,
+	HOST_MAX_LENGTH,
+	MODEL_MAX_LENGTH,
+	PRESENCE_WINDOW_MS,
+	SESSION_IDLE_MS,
+	SWEEP_INTERVAL_MS,
+	WORK_COUNTERS,
+	countWork,
+	endSession,
+	heartbeat,
+	isAgentOnline,
+	listLiveAgents,
+	registerSession,
+	startPresenceSweeper,
+	sweepSessions,
+	type EndSessionInput,
+	type EndSessionResult,
+	type Heartbeat,
+	type HeartbeatInput,
+	type LiveAgent,
+	type PresenceSweeperOptions,
+	type RegisterSessionInput,
+	type RegisteredSession,
+	type SweepOptions,
+	type SweepResult,
+	type WorkCounter,
+	type WorkCounts
+} from './sessions';

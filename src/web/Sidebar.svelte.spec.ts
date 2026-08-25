@@ -1,7 +1,7 @@
 import { render } from 'vitest-browser-svelte';
 import { describe, expect, it } from 'vitest';
 import Sidebar from './Sidebar.svelte';
-import { aProject } from './testing';
+import { aProject, fakeActions } from './testing';
 
 const projects = [
 	aProject({ id: 'p1', slug: 'alpha', name: 'Alpha' }),
@@ -73,5 +73,38 @@ describe('the project sidebar', () => {
 		await screen.getByRole('link', { name: /Alpha/ }).click();
 
 		expect(closed).toBe(1);
+	});
+});
+
+/**
+ * The owner controls are opt-in: a sidebar handed no action client is a
+ * read-only sidebar, which is what keeps it renderable — and testable — with
+ * nothing behind it. Production hands it one (`Shell.svelte`).
+ */
+describe('the owner controls in the sidebar', () => {
+	it('offers none of them until it is handed an action client', async () => {
+		const screen = render(Sidebar, { projects: [projects[0]] });
+
+		expect(screen.getByRole('button', { name: 'New project' }).elements()).toHaveLength(0);
+		expect(screen.getByRole('button', { name: /Manage/ }).elements()).toHaveLength(0);
+	});
+
+	it('offers a create form and a manage menu per project when it is', async () => {
+		const api = fakeActions();
+		const screen = render(Sidebar, { projects, actions: api.actions });
+
+		await expect.element(screen.getByRole('button', { name: 'New project' })).toBeInTheDocument();
+		expect(screen.getByRole('button', { name: /Manage/ }).elements()).toHaveLength(2);
+	});
+
+	it('reaches an archived project’s menu too, so it can be unarchived', async () => {
+		const api = fakeActions();
+		const screen = render(Sidebar, { projects, actions: api.actions });
+
+		await screen.getByRole('button', { name: /Archived/ }).click();
+		await screen.getByRole('button', { name: 'Manage Old' }).click();
+		await screen.getByRole('button', { name: 'Unarchive project' }).click();
+
+		expect(api.calls).toEqual([{ name: 'patchProject', args: ['old', { status: 'active' }] }]);
 	});
 });

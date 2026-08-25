@@ -133,6 +133,19 @@ function update({ id, seq, body, level = 'info', title = null }: Update) {
  * The snapshot is a function of the current list, so a test changes the list and
  * the *next* refetch sees it — which is exactly how the browser experiences an
  * agent posting something.
+ *
+ * Two things here are about the *shell as a whole* rather than the timeline, and
+ * both would be wrong if this faked only what one store asks for:
+ *
+ * 1. **`/api/snapshot` and `/api/snapshot/agents` are different documents.** The
+ *    right rail reads the second one and derives `online` from `agents`, so
+ *    answering it with the timeline document leaves that field `undefined` and
+ *    the rail throws on every clock tick — which takes the *timeline's* renders
+ *    down with it, because they share a flush.
+ * 2. **A frame goes to every open connection.** The real server fans an event
+ *    out to all subscribers, and the shell now has two (the timeline store and
+ *    the rail's). Handing the frame to whichever connection asked first would
+ *    starve the other, so a scripted delivery is offered to each of them.
  */
 function fakeServer(page: Page) {
 	let items: ReturnType<typeof update>[] = [];
@@ -149,14 +162,25 @@ function fakeServer(page: Page) {
 		return route.fulfill({ status: 200, contentType: 'application/json', body });
 	};
 
+	/** `GET /api/snapshot/agents`: nobody is beating, which is the honest answer here. */
+	const agents = (route: Route) => {
+		const body = JSON.stringify({ seq, at: new Date().toISOString(), agents: [] });
+		return route.fulfill({ status: 200, contentType: 'application/json', body });
+	};
+
 	return {
 		async install() {
-			await page.route('**/api/snapshot**', snapshot);
+			await page.route('**/api/snapshot**', (route) => {
+				const path = new URL(route.request().url()).pathname;
+				return path.startsWith('/api/snapshot/agents') ? agents(route) : snapshot(route);
+			});
 			await page.route('**/api/stream**', async (route) => {
-				const next = gates.shift();
+				// Each connection reads the script from the start, so one scripted
+				// event reaches every subscriber exactly as the real bus delivers it.
+				const next = gates[0];
 				if (!next) {
-					// No more events scripted: hold the connection open rather than
-					// letting `EventSource` reconnect in a loop behind the test.
+					// No events scripted: hold the connection open rather than letting
+					// `EventSource` reconnect in a loop behind the test.
 					await new Promise(() => {});
 					return;
 				}

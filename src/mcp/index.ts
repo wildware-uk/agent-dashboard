@@ -51,7 +51,9 @@ export { JSONRPC_SERVER_ERROR, misconfiguredResponse, refusalResponse } from './
 export {
 	TOOLS,
 	TOOL_NAMES,
+	attachMediaTool,
 	createProjectTool,
+	createUploadTool,
 	listProjectsTool,
 	postUpdateTool,
 	registerTools,

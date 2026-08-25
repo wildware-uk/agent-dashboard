@@ -16,7 +16,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { getRequest, setResponse } from '@sveltejs/kit/node';
 import type { Handle, RequestEvent } from '@sveltejs/kit';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { listUpdates } from '$domain';
+import { listLiveAgents, listUpdates } from '$domain';
 import { createAuthHandle } from '$http/auth';
 import { createTokenRateLimiter, type TokenRateLimiter } from './rate-limit';
 import { createMcpHandler, MCP_SERVER_NAME } from './server';
@@ -136,9 +136,14 @@ describe('the transport', () => {
 		const { tools } = await client.listTools();
 
 		expect(tools.map((tool) => tool.name).sort()).toEqual([
+			'attach_media',
 			'create_project',
+			'create_upload',
+			'end_session',
+			'heartbeat',
 			'list_projects',
-			'post_update'
+			'post_update',
+			'register_session'
 		]);
 
 		const post = tools.find((tool) => tool.name === 'post_update')!;
@@ -147,7 +152,13 @@ describe('the transport', () => {
 		// Descriptions survive the trip through JSON Schema, which is the half of
 		// the documentation a client can render next to each field.
 		const properties = post.inputSchema.properties as Record<string, { description?: string }>;
-		expect(Object.keys(properties).sort()).toEqual(['body', 'level', 'project', 'title']);
+		expect(Object.keys(properties).sort()).toEqual([
+			'body',
+			'level',
+			'media_ids',
+			'project',
+			'title'
+		]);
 		for (const [name, schema] of Object.entries(properties)) {
 			expect(schema.description, name).toBeTruthy();
 		}
@@ -292,6 +303,80 @@ async function refused(attempt: Promise<unknown>): Promise<{ status?: number; me
 	expect(error, 'expected the request to be refused').toBeDefined();
 	return { status: error!.code, message: error!.message };
 }
+
+describe('presence over the wire', () => {
+	it('runs a whole session: register, beat, end, with the counts piggybacked', async () => {
+		const client = await connect();
+
+		const registered = await call(client, 'register_session', {
+			meta: { host: 'wildware', cwd: '/srv/ssd1/app', model: 'opus' }
+		});
+		const { session_id, heartbeat_interval_s } = registered.structuredContent as {
+			session_id: string;
+			heartbeat_interval_s: number;
+		};
+		expect(session_id).toEqual(expect.any(String));
+		expect(heartbeat_interval_s).toBeGreaterThan(0);
+
+		// The rail's own query, answered through the domain rather than the row.
+		expect(listLiveAgents(mcp.h)).toMatchObject([
+			{ agentId: mcp.deps.agent.id, name: 'scout', host: 'wildware', model: 'opus' }
+		]);
+
+		const beat = await call(client, 'heartbeat', { session_id });
+		expect(beat.structuredContent).toEqual({
+			ok: true,
+			unread_messages: 0,
+			open_tasks: 0,
+			pending_approvals: 0
+		});
+
+		const ended = await call(client, 'end_session', { session_id });
+		expect(ended.structuredContent).toEqual({ session_id, ended: true });
+		expect(listLiveAgents(mcp.h)).toEqual([]);
+
+		// One transition each way, whatever happened in between (design §4).
+		expect(mcp.h.eventNames()).toEqual(['agent.presence', 'agent.presence']);
+
+		await client.close();
+	});
+
+	it('survives the trip through JSON Schema, nested meta object and all', async () => {
+		const client = await connect();
+		const { tools } = await client.listTools();
+
+		const register = tools.find((tool) => tool.name === 'register_session')!;
+		const properties = register.inputSchema.properties as Record<
+			string,
+			{ description?: string; properties?: Record<string, unknown> }
+		>;
+		expect(Object.keys(properties)).toEqual(['meta']);
+		expect(properties.meta.description).toBeTruthy();
+		expect(Object.keys(properties.meta.properties ?? {}).sort()).toEqual(['cwd', 'host', 'model']);
+		expect(register.inputSchema.required).toBeUndefined();
+
+		const heartbeat = tools.find((tool) => tool.name === 'heartbeat')!;
+		expect(heartbeat.inputSchema.required).toEqual(['session_id']);
+		expect(heartbeat.description).toContain('unread_messages');
+
+		await client.close();
+	});
+
+	it('refuses one agent’s heartbeat on another agent’s session', async () => {
+		const owner = await connect();
+		const { session_id } = (await call(owner, 'register_session', { meta: { host: 'mine' } }))
+			.structuredContent as { session_id: string };
+
+		const impostor = await connect(mcp.mint('impostor').token);
+		const stolen = await call(impostor, 'heartbeat', { session_id });
+
+		expect(stolen.isError).toBe(true);
+		expect(JSON.stringify(stolen.structuredContent)).toContain('invalid_argument');
+
+		await owner.close();
+		await impostor.close();
+	});
+});
 
 describe('auth over the wire', () => {
 	it('refuses a client with no token at all', async () => {
