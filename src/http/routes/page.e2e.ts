@@ -1,0 +1,53 @@
+import { expect, test } from '@playwright/test';
+
+// Scaffold smoke test: the Node-adapter build serves the shell, and the theme is
+// settled before first paint — dark unless the OS asks for light. The real
+// end-to-end test (post an update over MCP, watch it arrive over SSE) lands with
+// design §11 step 18.
+
+test.describe('dark-first with system preference', () => {
+	test('serves the shell', async ({ page }) => {
+		await page.goto('/');
+
+		await expect(page.getByRole('heading', { name: 'Agent Dashboard' })).toBeVisible();
+	});
+
+	test('ships dark in the HTML, so there is no light flash', async ({ request }) => {
+		// Before any script runs. `prefers-color-scheme: light` matches even when
+		// the OS has expressed no preference, so dark-first has to be the document's
+		// authored state rather than something the media query can be asked for.
+		const html = await (await request.get('/')).text();
+
+		expect(html).toContain('data-theme="dark"');
+	});
+
+	test.describe('with a light OS preference', () => {
+		test.use({ colorScheme: 'light' });
+
+		test('follows the OS into light', async ({ page }) => {
+			await page.goto('/');
+
+			await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+		});
+	});
+
+	test.describe('with a dark OS preference', () => {
+		test.use({ colorScheme: 'dark' });
+
+		test('stays dark', async ({ page }) => {
+			await page.goto('/');
+
+			await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+		});
+	});
+
+	test('remembers an explicit choice over the OS preference', async ({ page }) => {
+		await page.goto('/');
+		await page.getByRole('button', { name: /Switch to/ }).click();
+		const chosen = await page.locator('html').getAttribute('data-theme');
+
+		await page.reload();
+
+		await expect(page.locator('html')).toHaveAttribute('data-theme', chosen!);
+	});
+});

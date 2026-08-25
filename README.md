@@ -30,6 +30,64 @@ accounts. Sized for tens of agents and low thousands of updates on one box.
 See [`docs/superpowers/specs/2026-08-25-agent-dashboard-design.md`](docs/superpowers/specs/2026-08-25-agent-dashboard-design.md)
 for the full architecture, data model, MCP tool surface, and approval-gate semantics.
 
+## Development
+
+Requires Node 22+ and `ffmpeg` on `PATH`.
+
+```sh
+npm ci
+cp .env.example .env   # then fill in the secrets
+npm run dev
+```
+
+| Script                   | What it does                                                    |
+| ------------------------ | --------------------------------------------------------------- |
+| `npm run dev`            | Vite dev server                                                 |
+| `npm run build`          | Production build via the Node adapter (`build/index.js`)        |
+| `npm test`               | Node unit tests (Vitest) — the default suite, no browser needed |
+| `npm run test:component` | Svelte component tests in a real Chromium (Vitest browser mode) |
+| `npm run test:e2e`       | Playwright end-to-end tests                                     |
+| `npm run test:all`       | Unit + component + e2e                                          |
+| `npm run typecheck`      | `svelte-check` against `tsconfig.json` (TypeScript strict)      |
+| `npm run lint`           | Prettier check + ESLint                                         |
+| `npm run format`         | Prettier write                                                  |
+
+Component and e2e tests download a Chromium build on first run, so CI and the
+default `npm test` deliberately stay on the node-only unit suite.
+
+### Layout
+
+`src/` mirrors the module table in §2 of the design. Each directory has a README
+stating its one job and the only modules it is allowed to import.
+
+```
+src/db/       SQLite connection, migrations, repositories
+src/events/   typed in-process pub/sub + SSE ring buffer
+src/media/    upload tokens, ingest, derivatives, disk layout
+src/domain/   all business rules
+src/mcp/      MCP Streamable HTTP tool surface
+src/http/     SvelteKit routes (browser REST, SSE, /mcp mount, media, auth)
+src/web/      Svelte components and client stores
+```
+
+SvelteKit is pointed at `src/http/routes` for routes and `src/web` for `$lib`, so
+the framework's own directories line up with the module boundaries instead of
+fighting them. Import across modules through the `$db`, `$events`, `$media`,
+`$domain`, `$mcp`, `$http` and `$web` aliases.
+
+## Configuration
+
+Every setting is an environment variable. See [`.env.example`](.env.example) for
+the full list with defaults and how to generate each secret. `src/config.ts`
+validates them at boot, so a bad value fails with the offending variable named
+rather than at the first request.
+
+Back up `DATA_DIR`: the SQLite database plus an rsync of `media/`. The design's
+`sqlite3 .backup` guidance needs the `sqlite3` CLI, which is a separate package
+from the `better-sqlite3` library this app uses — the packaging slice must put it
+in the Docker image, or take the online backup through `better-sqlite3`'s own
+`db.backup()` instead.
+
 ## Licence
 
 MIT

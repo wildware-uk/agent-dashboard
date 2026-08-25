@@ -1,0 +1,56 @@
+@import 'tailwindcss';
+@plugin '@tailwindcss/forms';
+@plugin '@tailwindcss/typography';
+
+/*
+ * Dark-first with system preference.
+ *
+ * `src/app.html` resolves the theme before first paint and writes it to
+ * `<html data-theme>`, so `dark:` follows that attribute rather than the media
+ * query directly. Anything the media query would have decided has already been
+ * folded into the attribute.
+ */
+@custom-variant dark (&:where([data-theme='dark'], [data-theme='dark'] *));
+
+/* Semantic surface tokens. Slices should reach for these, not raw palette steps. */
+@theme {
+	--color-surface: var(--surface);
+	--color-surface-raised: var(--surface-raised);
+	--color-surface-sunken: var(--surface-sunken);
+	--color-border-subtle: var(--border-subtle);
+	--color-content: var(--content);
+	--color-content-muted: var(--content-muted);
+	--color-accent: var(--accent);
+}
+
+:root,
+[data-theme='dark'] {
+	--surface: oklch(0.19 0.012 265);
+	--surface-raised: oklch(0.24 0.014 265);
+	--surface-sunken: oklch(0.15 0.012 265);
+	--border-subtle: oklch(0.32 0.016 265);
+	--content: oklch(0.95 0.005 265);
+	--content-muted: oklch(0.72 0.014 265);
+	--accent: oklch(0.72 0.15 250);
+	color-scheme: dark;
+}
+
+[data-theme='light'] {
+	--surface: oklch(0.99 0.002 265);
+	--surface-raised: oklch(1 0 0);
+	--surface-sunken: oklch(0.96 0.004 265);
+	--border-subtle: oklch(0.89 0.008 265);
+	--content: oklch(0.24 0.014 265);
+	--content-muted: oklch(0.5 0.014 265);
+	--accent: oklch(0.52 0.16 250);
+	color-scheme: light;
+}
+
+html {
+	background-color: var(--surface);
+}
+
+body {
+	background-color: var(--surface);
+	color: var(--content);
+}
