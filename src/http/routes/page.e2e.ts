@@ -1,11 +1,24 @@
 import { expect, test } from '@playwright/test';
 
-// Scaffold smoke test: the Node-adapter build serves the shell, and the theme is
-// settled before first paint — dark unless the OS asks for light. The real
-// end-to-end test (post an update over MCP, watch it arrive over SSE) lands with
-// design §11 step 18.
+// Scaffold smoke test: the Node-adapter build boots and the theme is settled
+// before first paint — dark unless the OS asks for light.
+//
+// Read the target honestly. The suite runs without ADMIN_PASSWORD_HASH, so the
+// session guard 303s `/` to `/login`, and every assertion below lands on the
+// login page — which renders the same <h1> and mounts the same <Theme />. The
+// authenticated dashboard shell therefore has NO end-to-end coverage yet; it
+// arrives with the web shell (#12) and the real MCP-to-SSE test (#18).
 
 test.describe('dark-first with system preference', () => {
+	test('sends an unauthenticated visitor to the login page', async ({ request }) => {
+		// Pins what the tests below are actually exercising, so this file cannot
+		// quietly start claiming coverage of a page it never reaches.
+		const response = await request.get('/', { maxRedirects: 0 });
+
+		expect(response.status()).toBe(303);
+		expect(response.headers()['location']).toContain('/login');
+	});
+
 	test('serves the shell', async ({ page }) => {
 		await page.goto('/');
 

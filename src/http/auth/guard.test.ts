@@ -72,7 +72,15 @@ describe('the post-login destination', () => {
 			'https://evil.example.com',
 			'javascript:alert(1)',
 			'not-a-path',
-			'/logout'
+			'/logout',
+			// `new URL()` strips control characters, so the same-site checks below
+			// never see them. A surviving CR/LF reaches `redirect()`, which refuses
+			// to put it in a Location header and throws — turning a *correct*
+			// password into a 500 instead of a trip to the dashboard.
+			'/foo\nX-Injected: 1',
+			'/foo\r\nX-Injected: 1',
+			'/foo\u0000',
+			'/foo\u007f'
 		]) {
 			expect(safeRedirectTarget(raw), String(raw)).toBe('/');
 		}

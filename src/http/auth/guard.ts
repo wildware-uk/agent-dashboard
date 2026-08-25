@@ -57,6 +57,15 @@ export function loginRedirect(url: URL): string {
 	return `${LOGIN_PATH}?redirectTo=${encodeURIComponent(target)}`;
 }
 
+/** C0 controls plus DEL — none of which belong in a URL path. */
+function hasControlCharacter(value: string): boolean {
+	for (const character of value) {
+		const code = character.codePointAt(0) ?? 0;
+		if (code < 0x20 || code === 0x7f) return true;
+	}
+	return false;
+}
+
 /**
  * Sanitise a `redirectTo` before trusting it.
  *
@@ -66,6 +75,13 @@ export function loginRedirect(url: URL): string {
  */
 export function safeRedirectTarget(raw: string | null | undefined): string {
 	if (!raw || !raw.startsWith('/')) return '/';
+	// Control characters have to be rejected on the raw string, before `new URL()`
+	// below silently strips them: a surviving CR/LF reaches `redirect()`, which
+	// refuses to put it in a Location header and throws, so a *correct* password
+	// would land the owner on a 500 instead of the dashboard. Written as a
+	// codepoint test rather than a regex because a control-character class in a
+	// literal is itself unreadable (and `no-control-regex` says so).
+	if (hasControlCharacter(raw)) return '/';
 	// `//host` and `/\host` are both protocol-relative in browsers.
 	if (/^\/[/\\]/.test(raw)) return '/';
 	if (raw === '/') return '/';

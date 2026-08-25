@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { CONFIG_VARS, loadConfig } from './config';
+import { assertClientAddressTrustworthy, CONFIG_VARS, loadConfig } from './config';
 
 /** The minimum an operator must set; everything else has a default. */
 const required = {
@@ -82,11 +82,55 @@ describe('.env.example', () => {
 	it('documents nothing loadConfig would ignore', () => {
 		// Vars the Node adapter reads rather than us are listed under their own
 		// heading and are allowed; anything else is a var that silently does nothing.
-		const adapterVars = ['PORT', 'HOST', 'ORIGIN', 'BODY_SIZE_LIMIT', 'NODE_ENV'];
+		const adapterVars = [
+			'PORT',
+			'HOST',
+			'ORIGIN',
+			'BODY_SIZE_LIMIT',
+			'NODE_ENV',
+			// Deliberately outside CONFIG_VARS: the adapter reads these two to work
+			// out the client address, and TRUST_SOCKET_ADDRESS only gates the boot
+			// check in assertClientAddressTrustworthy. None reach loadConfig.
+			'ADDRESS_HEADER',
+			'XFF_DEPTH',
+			'TRUST_SOCKET_ADDRESS'
+		];
 		const stray = documented.filter(
 			(name) => !CONFIG_VARS.includes(name as never) && !adapterVars.includes(name)
 		);
 
 		expect(stray).toEqual([]);
+	});
+});
+
+describe('assertClientAddressTrustworthy', () => {
+	const proxied = { PUBLIC_BASE_URL: 'https://agents.wildware.dev' };
+
+	it('refuses a proxied deployment that would share one rate-limit bucket', () => {
+		expect(() => assertClientAddressTrustworthy(proxied)).toThrow(/ADDRESS_HEADER is unset/);
+	});
+
+	it('accepts a proxied deployment that forwards the client address', () => {
+		expect(() =>
+			assertClientAddressTrustworthy({ ...proxied, ADDRESS_HEADER: 'X-Forwarded-For' })
+		).not.toThrow();
+	});
+
+	it('accepts an explicit acknowledgement that the socket peer is the client', () => {
+		expect(() =>
+			assertClientAddressTrustworthy({ ...proxied, TRUST_SOCKET_ADDRESS: 'true' })
+		).not.toThrow();
+	});
+
+	it('leaves plain-http development alone', () => {
+		expect(() =>
+			assertClientAddressTrustworthy({ PUBLIC_BASE_URL: 'http://localhost:8010' })
+		).not.toThrow();
+	});
+
+	it('treats an empty ADDRESS_HEADER as unset', () => {
+		expect(() => assertClientAddressTrustworthy({ ...proxied, ADDRESS_HEADER: '' })).toThrow(
+			/ADDRESS_HEADER is unset/
+		);
 	});
 });

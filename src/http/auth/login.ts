@@ -18,9 +18,17 @@ import {
 } from './session';
 
 /**
- * Five guesses per quarter hour per client. argon2id already makes each attempt
- * expensive; this stops a patient script from ever getting through the door, and
- * being per-client it cannot be used to lock the owner out.
+ * Five guesses per quarter hour per client.
+ *
+ * argon2id already makes each attempt expensive; this stops a patient script from
+ * ever getting through the door.
+ *
+ * It is only per-client if `clientAddress` is really the client. Behind a reverse
+ * proxy, adapter-node reports the socket peer — `127.0.0.1` for every request on
+ * the internet — which collapses this into one shared bucket and lets any stranger
+ * lock the owner out for the window with five wrong guesses. The deployment must
+ * set `ADDRESS_HEADER` and `XFF_DEPTH` (see `.env.example`); `assertClientAddressTrustworthy`
+ * in `$config` fails startup if it looks like they were forgotten.
  */
 export const LOGIN_MAX_ATTEMPTS = 5;
 export const LOGIN_WINDOW_MS = 15 * 60 * 1000;

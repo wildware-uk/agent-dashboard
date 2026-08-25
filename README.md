@@ -88,6 +88,69 @@ from the `better-sqlite3` library this app uses — the packaging slice must put
 in the Docker image, or take the online backup through `better-sqlite3`'s own
 `db.backup()` instead.
 
+## Deployment
+
+The app is a single Node process. `npm run build` then `node build`, listening on
+`PORT` (default **8010**).
+
+Put a reverse proxy in front for TLS. Two things about that proxy are not optional.
+
+### The live feed must not be buffered
+
+The dashboard streams over Server-Sent Events at `/api/stream`. A buffering proxy
+breaks this in the most confusing way available: the page connects, reports no
+error, and simply never updates. Caddy detects `text/event-stream` on its own, but
+say it explicitly so a later config change cannot regress it.
+
+```caddy
+agents.wildware.dev {
+	@stream path /api/stream
+	reverse_proxy @stream 127.0.0.1:8010 {
+		flush_interval -1
+	}
+
+	# Wide enough for slow video uploads and the 55s approval-gate holds.
+	reverse_proxy 127.0.0.1:8010 {
+		transport http {
+			read_timeout 300s
+		}
+	}
+}
+```
+
+Behind nginx the equivalent is `proxy_buffering off` on that route, plus
+`proxy_read_timeout 300s`:
+
+```nginx
+location /api/stream {
+	proxy_pass http://127.0.0.1:8010;
+	proxy_buffering off;
+	proxy_cache off;
+	proxy_read_timeout 300s;
+	proxy_set_header Connection '';
+	proxy_http_version 1.1;
+}
+```
+
+### The client address must be forwarded
+
+Set `ADDRESS_HEADER=X-Forwarded-For` and `XFF_DEPTH=1` (see `.env.example`).
+Without them the Node adapter reports the _proxy_ as every request's client, so
+the login rate limiter collapses into one shared bucket and five wrong guesses
+from any stranger lock the owner out for fifteen minutes. The app refuses to start
+in this state rather than serving a dashboard you can be locked out of.
+
+Also set `PUBLIC_BASE_URL` to the externally reachable origin. `create_upload`
+hands agents an absolute upload URL built from it, and an agent given a
+`127.0.0.1` URL cannot upload anything.
+
+### Backups
+
+Two things to keep: the SQLite file and `data/media/`. Take the database copy
+through SQLite's online backup rather than copying the file while the process
+writes to it — WAL mode means a plain `cp` can capture a torn state. The `sqlite3`
+CLI is not required and is not assumed to be installed.
+
 ## Licence
 
 MIT
