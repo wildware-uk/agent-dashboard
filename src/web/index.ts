@@ -2,9 +2,24 @@
  * Public entry point for shared browser code.
  *
  * Reachable as both `$web` and `$lib`. Components live alongside as `.svelte`
- * files and are imported directly; this file re-exports the client stores and
- * helpers that more than one component needs.
+ * files and are imported directly (`$web/Shell.svelte`); this file re-exports
+ * the client store and the pure helpers the components share, so a route or a
+ * later slice imports one name from one place.
  *
- * Filled in by the web-shell slice (design §11 step 8). See ./README.md.
+ * Everything here runs in the browser. Its only data source is the HTTP API —
+ * `GET /api/stream` and the snapshot endpoints (design §2, §4).
  */
-export {};
+export { Timeline } from './timeline.svelte';
+export type { Fetcher, StreamLike, TimelineOptions, TimelineStatus } from './timeline.svelte';
+export { renderMarkdown } from './markdown';
+export { avatarFor, type Avatar } from './avatar';
+export { LEVELS, levelStyle, type LevelStyle } from './levels';
+export { dayKey, dayLabel, groupByDay, timeLabel, type DayGroup, type Dated } from './days';
+export type {
+	ProjectStatus,
+	ProjectView,
+	SnapshotResponse,
+	UpdateLevel,
+	UpdateView,
+	UpdatesPage
+} from './types';

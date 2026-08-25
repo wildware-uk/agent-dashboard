@@ -33,6 +33,19 @@ Notes carried from the design:
   allowlisted mime types (§6).
 - Per-token rate limits on `/mcp` and on uploads (§8).
 
+## The dashboard shell (`routes/`)
+
+| Route                  | Serves                                                    |
+| ---------------------- | --------------------------------------------------------- |
+| `GET /`                | The shell, every project's updates in one timeline.       |
+| `GET /projects/[slug]` | The same shell, scoped to one project. Unknown slug: 404. |
+
+Both loads are `routes/dashboard.ts`, which calls the same `readFullSnapshot`
+that `GET /api/snapshot` serves — so the server render and the post-`resync`
+refetch cannot drift apart — and reads the stream cursor _before_ the state, for
+the reason given in `stream/snapshot.ts`. The page hands that snapshot to
+`$web/Shell.svelte`, which adopts it and then goes live from that cursor.
+
 ## The live transport (`stream/`)
 
 `src/http/stream/` holds the protocol; `routes/api/stream/` and

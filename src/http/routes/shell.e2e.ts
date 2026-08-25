@@ -1,0 +1,339 @@
+import { spawn, type ChildProcess } from 'node:child_process';
+import { mkdtempSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { expect, test, type Page, type Route } from '@playwright/test';
+
+/**
+ * The **authenticated** shell, end to end (design §7).
+ *
+ * `page.e2e.ts` cannot cover this: the suite's shared server runs with no
+ * `ADMIN_PASSWORD_HASH`, so the guard 303s `/` to `/login` and every assertion
+ * there lands on the login page. This file therefore boots a *second* server —
+ * the same `node build` output, its own port, its own throwaway data directory —
+ * with a known password hash, logs in for real, and asserts the dashboard.
+ *
+ * What is real here: the Node-adapter server, the session cookie, the server
+ * render, the client store, the stylesheet, and the browser. What is faked is
+ * the *server side of the stream*: `page.route` answers `/api/stream` and
+ * `/api/snapshot` so a test can decide exactly when an event arrives. Proving
+ * that an agent posting over MCP reaches this browser is #18's job, and needs
+ * the MCP surface; proving that an event on the stream reaches the DOM with no
+ * reload is this file's job, and does not.
+ */
+
+/** A fixed port, so `test.use({ baseURL })` can name it. Not 4173: that is the shared server. */
+const PORT = 4179;
+const ORIGIN = `http://localhost:${PORT}`;
+
+/** Test-only credentials. The hash is argon2id over the password below. */
+const PASSWORD = 'e2e-owner-password';
+const PASSWORD_HASH =
+	'$argon2id$v=19$m=65536,p=4,t=3$TgOZFkx4ph6hCxjplC5GQw$S5Sdievoat/Z0I9LGsHXGye2fz6Roxbp2c/bCfHYCZo';
+
+let server: ChildProcess | undefined;
+let dataDir = '';
+
+test.use({ baseURL: ORIGIN });
+
+test.beforeAll(async () => {
+	dataDir = mkdtempSync(join(tmpdir(), 'agent-dashboard-e2e-'));
+	// `build/` is already there: Playwright's `webServer` builds before any test
+	// runs (see playwright.config.ts).
+	server = spawn('node', ['build'], {
+		stdio: 'ignore',
+		env: {
+			...process.env,
+			PORT: String(PORT),
+			ORIGIN,
+			DATA_DIR: dataDir,
+			ADMIN_PASSWORD_HASH: PASSWORD_HASH,
+			SESSION_SECRET: 'e2e-session-secret-at-least-32-chars-long',
+			TOKEN_SECRET: 'e2e-token-secret-at-least-32-chars-long!',
+			PUBLIC_BASE_URL: ORIGIN
+		}
+	});
+
+	const deadline = Date.now() + 30_000;
+	for (;;) {
+		try {
+			const response = await fetch(`${ORIGIN}/login`);
+			if (response.ok) {
+				// Fixed port, so make sure the thing answering is ours: a stray process
+				// on 4179 would otherwise turn every assertion below into a mystery.
+				const html = await response.text();
+				if (!html.includes('Agent Dashboard')) {
+					throw new Error(`something other than this app is listening on ${ORIGIN}`);
+				}
+				break;
+			}
+		} catch (cause) {
+			if (cause instanceof Error && cause.message.startsWith('something other')) throw cause;
+			// Not listening yet.
+		}
+		if (Date.now() > deadline) throw new Error('the authenticated test server never came up');
+		await new Promise((resolve) => setTimeout(resolve, 200));
+	}
+});
+
+test.afterAll(() => {
+	server?.kill('SIGTERM');
+	if (dataDir) rmSync(dataDir, { recursive: true, force: true });
+});
+
+/** Log in the way the owner does: the form, the password, the cookie. */
+async function signIn(page: Page) {
+	await page.goto('/');
+	await expect(page).toHaveURL(/\/login/);
+	await page.getByLabel('Owner password').fill(PASSWORD);
+	await page.getByRole('button', { name: 'Sign in' }).click();
+	await expect(page).toHaveURL(ORIGIN + '/');
+}
+
+type Update = {
+	id: string;
+	seq: number;
+	body: string;
+	level?: 'info' | 'success' | 'warn' | 'error';
+	title?: string | null;
+};
+
+const project = {
+	id: 'p1',
+	seq: 1,
+	slug: 'agent-dashboard',
+	name: 'Agent Dashboard',
+	description: null,
+	status: 'active',
+	pinned: true,
+	createdAt: Date.now(),
+	updatedAt: Date.now()
+};
+
+function update({ id, seq, body, level = 'info', title = null }: Update) {
+	return {
+		id,
+		seq,
+		projectId: 'p1',
+		agentId: 'claude-code',
+		sessionId: null,
+		title,
+		body,
+		level,
+		pinned: false,
+		createdAt: Date.now(),
+		deletedAt: null
+	};
+}
+
+/**
+ * Answer the snapshot endpoints from a mutable list, and the stream from a queue
+ * of gated bodies.
+ *
+ * The snapshot is a function of the current list, so a test changes the list and
+ * the *next* refetch sees it — which is exactly how the browser experiences an
+ * agent posting something.
+ */
+function fakeServer(page: Page) {
+	let items: ReturnType<typeof update>[] = [];
+	let seq = 0;
+	const gates: { open: Promise<void>; body: string }[] = [];
+
+	const snapshot = (route: Route) => {
+		const body = JSON.stringify({
+			seq,
+			at: new Date().toISOString(),
+			projects: [project],
+			updates: { items, nextCursor: null, hasMore: false }
+		});
+		return route.fulfill({ status: 200, contentType: 'application/json', body });
+	};
+
+	return {
+		async install() {
+			await page.route('**/api/snapshot**', snapshot);
+			await page.route('**/api/stream**', async (route) => {
+				const next = gates.shift();
+				if (!next) {
+					// No more events scripted: hold the connection open rather than
+					// letting `EventSource` reconnect in a loop behind the test.
+					await new Promise(() => {});
+					return;
+				}
+				await next.open;
+				await route.fulfill({
+					status: 200,
+					headers: {
+						'content-type': 'text/event-stream; charset=utf-8',
+						'cache-control': 'no-store'
+					},
+					body: next.body
+				});
+			});
+		},
+
+		/** What `GET /api/snapshot` will say from now on. */
+		setUpdates(next: Update[]) {
+			items = next.map(update);
+			seq = Math.max(seq, ...next.map((item) => item.seq));
+		},
+
+		/**
+		 * Script one SSE delivery, in the server's own frame format, and hand back
+		 * the trigger that releases it.
+		 */
+		scriptEvent(type: string, payload: Record<string, unknown>, at: number) {
+			let release = () => {};
+			const open = new Promise<void>((resolve) => (release = resolve));
+			gates.push({
+				open,
+				// `retry` is long so the connection closing after this one frame does
+				// not start a reconnect loop mid-test.
+				body:
+					`retry: 60000\n\n` +
+					`id: ${at}\nevent: ${type}\ndata: ${JSON.stringify({ type, seq: at, at: new Date().toISOString(), payload })}\n\n`
+			});
+			return release;
+		}
+	};
+}
+
+test.describe('the authenticated shell', () => {
+	test('logs in and renders the three regions', async ({ page }) => {
+		await signIn(page);
+
+		await expect(page.getByRole('navigation', { name: 'Projects' })).toBeVisible();
+		await expect(page.getByLabel('Update timeline')).toBeVisible();
+		await expect(page.locator('[data-rail]')).toBeAttached();
+		// A fresh deployment: no agent has posted anything yet, and the shell says
+		// so rather than looking broken.
+		await expect(page.getByText(/Nothing here yet/)).toBeVisible();
+	});
+
+	test('renders agent markdown as text, never as markup', async ({ page }) => {
+		const server = fakeServer(page);
+		await server.install();
+		server.setUpdates([
+			{
+				id: 'u1',
+				seq: 1,
+				title: 'Deploy',
+				body: '# Shipped\n\n<script>window.__pwned = true</script>'
+			}
+		]);
+
+		await signIn(page);
+
+		await expect(page.getByRole('heading', { name: 'Shipped' })).toBeVisible();
+		await expect(page.getByText('<script>window.__pwned = true</script>')).toBeVisible();
+		// The proof, in the browser the owner is actually using: no element was
+		// created and no script ran (design §8).
+		await expect(page.locator('article script')).toHaveCount(0);
+		expect(await page.evaluate(() => '__pwned' in window)).toBe(false);
+	});
+
+	test('shows an update arriving on the stream, with no reload', async ({ page }) => {
+		const server = fakeServer(page);
+		await server.install();
+		const arrive = server.scriptEvent('update.created', { updateId: 'u9', projectId: 'p1' }, 9);
+
+		await signIn(page);
+		await expect(page.getByText(/Nothing here yet/)).toBeVisible();
+
+		// An agent posts. The browser is told an id; it goes and reads the rest.
+		server.setUpdates([{ id: 'u9', seq: 9, body: 'just landed', level: 'success' }]);
+		arrive();
+
+		await expect(page.getByText('just landed')).toBeVisible();
+		await expect(page.locator('article[data-level="success"]')).toBeVisible();
+	});
+
+	test('offers an "N new" pill instead of moving a scrolled timeline', async ({ page }) => {
+		const server = fakeServer(page);
+		await server.install();
+		const arrive = server.scriptEvent('update.created', { updateId: 'new', projectId: 'p1' }, 99);
+		const many = Array.from({ length: 30 }, (_, index) => ({
+			id: `u${30 - index}`,
+			seq: 30 - index,
+			body: `update ${30 - index}`
+		}));
+		server.setUpdates(many);
+
+		await signIn(page);
+		await expect(page.getByText('update 30')).toBeVisible();
+
+		const timeline = page.locator('[data-timeline]');
+		await timeline.evaluate((element) => element.scrollTo({ top: 600 }));
+		const before = await timeline.evaluate((element) => element.scrollTop);
+		expect(before).toBeGreaterThan(0);
+
+		server.setUpdates([{ id: 'new', seq: 99, body: 'just landed' }, ...many]);
+		arrive();
+
+		await expect(page.getByRole('button', { name: '1 new update' })).toBeVisible();
+		// The viewport did not move, and the card is not above the reader yet.
+		expect(await timeline.evaluate((element) => element.scrollTop)).toBe(before);
+		await expect(page.getByText('just landed')).toHaveCount(0);
+
+		await page.getByRole('button', { name: '1 new update' }).click();
+
+		await expect(page.getByText('just landed')).toBeVisible();
+	});
+
+	test('is usable at 375px, with the sidebar as a drawer', async ({ page }) => {
+		const server = fakeServer(page);
+		await server.install();
+		server.setUpdates([{ id: 'u1', seq: 1, body: 'a phone-sized update' }]);
+		await page.setViewportSize({ width: 375, height: 667 });
+
+		await signIn(page);
+
+		// One column: the permanent sidebar and the rail are both out of the way.
+		await expect(page.getByRole('navigation', { name: 'Projects' })).toBeHidden();
+		await expect(page.locator('[data-rail]')).toBeHidden();
+		await expect(page.getByText('a phone-sized update')).toBeVisible();
+		// Nothing overflows sideways on a phone.
+		const overflow = await page.evaluate(
+			() => document.documentElement.scrollWidth - window.innerWidth
+		);
+		expect(overflow).toBeLessThanOrEqual(0);
+
+		await page.getByRole('button', { name: 'Open projects' }).click();
+
+		const drawer = page.getByRole('dialog', { name: 'Projects' });
+		await expect(drawer).toBeVisible();
+		await expect(drawer.getByRole('link', { name: /Agent Dashboard/ })).toBeVisible();
+	});
+
+	test.describe('following the system theme', () => {
+		test.use({ colorScheme: 'light' });
+
+		test('renders the shell light when the OS asks for light', async ({ page }) => {
+			await signIn(page);
+
+			await expect(page.locator('html')).toHaveAttribute('data-theme', 'light');
+			// A real light surface, not dark text on a dark background.
+			const surface = await page.evaluate(() => getComputedStyle(document.body).backgroundColor);
+			expect(surface).not.toBe('rgba(0, 0, 0, 0)');
+			expect(await page.evaluate(() => getComputedStyle(document.body).color)).not.toBe(surface);
+		});
+	});
+
+	test.describe('with a dark OS preference', () => {
+		test.use({ colorScheme: 'dark' });
+
+		test('stays dark, with a readable timeline', async ({ page }) => {
+			const server = fakeServer(page);
+			await server.install();
+			server.setUpdates([{ id: 'u1', seq: 1, body: 'dark mode update' }]);
+
+			await signIn(page);
+
+			await expect(page.locator('html')).toHaveAttribute('data-theme', 'dark');
+			await expect(page.getByText('dark mode update')).toBeVisible();
+			const surface = await page.evaluate(() => getComputedStyle(document.body).backgroundColor);
+			expect(surface).not.toBe('rgba(0, 0, 0, 0)');
+			expect(await page.evaluate(() => getComputedStyle(document.body).color)).not.toBe(surface);
+		});
+	});
+});

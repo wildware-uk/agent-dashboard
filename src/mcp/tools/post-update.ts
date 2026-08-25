@@ -1,0 +1,97 @@
+/**
+ * `post_update` (design §5) — the tool the product exists for.
+ *
+ * The agent is `deps.agent`, resolved from the bearer token by `../auth.ts`.
+ * There is no argument for it and no way to reach for another one, which is the
+ * whole of §5's "one agent cannot post as another".
+ *
+ * `media_ids` and `session_id` are absent on purpose: the design gives
+ * `post_update` both, but uploads (§6) and sessions (§4) are later slices, and
+ * an argument that is accepted and then ignored is worse documentation than an
+ * argument that is not there yet.
+ */
+import { BODY_MAX_LENGTH, TITLE_MAX_LENGTH, postUpdate } from '$domain';
+import { z } from 'zod';
+import { guard, ok, updateView } from '../results';
+import type { McpTool } from './types';
+
+const inputSchema = {
+	project: z
+		.string()
+		.describe(
+			'Which project to post into: either its slug ("agent-dashboard") or its 26-character ' +
+				'id, both as returned by create_project and list_projects.'
+		),
+	body: z
+		.string()
+		.max(BODY_MAX_LENGTH)
+		.describe(
+			`The update itself, as markdown, at most ${BODY_MAX_LENGTH} characters. Headings, ` +
+				`lists, links and fenced code blocks all render. Raw HTML does not: it is shown as ` +
+				`text, never executed.`
+		),
+	title: z
+		.string()
+		.max(TITLE_MAX_LENGTH)
+		.optional()
+		.describe(
+			`Optional headline shown above the body, at most ${TITLE_MAX_LENGTH} characters. ` +
+				`Omit for a body-only note.`
+		),
+	level: z
+		.enum(['info', 'success', 'warn', 'error'])
+		.optional()
+		.describe(
+			'How the dashboard colours the card: "info" (the default) for progress, "success" for ' +
+				'something finished, "warn" for something the owner should look at, "error" for a ' +
+				'failure you are stuck on.'
+		)
+};
+
+export const postUpdateTool: McpTool<typeof inputSchema> = {
+	name: 'post_update',
+	config: {
+		title: 'Post a status update',
+		description: [
+			"Post a status update to a project's timeline. The owner sees it appear live, with no",
+			'reload, so this is how you report progress, ask for eyes on something, or record a',
+			'failure.',
+			'',
+			'Arguments:',
+			'- project (required): the project slug ("agent-dashboard") or its 26-character id, from',
+			'  create_project or list_projects.',
+			`- body (required): the update as markdown, at most ${BODY_MAX_LENGTH} characters. Raw`,
+			'  HTML is shown as text, never executed.',
+			`- title (optional): a headline, at most ${TITLE_MAX_LENGTH} characters.`,
+			'- level (optional): "info" (default), "success", "warn" or "error". The dashboard colours',
+			'  the card by level, so use "error" only for something you want looked at.',
+			'',
+			'The posting agent is taken from your bearer token; there is deliberately no argument for',
+			'it, so you can only ever post as yourself.',
+			'',
+			'Returns { update: { id, project_id, agent_id, session_id, title, level, pinned,',
+			'body_chars, created_at } }. On failure: error "not_found" means the project reference',
+			'matched nothing — call list_projects — and "invalid_argument" means an argument was',
+			'empty or too long.'
+		].join('\n'),
+		inputSchema,
+		annotations: { idempotentHint: false, destructiveHint: false, openWorldHint: false }
+	},
+
+	run: ({ ctx, agent }, args) =>
+		guard(() => {
+			const update = postUpdate(ctx, {
+				project: args.project,
+				// Identity comes from the token, never from `args` (design §5).
+				agentId: agent.id,
+				body: args.body,
+				title: args.title,
+				level: args.level
+			});
+
+			return ok(
+				`Posted a ${update.level} update to project ${args.project} as agent "${agent.name}".`,
+				{ update: updateView(update) }
+			);
+		})
+};
