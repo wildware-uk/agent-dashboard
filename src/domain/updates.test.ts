@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { insertSession } from '$db';
 import { createProject } from './projects';
-import { deleteUpdate, listUpdates, postUpdate } from './updates';
+import { deleteUpdate, listUpdates, postUpdate, setUpdatePinned } from './updates';
 import { FIXED_NOW, harness, type Harness } from './testing';
 
 let h: Harness;
@@ -222,6 +222,62 @@ describe('deleteUpdate', () => {
 
 	it('reports not_found for an update that never existed', () => {
 		expect(() => deleteUpdate(h, 'ghost')).toThrowError(
+			expect.objectContaining({ code: 'not_found' })
+		);
+	});
+});
+
+describe('setUpdatePinned', () => {
+	function post() {
+		return postUpdate(h, { project: 'agent-dashboard', agentId, body: 'shipped it' });
+	}
+
+	it('pins the update and publishes update.updated', () => {
+		const update = post();
+		h.events.length = 0;
+
+		const pinned = setUpdatePinned(h, update.id, true);
+
+		expect(pinned).toMatchObject({ id: update.id, pinned: true });
+		expect(h.events).toHaveLength(1);
+		expect(h.events[0]).toMatchObject({
+			type: 'update.updated',
+			payload: { updateId: update.id, projectId, pinned: true }
+		});
+	});
+
+	it('unpins again, and the row the timeline reads agrees', () => {
+		const update = post();
+		setUpdatePinned(h, update.id, true);
+		h.events.length = 0;
+
+		expect(setUpdatePinned(h, update.id, false).pinned).toBe(false);
+		expect(listUpdates(h).updates[0].pinned).toBe(false);
+		expect(h.eventNames()).toEqual(['update.updated']);
+	});
+
+	it('publishes nothing when the flag already says what was asked for', () => {
+		const update = post();
+		setUpdatePinned(h, update.id, true);
+		h.events.length = 0;
+
+		expect(setUpdatePinned(h, update.id, true).pinned).toBe(true);
+		expect(h.events).toEqual([]);
+	});
+
+	it('refuses to pin an update that has been deleted', () => {
+		const update = post();
+		deleteUpdate(h, update.id);
+		h.events.length = 0;
+
+		expect(() => setUpdatePinned(h, update.id, true)).toThrowError(
+			expect.objectContaining({ code: 'not_found' })
+		);
+		expect(h.events).toEqual([]);
+	});
+
+	it('reports not_found for an update that never existed', () => {
+		expect(() => setUpdatePinned(h, 'ghost', true)).toThrowError(
 			expect.objectContaining({ code: 'not_found' })
 		);
 	});

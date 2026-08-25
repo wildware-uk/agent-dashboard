@@ -12,18 +12,37 @@
  * type that matters here.
  */
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
+import { attachMediaTool } from './attach-media';
 import { createProjectTool } from './create-project';
+import { createUploadTool } from './create-upload';
+import { endSessionTool } from './end-session';
+import { heartbeatTool } from './heartbeat';
 import { listProjectsTool } from './list-projects';
 import { postUpdateTool } from './post-update';
+import { registerSessionTool } from './register-session';
 import type { AnyMcpTool, ToolDeps } from './types';
 
+export { attachMediaTool } from './attach-media';
 export { createProjectTool } from './create-project';
+export { createUploadTool } from './create-upload';
+export { endSessionTool } from './end-session';
+export { heartbeatTool } from './heartbeat';
 export { listProjectsTool } from './list-projects';
 export { postUpdateTool } from './post-update';
+export { registerSessionTool } from './register-session';
 export type { AnyMcpTool, McpTool, ToolDeps, ToolShape } from './types';
 
 /** Every tool this server offers, in the order design §5 lists them. */
-export const TOOLS: readonly AnyMcpTool[] = [createProjectTool, listProjectsTool, postUpdateTool];
+export const TOOLS: readonly AnyMcpTool[] = [
+	createProjectTool,
+	listProjectsTool,
+	postUpdateTool,
+	createUploadTool,
+	attachMediaTool,
+	registerSessionTool,
+	heartbeatTool,
+	endSessionTool
+];
 
 /** Just the names, for tests and for a README that cannot drift. */
 export const TOOL_NAMES: readonly string[] = TOOLS.map((tool) => tool.name);
@@ -38,5 +57,20 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
 	);
 	server.registerTool(postUpdateTool.name, postUpdateTool.config, (args) =>
 		postUpdateTool.run(deps, args)
+	);
+	server.registerTool(createUploadTool.name, createUploadTool.config, (args) =>
+		createUploadTool.run(deps, args)
+	);
+	server.registerTool(attachMediaTool.name, attachMediaTool.config, (args) =>
+		attachMediaTool.run(deps, args)
+	);
+	server.registerTool(registerSessionTool.name, registerSessionTool.config, (args) =>
+		registerSessionTool.run(deps, args)
+	);
+	server.registerTool(heartbeatTool.name, heartbeatTool.config, (args) =>
+		heartbeatTool.run(deps, args)
+	);
+	server.registerTool(endSessionTool.name, endSessionTool.config, (args) =>
+		endSessionTool.run(deps, args)
 	);
 }

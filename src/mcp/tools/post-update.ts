@@ -5,12 +5,16 @@
  * There is no argument for it and no way to reach for another one, which is the
  * whole of §5's "one agent cannot post as another".
  *
- * `media_ids` and `session_id` are absent on purpose: the design gives
- * `post_update` both, but uploads (§6) and sessions (§4) are later slices, and
- * an argument that is accepted and then ignored is worse documentation than an
+ * `media_ids` is here because the upload slice is (design §6): the ids come from
+ * `create_upload`, and a bad one fails the whole post rather than quietly
+ * dropping an image the agent believes it published. Media whose bytes land
+ * *after* the post is `attach_media`'s job instead.
+ *
+ * `session_id` is absent on purpose: sessions (§4) are a later slice, and an
+ * argument that is accepted and then ignored is worse documentation than an
  * argument that is not there yet.
  */
-import { BODY_MAX_LENGTH, TITLE_MAX_LENGTH, postUpdate } from '$domain';
+import { BODY_MAX_LENGTH, MEDIA_PER_UPDATE_MAX, TITLE_MAX_LENGTH, postUpdate } from '$domain';
 import { z } from 'zod';
 import { guard, ok, updateView } from '../results';
 import type { McpTool } from './types';
@@ -45,6 +49,16 @@ const inputSchema = {
 			'How the dashboard colours the card: "info" (the default) for progress, "success" for ' +
 				'something finished, "warn" for something the owner should look at, "error" for a ' +
 				'failure you are stuck on.'
+		),
+	media_ids: z
+		.array(z.string())
+		.max(MEDIA_PER_UPDATE_MAX)
+		.optional()
+		.describe(
+			`Images or video to show on the card: ids from create_upload whose bytes you have ` +
+				`already PUT, at most ${MEDIA_PER_UPDATE_MAX}. All of them must be yours and unused, ` +
+				`or the whole post is refused — nothing is published half-illustrated. If an upload ` +
+				`finishes after you post, use attach_media instead.`
 		)
 };
 
@@ -65,14 +79,17 @@ export const postUpdateTool: McpTool<typeof inputSchema> = {
 			`- title (optional): a headline, at most ${TITLE_MAX_LENGTH} characters.`,
 			'- level (optional): "info" (default), "success", "warn" or "error". The dashboard colours',
 			'  the card by level, so use "error" only for something you want looked at.',
+			`- media_ids (optional): up to ${MEDIA_PER_UPDATE_MAX} ids from create_upload whose bytes`,
+			'  you have already uploaded. They appear as images or video on the card.',
 			'',
 			'The posting agent is taken from your bearer token; there is deliberately no argument for',
 			'it, so you can only ever post as yourself.',
 			'',
 			'Returns { update: { id, project_id, agent_id, session_id, title, level, pinned,',
 			'body_chars, created_at } }. On failure: error "not_found" means the project reference',
-			'matched nothing — call list_projects — and "invalid_argument" means an argument was',
-			'empty or too long.'
+			'matched nothing — call list_projects, and for a media id it means nothing was uploaded',
+			'under it — and "invalid_argument" means an argument was empty, too long, or named media',
+			'that is not yours to attach.'
 		].join('\n'),
 		inputSchema,
 		annotations: { idempotentHint: false, destructiveHint: false, openWorldHint: false }
@@ -86,7 +103,8 @@ export const postUpdateTool: McpTool<typeof inputSchema> = {
 				agentId: agent.id,
 				body: args.body,
 				title: args.title,
-				level: args.level
+				level: args.level,
+				mediaIds: args.media_ids
 			});
 
 			return ok(

@@ -31,6 +31,8 @@ blob-report
 
 # Runtime data (SQLite + media)
 /data
+# The local run's data directory and its env file: a real database and real secrets.
+/.local
 *.db
 *.db-shm
 *.db-wal

@@ -58,6 +58,10 @@ export type TimelineOptions = {
 /** The events that change what the shell shows. */
 const WATCHED = [
 	'update.created',
+	// An update the owner curated in place — a pin (design §7). Like every other
+	// event it carries an identifier, so it is a reason to refetch and reconcile
+	// by id, which is what replaces the row this page already renders.
+	'update.updated',
 	'update.deleted',
 	'project.created',
 	'project.updated',

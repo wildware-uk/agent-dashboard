@@ -2,7 +2,7 @@ import { render } from 'vitest-browser-svelte';
 import { beforeEach, describe, expect, it } from 'vitest';
 import TimelineView from './Timeline.svelte';
 import { Timeline } from './timeline.svelte';
-import { FakeStream, anUpdate, fakeApi } from './testing';
+import { FakeStream, anUpdate, fakeActions, fakeApi } from './testing';
 
 /**
  * The live behaviour of the centre column, in a real browser with a real
@@ -28,7 +28,7 @@ function updates(count: number) {
 let api: ReturnType<typeof fakeApi>;
 let stream: FakeStream;
 
-function mount(items = updates(12)) {
+function mount(items = updates(12), props: Record<string, unknown> = {}) {
 	api = fakeApi({ seq: items[0]?.seq ?? 0, projects: [], items });
 	stream = new FakeStream();
 	const feed = new Timeline({
@@ -38,7 +38,7 @@ function mount(items = updates(12)) {
 	});
 	feed.hydrate(api.snapshot());
 	feed.start();
-	const screen = render(TimelineView, { feed });
+	const screen = render(TimelineView, { feed, ...props });
 
 	// Tailwind's stylesheet is not loaded in a component test, so the two boxes
 	// the live behaviour depends on are set here by hand: the scroll container
@@ -175,5 +175,43 @@ describe('paging into the past', () => {
 		const { screen } = mount();
 
 		expect(screen.getByRole('button', { name: /Load older/ }).elements()).toHaveLength(0);
+	});
+});
+
+/**
+ * Pinned updates sort first (issue #16). They are lifted out of the day groups
+ * rather than reordered inside them: an update pinned three weeks ago belongs at
+ * the top of the feed, and leaving it under "3 August" while claiming it is
+ * first would be a lie the reader has to scroll to discover.
+ */
+describe('pinned updates', () => {
+	it('renders them above every day group, under their own heading', async () => {
+		mount([
+			anUpdate({ id: 'plain', seq: 3, createdAt: day, body: 'plain one' }),
+			anUpdate({ id: 'pinned', seq: 1, createdAt: older, pinned: true, body: 'the pinned one' })
+		]);
+
+		const headings = [...document.querySelectorAll('section h2')].map((h) => h.textContent?.trim());
+		expect(headings).toEqual(['Pinned', 'Today']);
+
+		const rendered = [...document.querySelectorAll('[data-update-id]')].map((card) =>
+			card.getAttribute('data-update-id')
+		);
+		expect(rendered).toEqual(['pinned', 'plain']);
+	});
+
+	it('offers no pinned section when nothing is pinned', async () => {
+		mount([anUpdate({ id: 'plain', seq: 3, createdAt: day })]);
+
+		const headings = [...document.querySelectorAll('section h2')].map((h) => h.textContent?.trim());
+		expect(headings).toEqual(['Today']);
+	});
+
+	it('hands every card the owner controls it was given', async () => {
+		const api = fakeActions();
+		mount([anUpdate({ id: 'u1', seq: 1, createdAt: day })], { actions: api.actions });
+
+		const cards = document.querySelectorAll('[data-update-id]');
+		expect(document.querySelectorAll('[data-update-actions]')).toHaveLength(cards.length);
 	});
 });

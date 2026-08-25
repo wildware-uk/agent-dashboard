@@ -19,7 +19,16 @@ describe('the $mcp surface', () => {
 		] as const) {
 			expect(mcp[name], name).toBeTypeOf('function');
 		}
-		expect(mcp.TOOL_NAMES).toEqual(['create_project', 'list_projects', 'post_update']);
+		expect(mcp.TOOL_NAMES).toEqual([
+			'create_project',
+			'list_projects',
+			'post_update',
+			'create_upload',
+			'attach_media',
+			'register_session',
+			'heartbeat',
+			'end_session'
+		]);
 	});
 
 	it('keeps the test harness out of the production entry point', () => {

@@ -11,6 +11,15 @@
  */
 export { Timeline } from './timeline.svelte';
 export type { Fetcher, StreamLike, TimelineOptions, TimelineStatus } from './timeline.svelte';
+export {
+	ActionError,
+	actionMessage,
+	ownerActions,
+	type NewProject,
+	type OwnerActions,
+	type ProjectPatch,
+	type Requester
+} from './actions';
 export { renderMarkdown } from './markdown';
 export { avatarFor, type Avatar } from './avatar';
 export { LEVELS, levelStyle, type LevelStyle } from './levels';
@@ -23,3 +32,10 @@ export type {
 	UpdateView,
 	UpdatesPage
 } from './types';
+export { PRESENCE_WINDOW_MS, Presence, heartbeatLabel } from './presence.svelte';
+export type {
+	AgentsSnapshot,
+	LiveAgentView,
+	PresenceOptions,
+	PresenceStatus
+} from './presence.svelte';

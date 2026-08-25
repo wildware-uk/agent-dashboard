@@ -19,6 +19,7 @@
 	import Sidebar from './Sidebar.svelte';
 	import Theme from './Theme.svelte';
 	import TimelineView from './Timeline.svelte';
+	import { ownerActions, type OwnerActions } from './actions';
 	import { Timeline } from './timeline.svelte';
 	import type { SnapshotResponse, UpdateView } from './types';
 
@@ -30,13 +31,20 @@
 		agentNames = {},
 		/** Injected by the component tests; production builds its own. */
 		feed = new Timeline({ project }),
-		media
+		media,
+		/**
+		 * The owner's write calls (design §7), handed down to the sidebar and to
+		 * every card. Injectable for the same reason `feed` is: a spec drives real
+		 * clicks without a server.
+		 */
+		actions = ownerActions()
 	}: {
 		snapshot: SnapshotResponse;
 		project?: string | null;
 		agentNames?: Record<string, string>;
 		feed?: Timeline;
 		media?: Snippet<[UpdateView]>;
+		actions?: OwnerActions;
 	} = $props();
 
 	// Deliberately the initial values, read once: the store adopts the snapshot
@@ -104,11 +112,11 @@
 		class="grid min-h-0 lg:grid-cols-[15rem_minmax(0,1fr)] xl:grid-cols-[15rem_minmax(0,1fr)_17rem]"
 	>
 		<aside class="hidden min-h-0 overflow-y-auto border-r border-border-subtle lg:block">
-			<Sidebar projects={feed.projects} activeSlug={project} />
+			<Sidebar projects={feed.projects} activeSlug={project} {actions} />
 		</aside>
 
 		<main class="min-h-0" aria-label="Update timeline">
-			<TimelineView {feed} {agentNames} {media} />
+			<TimelineView {feed} {agentNames} {media} {actions} />
 		</main>
 
 		<aside class="hidden min-h-0 overflow-y-auto border-l border-border-subtle xl:block">
@@ -135,7 +143,12 @@
 			aria-label="Projects"
 			class="update-enter absolute inset-y-0 left-0 w-72 max-w-[85vw] overflow-y-auto border-r border-border-subtle bg-surface"
 		>
-			<Sidebar projects={feed.projects} activeSlug={project} onnavigate={() => (drawer = false)} />
+			<Sidebar
+				projects={feed.projects}
+				activeSlug={project}
+				onnavigate={() => (drawer = false)}
+				{actions}
+			/>
 		</div>
 	</div>
 {/if}

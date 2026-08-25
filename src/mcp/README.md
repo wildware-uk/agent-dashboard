@@ -76,22 +76,43 @@ throttled, while a request with no credentials costs nothing to refuse.
 
 ## Tools
 
-Three of the fourteen in design §5 are built (§11 step 5):
+Eight of the fourteen in design §5 are built (§11 steps 5, 9 and 12):
 
-| Tool             | Takes                                              | Does                                               |
-| ---------------- | -------------------------------------------------- | -------------------------------------------------- |
-| `create_project` | `name`, `slug?`, `description?`                    | Idempotent on slug; returns `created`.             |
-| `list_projects`  | `status?`                                          | Sidebar order: pinned first, then newest.          |
-| `post_update`    | `project` (slug or id), `body`, `title?`, `level?` | Posts to the timeline; publishes `update.created`. |
+| Tool               | Takes                                                            | Does                                               |
+| ------------------ | ---------------------------------------------------------------- | -------------------------------------------------- |
+| `create_project`   | `name`, `slug?`, `description?`                                  | Idempotent on slug; returns `created`.             |
+| `list_projects`    | `status?`                                                        | Sidebar order: pinned first, then newest.          |
+| `post_update`      | `project` (slug or id), `body`, `title?`, `level?`, `media_ids?` | Posts to the timeline; publishes `update.created`. |
+| `create_upload`    | `filename`, `mime`, `bytes`                                      | Mints a single-use upload URL, 15 minute TTL.      |
+| `attach_media`     | `update_id`, `media_ids`                                         | For bytes that land after the post. Retry-safe.    |
+| `register_session` | `meta?` (`{host, cwd, model}`)                                   | Opens a session; returns `heartbeat_interval_s`.   |
+| `heartbeat`        | `session_id`                                                     | Stays online; piggybacks the three work counts.    |
+| `end_session`      | `session_id`                                                     | Closes the run. Idempotent.                        |
 
-`post_update` deliberately does **not** take `media_ids` or `session_id` yet:
-uploads (§6) and sessions (§4) are later slices, and an argument that is accepted
-and then ignored is worse documentation than one that is not there.
+`post_update` takes `media_ids` and refuses the whole post if any id is not the
+caller's to attach — an image an agent believes it published must not be silently
+dropped. `attach_media` takes the opposite line and _skips_ such ids, because the
+likeliest reason to call it twice is that the first call worked and the answer was
+lost. It still does **not** take `session_id`: sessions ship their own slice, and
+an argument that is accepted and then ignored is worse documentation than one that
+is not there.
 
-Still to come, in build order (§11): `create_upload` / `attach_media` (step 9),
-`register_session` / `heartbeat` / `end_session` (12), `list_tasks` /
-`claim_task` / `complete_task` (13), `get_messages` (14), `request_approval` /
-`await_approval` (15).
+`create_upload` returns an **absolute** `upload_url` built from
+`PUBLIC_BASE_URL`. An agent runs on another machine, so a URL built from the bind
+address would be one it can never use (§12). The bytes then go to
+`PUT /api/upload/:token`, whose refusals are statuses rather than tool errors: 403
+for a spent or expired token, 413 for a body past the declared size, 415 for bytes
+that are not the declared type.
+
+`heartbeat` and `end_session` take a `session_id`, which is the one identifier a
+tool accepts. It is a handle on a run, not a claim about who is calling: the
+domain refuses a session belonging to another agent, so a stolen id buys nothing.
+`tools/index.test.ts` asserts that for every tool that takes one, which is a
+stronger guarantee than keeping the argument out of the schema would be.
+
+Still to come, in build order (§11):
+`list_tasks` / `claim_task` / `complete_task` (13), `get_messages` (14),
+`request_approval` / `await_approval` (15).
 
 ## Testing
 

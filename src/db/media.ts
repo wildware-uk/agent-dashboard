@@ -118,6 +118,34 @@ export function listMediaForUpdate(db: Db, updateId: string): Media[] {
 		.map(toMedia);
 }
 
+/**
+ * Record the bytes that actually landed.
+ *
+ * Separate from {@link setMediaStatus} because it answers a different question.
+ * A media row is inserted before its bytes exist, with the size the agent
+ * *declared* and no hash at all; this is `src/media/`'s ingest writing down what
+ * really arrived once it has streamed and hashed it. The status is deliberately
+ * untouched: deciding a row is `ready` belongs to the derivative pipeline
+ * (design §6 step 5), not to the upload.
+ */
+export function setMediaBytes(
+	db: Db,
+	id: string,
+	input: { bytes: number; sha256: string }
+): Media | undefined {
+	const params = { id, bytes: input.bytes, sha256: input.sha256 };
+
+	const row = db
+		.prepare<typeof params, Row>(
+			`UPDATE media SET bytes = :bytes, sha256 = :sha256
+			 WHERE id = :id
+			 RETURNING ${COLUMNS}`
+		)
+		.get(params);
+
+	return row && toMedia(row);
+}
+
 export type MediaResult = {
 	status: MediaStatus;
 	width?: number | null;

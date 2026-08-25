@@ -28,6 +28,19 @@ export interface EventPayloads {
 	'project.created': { projectId: string; slug: string };
 	'project.updated': { projectId: string; slug: string };
 	'update.created': { updateId: string; projectId: string; agentId: string };
+	/**
+	 * An update the owner curated in place — today only its pin (design §7).
+	 *
+	 * §4 lists the events this design foresaw, and pinning an existing update was
+	 * not among them: it is the one owner action that neither creates nor removes
+	 * a row, so neither `update.created` nor `update.deleted` can carry it
+	 * without lying to every other subscriber about what happened. The browser
+	 * has to hear about it — a pin reorders the timeline in every open tab — so
+	 * the vocabulary gains a member rather than an existing one gaining a second
+	 * meaning. `pinned` rides along so a subscriber can decide whether it cares
+	 * before refetching.
+	 */
+	'update.updated': { updateId: string; projectId: string; pinned: boolean };
 	/** Deletes are soft, so the browser is told to drop a row it already rendered. */
 	'update.deleted': { updateId: string; projectId: string };
 	/** A derivative job finished; the browser swaps its placeholder. */

@@ -12,6 +12,7 @@
 	import type { Snippet } from 'svelte';
 	import UpdateCard from './UpdateCard.svelte';
 	import { groupByDay } from './days';
+	import type { OwnerActions } from './actions';
 	import type { Timeline } from './timeline.svelte';
 	import type { UpdateView } from './types';
 
@@ -20,11 +21,14 @@
 		/** Agent id to display name. Filled in by the presence slice. */
 		agentNames = {},
 		/** Passed through to each card's media region. */
-		media
+		media,
+		/** The owner's write calls, passed to every card (design §7). */
+		actions
 	}: {
 		feed: Timeline;
 		agentNames?: Record<string, string>;
 		media?: Snippet<[UpdateView]>;
+		actions?: OwnerActions;
 	} = $props();
 
 	/**
@@ -41,7 +45,24 @@
 	// Captured once. Re-reading the clock on every render would let a card slide
 	// from "Today" to "Yesterday" mid-session, remounting the whole group.
 	const renderedAt = Date.now();
-	const groups = $derived(groupByDay(feed.items, renderedAt));
+
+	/**
+	 * Pinned updates sort first (design §7), lifted clear of the day groups
+	 * rather than reordered inside them.
+	 *
+	 * Sorting within a day would put a pinned update from three weeks ago at the
+	 * top of *its* day and nowhere near the top of the feed, which is not what
+	 * pinning it meant. So the pinned ones become their own section above
+	 * everything, and the day groups render what is left — every card appears
+	 * exactly once either way.
+	 */
+	const pinned = $derived(feed.items.filter((item) => item.pinned));
+	const groups = $derived(
+		groupByDay(
+			feed.items.filter((item) => !item.pinned),
+			renderedAt
+		)
+	);
 
 	function onscroll() {
 		if (viewport) feed.hold(viewport.scrollTop > AT_TOP_PX);
@@ -79,7 +100,27 @@
 	</div>
 
 	<div class="mx-auto flex max-w-3xl flex-col gap-6 px-3 py-4 sm:px-4">
-		{#if groups.length === 0}
+		{#if pinned.length > 0}
+			<section class="flex flex-col gap-3" aria-labelledby="day-pinned">
+				<h2
+					id="day-pinned"
+					class="sticky top-0 z-1 -mx-1 bg-surface/90 px-1 py-1 text-xs font-semibold tracking-wide text-accent uppercase backdrop-blur"
+				>
+					Pinned
+				</h2>
+				{#each pinned as update (update.id)}
+					<UpdateCard
+						{update}
+						agentName={agentNames[update.agentId]}
+						isNew={feed.isNew(update.id)}
+						{media}
+						{actions}
+					/>
+				{/each}
+			</section>
+		{/if}
+
+		{#if groups.length === 0 && pinned.length === 0}
 			<p class="px-1 py-8 text-content-muted">
 				Nothing here yet. Agents connect over MCP at <code
 					class="rounded bg-surface-raised px-1.5 py-0.5 text-sm">/mcp</code
@@ -100,6 +141,7 @@
 							agentName={agentNames[update.agentId]}
 							isNew={feed.isNew(update.id)}
 							{media}
+							{actions}
 						/>
 					{/each}
 				</section>

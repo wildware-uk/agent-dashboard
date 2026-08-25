@@ -104,6 +104,7 @@ export {
 	insertMedia,
 	listMediaForUpdate,
 	listOrphanedMedia,
+	setMediaBytes,
 	setMediaStatus,
 	type MediaResult,
 	type NewMedia

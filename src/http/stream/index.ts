@@ -22,6 +22,8 @@ export {
 	readCursor
 } from './stream';
 export type { StreamHandler, StreamHandlerOptions, StreamRequestEvent } from './stream';
+export { readAgentsSnapshot } from './agents';
+export type { AgentsSnapshot, SnapshotAgents } from './agents';
 export {
 	SNAPSHOT_DEFAULT_LIMIT,
 	createSnapshotHandler,

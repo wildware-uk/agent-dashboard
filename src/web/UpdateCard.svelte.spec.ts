@@ -1,7 +1,7 @@
 import { render } from 'vitest-browser-svelte';
 import { describe, expect, it } from 'vitest';
 import UpdateCard from './UpdateCard.svelte';
-import { anUpdate } from './testing';
+import { anUpdate, fakeActions } from './testing';
 
 /**
  * The card in a real browser. The markdown case here is the one that matters:
@@ -85,5 +85,29 @@ describe('the card', () => {
 		render(UpdateCard, { update: anUpdate({ id: 'u8' }) });
 
 		expect(document.querySelector('article')?.className).not.toContain('update-enter');
+	});
+});
+
+describe('the owner controls on a card', () => {
+	it('are absent until the card is handed an action client', async () => {
+		const screen = render(UpdateCard, { update: anUpdate() });
+
+		expect(screen.getByRole('button', { name: /update/ }).elements()).toHaveLength(0);
+	});
+
+	it('pin and delete the card they are on', async () => {
+		const api = fakeActions();
+		const screen = render(UpdateCard, { update: anUpdate({ id: 'u9' }), actions: api.actions });
+
+		await screen.getByRole('button', { name: 'Pin update' }).click();
+
+		expect(api.calls).toEqual([{ name: 'setUpdatePinned', args: ['u9', true] }]);
+		await expect.element(screen.getByRole('button', { name: 'Delete update' })).toBeInTheDocument();
+	});
+
+	it('says a pinned card is pinned, without the owner opening anything', async () => {
+		render(UpdateCard, { update: anUpdate({ id: 'u9', pinned: true }) });
+
+		expect(document.querySelector('article')?.textContent).toContain('Pinned');
 	});
 });
