@@ -153,8 +153,12 @@ sessions has `last_heartbeat_at` within 90 seconds. A background sweeper closes
 sessions idle for more than 10 minutes, so approval gates targeting a dead agent
 fail loudly rather than hanging.
 
-nginx must set `proxy_buffering off` on the stream route; SSE dies silently
-otherwise. This is documented in the deployment section of the README.
+Any reverse proxy in front of this must not buffer the stream route, or SSE
+stalls silently — the page connects and then simply never updates. The reference
+deployment uses Caddy, which detects `text/event-stream` on its own but is
+configured with an explicit `flush_interval -1` on `/api/stream` so a later
+refactor cannot regress it. Behind nginx the equivalent is `proxy_buffering off`.
+Both are documented in the README.
 
 ## 5. MCP surface
 
@@ -308,7 +312,10 @@ Public release makes these part of the deliverable, not extras.
 - README: quickstart, copy-paste MCP client config for Claude Code and others, the
   nginx SSE caveat, and an honest scope line — single-owner, self-hosted, not
   multi-tenant.
-- Backup guidance: `sqlite3 .backup` plus an rsync of `data/media/`.
+- Backup guidance: an online backup of the SQLite file plus an rsync of
+  `data/media/`. The `sqlite3` CLI is not assumed to be installed, so the
+  documented path uses the app's own `backup` command (built on the driver's
+  online backup API) rather than a shell binary.
 - MIT licence, matching `game-bridge-mcp`.
 
 ## 11. Build order
@@ -334,3 +341,19 @@ Each item is a shippable slice that leaves the tree working.
 16. Owner management: pin, archive, rename, delete.
 17. Packaging: Dockerfile, compose, `mint-token` CLI, full README.
 18. Playwright smoke test.
+
+## 12. Reference deployment
+
+The canonical instance runs on the Wildware box:
+
+- Node process listening on **port 8010** (`PORT=8010`, the documented default).
+- Public at **https://agents.wildware.dev**, so `PUBLIC_BASE_URL=https://agents.wildware.dev`
+  and agents point their MCP client at `https://agents.wildware.dev/mcp`.
+- Caddy terminates TLS and reverse-proxies to `127.0.0.1:8010`, with
+  `flush_interval -1` on `/api/stream` and a 300s proxy read timeout to cover slow
+  video uploads and the 55 second approval-gate holds.
+- Data lives on the SSD under the process's `DATA_DIR`.
+
+Because `create_upload` hands back an absolute `upload_url`, `PUBLIC_BASE_URL` must
+be the externally reachable origin, not the bind address — an agent that receives a
+`127.0.0.1` upload URL cannot upload anything.
