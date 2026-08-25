@@ -21,6 +21,15 @@
  * `./testing.ts` is a second, test-only entry point and is not re-exported here.
  */
 export { context, type Clock, type DomainContext } from './context';
+/**
+ * The row shapes domain functions hand back.
+ *
+ * Adapters have to be able to *name* what they receive — a formatter needs a
+ * type for its argument — and `$mcp` may not import `$db` (design §2). These are
+ * types only: the arrow still points one way, and nothing here lets an adapter
+ * reach a repository.
+ */
+export type { Agent, Project, ProjectStatus, Update, UpdateLevel } from '$db';
 export {
 	DomainError,
 	conflict,
@@ -30,6 +39,24 @@ export {
 	type DomainErrorCode
 } from './errors';
 export { SLUG_MAX_LENGTH, SLUG_PATTERN, assertSlug, isSlug, slugFor, slugify } from './slug';
+export {
+	AGENT_NAME_MAX_LENGTH,
+	TOKEN_BYTES,
+	TOKEN_LENGTH,
+	authenticateAgent,
+	constantTimeEquals,
+	hashAgentToken,
+	isTokenShaped,
+	listAgents,
+	mintAgentToken,
+	noteAgentSeen,
+	revokeAgentToken,
+	type AgentAuthFailure,
+	type AgentAuthResult,
+	type AuthenticateAgentInput,
+	type MintAgentTokenInput,
+	type MintedAgentToken
+} from './agents';
 export {
 	DESCRIPTION_MAX_LENGTH,
 	NAME_MAX_LENGTH,
