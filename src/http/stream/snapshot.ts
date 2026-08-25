@@ -17,7 +17,14 @@
  * a delta.
  */
 import { EventBus, bus as sharedBus } from '$events';
-import { context, isDomainError, listProjects, listUpdates, type DomainContext } from '$domain';
+import {
+	context,
+	isDomainError,
+	listAgentNames,
+	listProjects,
+	listUpdates,
+	type DomainContext
+} from '$domain';
 import type { AuthConfig, SessionCookieReader } from '../auth';
 import { ownerAuthenticated, unauthenticatedResponse } from './owner';
 
@@ -53,8 +60,24 @@ export type SnapshotUpdates = {
 	hasMore: boolean;
 };
 
+/**
+ * Agent id to display name, for every agent this deployment knows (design §7).
+ *
+ * Rides with the timeline rather than with presence because it answers a
+ * different question: presence is "who is beating right now", and a timeline is
+ * mostly the work of agents that have gone away. A card that cannot name its
+ * poster falls back to an id, which is unreadable — every ULID begins `01` until
+ * 2039 — so the names travel in the same document as the updates they annotate,
+ * which also means a `resync` refetch repairs them for free.
+ */
+export type SnapshotAgentNames = Record<string, string>;
+
 /** Everything a resyncing client needs in one consistent read. */
-export type FullSnapshot = { projects: SnapshotProjects; updates: SnapshotUpdates };
+export type FullSnapshot = {
+	projects: SnapshotProjects;
+	updates: SnapshotUpdates;
+	agentNames: SnapshotAgentNames;
+};
 
 /** Just the timeline, for paging and for a scoped refetch. */
 export type UpdatesSnapshot = { updates: SnapshotUpdates };
@@ -101,7 +124,10 @@ export function readFullSnapshot(
 	// first, and a slug that does not resolve should fail before a timeline query
 	// runs.
 	const projects = listProjects(ctx, query.status ? { status: query.status } : {});
-	return { projects, updates: readUpdates(query, ctx) };
+	// Every agent, not only the ones on this page: paging deeper into the past
+	// must not reach an update whose poster the client cannot name, and the whole
+	// map is smaller than one card's markdown.
+	return { projects, updates: readUpdates(query, ctx), agentNames: listAgentNames(ctx) };
 }
 
 /** The timeline alone, for paging deeper or refetching one project. */

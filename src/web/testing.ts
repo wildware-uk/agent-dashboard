@@ -84,6 +84,8 @@ export type FakeApiState = {
 	projects: ProjectView[];
 	items: UpdateView[];
 	hasMore?: boolean;
+	/** Agent id to display name, as the full snapshot carries it. */
+	agentNames?: Record<string, string>;
 };
 
 /**
@@ -111,7 +113,8 @@ export function fakeApi(initial: FakeApiState) {
 				seq: state.seq,
 				at: new Date().toISOString(),
 				projects: state.projects,
-				updates: page()
+				updates: page(),
+				agentNames: state.agentNames ?? {}
 			};
 		},
 
@@ -131,13 +134,16 @@ export function fakeApi(initial: FakeApiState) {
 
 		fetch(url: string): Promise<Response> {
 			calls.push(url);
+			// Only the full snapshot carries the project list and the agent names;
+			// `/api/snapshot/updates` is a page of the timeline and nothing else, so
+			// a store that expected either from it would be wrong against the real
+			// endpoint.
+			const full = url.startsWith('/api/snapshot?') || url === '/api/snapshot';
 			const body: SnapshotResponse = {
 				seq: state.seq,
 				at: new Date().toISOString(),
 				updates: page(),
-				...(url.startsWith('/api/snapshot?') || url === '/api/snapshot'
-					? { projects: state.projects }
-					: {})
+				...(full ? { projects: state.projects, agentNames: state.agentNames ?? {} } : {})
 			};
 			return Promise.resolve(
 				new Response(JSON.stringify(body), {

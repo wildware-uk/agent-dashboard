@@ -21,7 +21,7 @@ export {
 	type Requester
 } from './actions';
 export { renderMarkdown } from './markdown';
-export { avatarFor, type Avatar } from './avatar';
+export { agentLabel, avatarFor, type Avatar } from './avatar';
 export { LEVELS, levelStyle, type LevelStyle } from './levels';
 export { dayKey, dayLabel, groupByDay, timeLabel, type DayGroup, type Dated } from './days';
 export type {

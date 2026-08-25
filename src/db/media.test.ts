@@ -9,6 +9,7 @@ import {
 	findMediaById,
 	findMediaBySha256,
 	insertMedia,
+	listMediaByStatus,
 	listMediaForUpdate,
 	listOrphanedMedia,
 	setMediaBytes,
@@ -200,5 +201,51 @@ describe('deleteMedia', () => {
 		expect(deleteMedia(db, media.id)).toBe(true);
 		expect(findMediaById(db, media.id)).toBeUndefined();
 		expect(deleteMedia(db, media.id)).toBe(false);
+	});
+});
+
+describe('listMediaByStatus', () => {
+	it('finds the rows in one state, oldest first', () => {
+		const first = upload();
+		const second = upload();
+		upload({ status: 'ready' });
+
+		expect(listMediaByStatus(db, { statuses: ['pending'] }).map((row) => row.id)).toEqual([
+			first.id,
+			second.id
+		]);
+	});
+
+	it('takes more than one state at a time', () => {
+		const pending = upload();
+		const failed = upload({ status: 'failed' });
+		upload({ status: 'ready' });
+
+		expect(
+			listMediaByStatus(db, { statuses: ['pending', 'failed'] })
+				.map((row) => row.id)
+				.sort()
+		).toEqual([pending.id, failed.id].sort());
+	});
+
+	it('can leave out reservations whose bytes never arrived', () => {
+		const landed = upload();
+		upload({ sha256: '' });
+
+		expect(listMediaByStatus(db, { statuses: ['pending'], hasBytes: true })).toEqual([landed]);
+		expect(listMediaByStatus(db, { statuses: ['pending'] })).toHaveLength(2);
+	});
+
+	it('is bounded', () => {
+		upload();
+		upload();
+
+		expect(listMediaByStatus(db, { statuses: ['pending'], limit: 1 })).toHaveLength(1);
+	});
+
+	it('answers with nothing when no state is asked for', () => {
+		upload();
+
+		expect(listMediaByStatus(db, { statuses: [] })).toEqual([]);
 	});
 });

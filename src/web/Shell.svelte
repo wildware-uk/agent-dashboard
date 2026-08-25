@@ -9,9 +9,11 @@
 	 * the timeline's scroll position is a thing this app can reason about (which
 	 * is what the "N new" pill depends on).
 	 *
-	 * The store lives here: one connection per page, opened on mount and closed
-	 * on unmount. It is hydrated from the server render first, so the shell paints
-	 * with content and then goes live, rather than painting empty and filling in.
+	 * The stores live here: the timeline's, opened on mount and closed on unmount
+	 * and hydrated from the server render first, so the shell paints with content
+	 * and then goes live rather than painting empty and filling in; and presence's,
+	 * because two regions need it — the rail renders who is online, and the cards
+	 * are attributed with the names it learns.
 	 */
 	import { onMount, type Snippet } from 'svelte';
 	import { resolve } from '$app/paths';
@@ -20,6 +22,7 @@
 	import Theme from './Theme.svelte';
 	import TimelineView from './Timeline.svelte';
 	import { ownerActions, type OwnerActions } from './actions';
+	import { Presence } from './presence.svelte';
 	import { Timeline } from './timeline.svelte';
 	import type { SnapshotResponse, UpdateView } from './types';
 
@@ -28,9 +31,26 @@
 		snapshot,
 		/** The selected project's slug, from `?project=`. */
 		project = null,
+		/**
+		 * Agent names known before either store has said anything.
+		 *
+		 * Not how a page supplies them — the server render carries them inside
+		 * `snapshot`, which is where a `resync` refetch also finds them — but a
+		 * seam for a spec that wants one card named without a fake endpoint.
+		 */
 		agentNames = {},
 		/** Injected by the component tests; production builds its own. */
 		feed = new Timeline({ project }),
+		/**
+		 * Live agents, owned here rather than in the rail (design §4, §7).
+		 *
+		 * The rail is not the only region that needs presence: an agent that
+		 * registers a session while this page is open has to start being named on
+		 * its cards without a reload, and the timeline snapshot alone cannot do
+		 * that — it was read before the agent existed. So one store lives here and
+		 * both regions read it.
+		 */
+		presence = new Presence(),
 		media,
 		/**
 		 * The owner's write calls (design §7), handed down to the sidebar and to
@@ -43,6 +63,7 @@
 		project?: string | null;
 		agentNames?: Record<string, string>;
 		feed?: Timeline;
+		presence?: Presence;
 		media?: Snippet<[UpdateView]>;
 		actions?: OwnerActions;
 	} = $props();
@@ -58,12 +79,30 @@
 
 	onMount(() => {
 		feed.start();
-		return () => feed.stop();
+		// Presence is started here as well as by the rail. Both calls are cheap and
+		// idempotent, and the point is that a card's attribution must not depend on
+		// the rail being on screen: the rail is a `hidden xl:block` region, and a
+		// narrower viewport must still name its agents.
+		presence.start();
+		return () => {
+			feed.stop();
+			presence.stop();
+		};
 	});
 
 	const activeProject = $derived(
 		feed.projects.find((candidate) => candidate.slug === project) ?? null
 	);
+
+	/**
+	 * Who each card is attributed to, least current source first.
+	 *
+	 * The timeline snapshot names every agent this deployment has ever had, which
+	 * is what a history of departed agents needs; presence names the ones that
+	 * have said something since the page loaded, which is what a *new* agent
+	 * needs. Neither is a subset of the other, so the card gets both.
+	 */
+	const posters = $derived({ ...agentNames, ...feed.agentNames, ...presence.names });
 </script>
 
 <svelte:window onkeydown={(event) => event.key === 'Escape' && (drawer = false)} />
@@ -116,11 +155,11 @@
 		</aside>
 
 		<main class="min-h-0" aria-label="Update timeline">
-			<TimelineView {feed} {agentNames} {media} {actions} />
+			<TimelineView {feed} agentNames={posters} {media} {actions} />
 		</main>
 
 		<aside class="hidden min-h-0 overflow-y-auto border-l border-border-subtle xl:block">
-			<RightRail />
+			<RightRail {presence} />
 		</aside>
 	</div>
 </div>

@@ -7,6 +7,7 @@ import {
 	constantTimeEquals,
 	hashAgentToken,
 	isTokenShaped,
+	listAgentNames,
 	listAgents,
 	mintAgentToken,
 	noteAgentSeen,
@@ -198,5 +199,28 @@ describe('listAgents', () => {
 			live.id,
 			dead.id
 		]);
+	});
+});
+
+describe('listAgentNames', () => {
+	it('names every agent, so a card can attribute an update to any of them', () => {
+		const scout = mintAgentToken(h, { name: 'docs-writer', secret: SECRET }).agent;
+		const bot = mintAgentToken(h, { name: 'build-bot', secret: SECRET }).agent;
+
+		expect(listAgentNames(h)).toEqual({ [scout.id]: 'docs-writer', [bot.id]: 'build-bot' });
+	});
+
+	it('includes revoked agents, because their updates are still in the timeline', () => {
+		const dead = mintAgentToken(h, { name: 'retired-bot', secret: SECRET }).agent;
+		revokeAgentToken(h, dead.id);
+
+		// The whole point of this lookup: an agent that has gone away — offline,
+		// revoked, never coming back — still posted the history on screen, and a
+		// card showing its ULID instead of its name is the bug (#20).
+		expect(listAgentNames(h)[dead.id]).toBe('retired-bot');
+	});
+
+	it('is an empty map on a deployment where no agent has ever been minted', () => {
+		expect(listAgentNames(h)).toEqual({});
 	});
 });

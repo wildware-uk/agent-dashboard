@@ -47,6 +47,14 @@ refetch cannot drift apart — and reads the stream cursor _before_ the state, f
 the reason given in `stream/snapshot.ts`. The page hands that snapshot to
 `$web/Shell.svelte`, which adopts it and then goes live from that cursor.
 
+That snapshot also carries `agentNames`: every agent id this deployment knows
+mapped to its display name, revoked and long-offline agents included. Presence
+cannot supply it — a timeline is mostly the work of agents that have gone — and a
+card falling back to an id shows nothing useful, because every ULID begins `01`
+until 2039. Names ride with the updates they annotate, so a `resync` repairs them
+with everything else; an agent that appears _after_ the page loaded is named by
+the rail's presence read instead.
+
 ## The owner's write endpoints (`owner/`)
 
 `src/http/owner/` holds the handlers; the route files under `routes/api/` are

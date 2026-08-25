@@ -21,7 +21,15 @@ import {
 /** A `DomainError` code is the domain's vocabulary; this is HTTP's (design §2). */
 const STATUS_FOR = { invalid_argument: 400, not_found: 404, conflict: 409 } as const;
 
-/** What both dashboard routes hand their page. */
+/**
+ * What both dashboard routes hand their page.
+ *
+ * The agent names the cards are attributed by are inside `snapshot`
+ * (`agentNames`), not beside it: they are part of the state the client store
+ * adopts and re-reads on `resync`, so `<Shell>` needs no second prop to render a
+ * name instead of a ULID, and a name learned after a resync cannot disagree with
+ * a stale copy that was passed separately.
+ */
 export type DashboardData = {
 	/** The selected project's slug, or `null` for the whole timeline. */
 	project: string | null;

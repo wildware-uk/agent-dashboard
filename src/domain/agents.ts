@@ -198,6 +198,29 @@ export function listAgents(ctx: DomainContext, filter: { includeRevoked?: boolea
 }
 
 /**
+ * Every agent id mapped to its display name (design §7).
+ *
+ * The timeline needs this and presence cannot supply it: presence answers "who
+ * is beating right now", while most of a timeline was posted by agents that have
+ * long since gone away. So this deliberately includes **revoked** agents too —
+ * revoking a token ends what an agent can do, not what it already did, and its
+ * updates are still on screen.
+ *
+ * A map rather than a list because every caller is asking the same question of
+ * it, one id at a time, and a self-hosted dashboard has tens of agents, not
+ * thousands: the whole answer is smaller than one page of the timeline it
+ * annotates.
+ */
+export function listAgentNames(ctx: DomainContext): Record<string, string> {
+	const names: Record<string, string> = {};
+	for (const agent of listAgentRows(ctx.db, { includeRevoked: true })) {
+		names[agent.id] = agent.name;
+	}
+
+	return names;
+}
+
+/**
  * Switch an agent's token off for good (design §8: individually revocable).
  *
  * @returns whether this call was the one that revoked it, so the CLI can print

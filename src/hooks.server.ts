@@ -18,6 +18,7 @@
 import { building } from '$app/environment';
 import { assertBodyLimitAllowsUploads, assertClientAddressTrustworthy, loadConfig } from '$config';
 import { startMediaSweeper, startPresenceSweeper } from '$domain';
+import { startDerivativeWorker } from '$media';
 
 assertClientAddressTrustworthy(process.env);
 
@@ -43,5 +44,16 @@ if (!building) startPresenceSweeper();
 // its own database handle and settings per tick, and a failure is logged rather
 // than thrown.
 if (!building) startMediaSweeper();
+
+// Derivatives (design §6 steps 4-5). The worker polls the `media` table for rows
+// that are still `pending` with bytes on disk, which is what makes it correct for
+// both halves of the problem: a screenshot uploaded a second ago, and the backlog
+// a deployment upgraded into this slice with. It resolves its database handle and
+// settings on the first tick rather than here, catches every failure, and runs at
+// concurrency two — so the worst case is one media item stuck at `failed`, never a
+// dashboard that will not boot or a process that exits on a bad file.
+//
+// An operator can also drain the backlog by hand; see `src/media/README.md`.
+if (!building) startDerivativeWorker();
 
 export { authHandle as handle } from './http/auth';

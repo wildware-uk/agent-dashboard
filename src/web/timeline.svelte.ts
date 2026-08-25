@@ -92,6 +92,15 @@ export class Timeline {
 	loading = $state(false);
 	/** Ids that arrived live, so a card animates in exactly once. */
 	arrived = $state<string[]>([]);
+	/**
+	 * Agent id to display name, for attributing the cards (design §7).
+	 *
+	 * Part of the timeline's own state rather than presence's, because a timeline
+	 * is mostly the work of agents that are not online — and an id on a card is
+	 * unreadable: every ULID begins `01` until 2039, so the ids made every avatar
+	 * in the feed look like the same agent (#20).
+	 */
+	agentNames = $state<Record<string, string>>({});
 
 	private cursor: string | null = null;
 	private holding = false;
@@ -284,6 +293,12 @@ export class Timeline {
 	 */
 	private apply(snapshot: SnapshotResponse, mode: 'merge' | 'replace'): void {
 		if (snapshot.projects) this.projects = snapshot.projects;
+		// Folded in even on `replace`: "this id is called that" is a fact about an
+		// agent, not a row in the timeline, so a document that does not mention an
+		// agent is not saying it has stopped having a name. The updates-only
+		// endpoint carries no names at all, and blanking the headers on the first
+		// "load older" is exactly what a wholesale overwrite would do.
+		if (snapshot.agentNames) this.agentNames = { ...this.agentNames, ...snapshot.agentNames };
 		this.seq = Math.max(this.seq, snapshot.seq);
 
 		if (mode === 'replace') {

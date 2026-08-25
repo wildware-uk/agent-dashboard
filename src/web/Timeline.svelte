@@ -18,7 +18,11 @@
 
 	let {
 		feed,
-		/** Agent id to display name. Filled in by the presence slice. */
+		/**
+		 * Agent id to display name, resolved by the shell from the timeline
+		 * snapshot and from presence. A card with no entry here names its poster
+		 * from the id instead, readably (see `agentLabel`).
+		 */
 		agentNames = {},
 		/** Passed through to each card's media region. */
 		media,

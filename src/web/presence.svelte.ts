@@ -99,6 +99,15 @@ export class Presence {
 	loading = $state(false);
 	/** The derived clock. Moves on every tick, which is what expires a heartbeat. */
 	now = $state(0);
+	/**
+	 * Agent id to display name, for everyone this store has ever seen online.
+	 *
+	 * Presence itself is a derivation that expires; a name is not. An agent that
+	 * registers a session while the page is open is announced here, which is what
+	 * lets its cards stop showing a ULID without a reload — and when it goes quiet
+	 * the name stays, because its updates are still in the timeline (#20).
+	 */
+	names = $state<Record<string, string>>({});
 
 	private stream: StreamLike | null = null;
 	/** Whether the rail is mounted. A queued refetch after `stop` is dropped. */
@@ -242,6 +251,12 @@ export class Presence {
 		// Wholesale, not reconciled by id: presence is a derivation, so the answer
 		// is the whole answer — anybody missing from it is not online.
 		this.agents = snapshot.agents;
+		// Names accumulate instead, for the reason on the field itself: going
+		// offline is not being renamed.
+		this.names = {
+			...this.names,
+			...Object.fromEntries(snapshot.agents.map((agent) => [agent.agentId, agent.name]))
+		};
 		this.seq = Math.max(this.seq, snapshot.seq);
 		this.now = this.clock();
 	}

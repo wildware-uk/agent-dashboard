@@ -3,12 +3,12 @@ import { expect, test } from '@playwright/test';
 // Scaffold smoke test: the Node-adapter build boots and the theme is settled
 // before first paint — dark unless the OS asks for light.
 //
-// Read the target honestly. This suite's shared server runs without
-// ADMIN_PASSWORD_HASH, so the session guard 303s `/` to `/login`, and every
-// assertion below lands on the login page — which renders the same <h1> and
-// mounts the same <Theme />. The authenticated dashboard shell is covered by
-// `shell.e2e.ts`, which boots its own server with a known password hash and logs
-// in for real; an update posted over MCP reaching the browser is #18.
+// Read the target honestly. Nothing here carries a session cookie, so the guard
+// 303s `/` to `/login`, and every assertion below lands on the login page —
+// which renders the same <h1> and mounts the same <Theme />. The authenticated
+// dashboard shell is covered by `shell.e2e.ts`, which boots its own server with
+// a known password hash and logs in for real; an update posted over MCP reaching
+// the browser is #18.
 
 test.describe('dark-first with system preference', () => {
 	test('sends an unauthenticated visitor to the login page', async ({ request }) => {

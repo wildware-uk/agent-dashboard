@@ -1,8 +1,9 @@
 import { render } from 'vitest-browser-svelte';
 import { describe, expect, it } from 'vitest';
 import Shell from './Shell.svelte';
+import { Presence } from './presence.svelte';
 import { Timeline } from './timeline.svelte';
-import { FakeStream, aProject, anUpdate, fakeApi } from './testing';
+import { FakeStream, aLiveAgent, aProject, anUpdate, fakeAgentsApi, fakeApi } from './testing';
 
 /**
  * The shell as a whole. Responsive behaviour is CSS, and no stylesheet is loaded
@@ -51,6 +52,72 @@ describe('the three regions', () => {
 		await expect
 			.element(screen.getByRole('heading', { name: 'Agent Dashboard' }))
 			.toBeInTheDocument();
+	});
+});
+
+/**
+ * A ULID, as the server actually mints agent ids. The literal matters: every one
+ * of them begins `01` until September 2039, which is why a card that shows an id
+ * says nothing about who posted it (#20).
+ */
+const AGENT_ULID = '01M0X5XHT67FCP294SSA3B2XHV';
+
+/**
+ * The shell with both of its stores faked: the timeline snapshot that carries
+ * the agent names, and the presence endpoint that keeps them live.
+ */
+function mountWithAgents(options: {
+	agentNames?: Record<string, string>;
+	agents?: ReturnType<typeof aLiveAgent>[];
+}) {
+	const api = fakeApi({
+		seq: 4,
+		projects: [aProject()],
+		items: [anUpdate({ agentId: AGENT_ULID, body: 'shipped it' })],
+		agentNames: options.agentNames ?? {}
+	});
+	const agentsApi = fakeAgentsApi({ seq: 4, agents: options.agents ?? [] });
+	const feed = new Timeline({
+		fetch: api.fetch,
+		openStream: () => new FakeStream(),
+		schedule: (run) => api.queue.push(run)
+	});
+	const presence = new Presence({
+		fetch: agentsApi.fetch,
+		openStream: () => new FakeStream(),
+		schedule: (run) => agentsApi.queue.push(run)
+	});
+
+	return {
+		agentsApi,
+		card: () => document.querySelector('article')?.textContent ?? '',
+		screen: render(Shell, { snapshot: api.snapshot(), feed, presence })
+	};
+}
+
+describe('attributing the cards', () => {
+	it('names the poster from the snapshot, for an agent that is nowhere near online', async () => {
+		// Nobody is beating, so presence knows nothing — and this is the common
+		// case, because a timeline is mostly the work of agents that have gone.
+		const { card } = mountWithAgents({ agentNames: { [AGENT_ULID]: 'docs-writer' } });
+
+		await expect.poll(card).toContain('docs-writer');
+		expect(card()).not.toContain(AGENT_ULID);
+	});
+
+	it('names an agent that registered a session after the page was rendered', async () => {
+		const { card, agentsApi } = mountWithAgents({
+			agents: [aLiveAgent({ agentId: AGENT_ULID, name: 'build-bot', lastHeartbeatAt: Date.now() })]
+		});
+
+		// Before presence answers there is no name to be had, and the card says
+		// something readable rather than 26 characters.
+		expect(card()).toContain('agent-3b2xhv');
+
+		await agentsApi.settle();
+
+		// No reload, no second snapshot: the rail's read is what named it.
+		await expect.poll(card).toContain('build-bot');
 	});
 });
 

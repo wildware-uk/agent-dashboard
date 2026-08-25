@@ -102,6 +102,7 @@ export {
 	findMediaById,
 	findMediaBySha256,
 	insertMedia,
+	listMediaByStatus,
 	listMediaForUpdate,
 	listOrphanedMedia,
 	setMediaBytes,
