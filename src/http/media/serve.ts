@@ -32,6 +32,7 @@ import { context, readMediaVariant, type DomainContext } from '$domain';
 import { isVariant, type MediaSettings } from '$media';
 import type { AuthConfig, SessionCookieReader } from '../auth';
 import { ownerAuthenticated, unauthenticatedResponse } from '../stream';
+import { resolveRange } from './range';
 import { mediaConfig } from './env';
 
 /** A year. The bytes at one address never change, so this is safe to promise. */
@@ -95,7 +96,10 @@ export function createMediaHandler(options: MediaHandlerOptions = {}): MediaHand
 			'x-content-type-options': 'nosniff',
 			'content-disposition': 'inline',
 			'content-security-policy': "default-src 'none'; sandbox",
-			'accept-ranges': 'none',
+			// Seeking a video is a byte range. Answering `none` here is what made the
+			// scrub bar snap back to zero: the player asks for a window near the
+			// middle of the file, gets the whole thing with a 200, and gives up.
+			'accept-ranges': 'bytes',
 			etag: file.etag
 		});
 
@@ -103,6 +107,22 @@ export function createMediaHandler(options: MediaHandlerOptions = {}): MediaHand
 			// 304 carries no body, and must not carry a length for one either.
 			headers.delete('content-length');
 			return new Response(null, { status: 304, headers });
+		}
+
+		const verdict = resolveRange(event.request.headers.get('range'), file.bytes);
+
+		if (verdict.kind === 'unsatisfiable') {
+			// RFC 9110: 416 states the real length so the client can ask again.
+			headers.set('content-range', `bytes */${file.bytes}`);
+			headers.delete('content-length');
+			return new Response(null, { status: 416, headers });
+		}
+
+		if (verdict.kind === 'partial') {
+			const { start, end } = verdict.range;
+			headers.set('content-range', `bytes ${start}-${end}/${file.bytes}`);
+			headers.set('content-length', String(end - start + 1));
+			return new Response(file.open(verdict.range), { status: 206, headers });
 		}
 
 		return new Response(file.open(), { status: 200, headers });

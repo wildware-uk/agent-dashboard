@@ -124,10 +124,64 @@ describe('GET /media/:id/:variant', () => {
 		expect(response.status).toBe(404);
 	});
 
-	it('does not claim to support ranges it does not implement', async () => {
+	it('advertises range support, which is what lets a video seek', async () => {
 		const id = await uploaded();
 
-		expect((await get(id, 'original')).headers.get('accept-ranges')).toBe('none');
+		expect((await get(id, 'original')).headers.get('accept-ranges')).toBe('bytes');
+	});
+
+	it('answers a range with 206 and exactly those bytes', async () => {
+		// A player seeking mid-file asks for a window. Answering 200 with the whole
+		// representation makes it snap back to the start, which is what the scrub
+		// bar and frame stepping were doing before this landed.
+		const png = pngBytes();
+		const id = await uploaded(png);
+
+		const response = await get(id, 'original', { headers: { range: 'bytes=10-19' } });
+
+		expect(response.status).toBe(206);
+		expect(response.headers.get('content-range')).toBe(`bytes 10-19/${png.length}`);
+		expect(response.headers.get('content-length')).toBe('10');
+		expect(new Uint8Array(await response.arrayBuffer())).toEqual(png.subarray(10, 20));
+	});
+
+	it('clamps an open-ended range to the last byte', async () => {
+		const png = pngBytes();
+		const id = await uploaded(png);
+
+		const response = await get(id, 'original', { headers: { range: 'bytes=0-' } });
+
+		expect(response.status).toBe(206);
+		expect(response.headers.get('content-range')).toBe(`bytes 0-${png.length - 1}/${png.length}`);
+		expect(new Uint8Array(await response.arrayBuffer())).toEqual(png);
+	});
+
+	it('answers a suffix range with the tail of the file', async () => {
+		const png = pngBytes();
+		const id = await uploaded(png);
+
+		const response = await get(id, 'original', { headers: { range: 'bytes=-8' } });
+
+		expect(response.status).toBe(206);
+		expect(new Uint8Array(await response.arrayBuffer())).toEqual(png.subarray(png.length - 8));
+	});
+
+	it('answers 416 with the real length when the range is past the end', async () => {
+		const png = pngBytes();
+		const id = await uploaded(png);
+
+		const response = await get(id, 'original', { headers: { range: 'bytes=999999-' } });
+
+		expect(response.status).toBe(416);
+		expect(response.headers.get('content-range')).toBe(`bytes */${png.length}`);
+	});
+
+	it('serves the whole file for a multipart range rather than failing', async () => {
+		const id = await uploaded();
+
+		const response = await get(id, 'original', { headers: { range: 'bytes=0-9,20-29' } });
+
+		expect(response.status).toBe(200);
 	});
 
 	it('answers 503 when the deployment is not configured', async () => {
