@@ -14,11 +14,21 @@ const MAY_IMPORT: Record<string, readonly string[]> = {
 	media: ['db', 'events'],
 	domain: ['db', 'events', 'media'],
 	mcp: ['domain'],
-	// The design table lists `domain, mcp, media`. `web` is added because
-	// `src/http/routes/` is the SvelteKit route tree and a route has to render
-	// the components that live in `src/web/`. The arrow only points this way:
-	// `web` importing `http` stays forbidden.
-	http: ['domain', 'mcp', 'media', 'web'],
+	// The design table lists `domain, mcp, media`. Two edges are added.
+	//
+	// `web`, because `src/http/routes/` is the SvelteKit route tree and a route
+	// has to render the components that live in `src/web/`. The arrow only points
+	// this way: `web` importing `http` stays forbidden.
+	//
+	// `events`, because the SSE route *is* the fan-out to the browser: the
+	// architecture diagram in §2 draws `src/events/ ──SSE push──> browser`
+	// through this module, and §4 makes `GET /api/stream` the reader of the
+	// replay ring buffer. Subscribing to the bus and serialising `AppEvent`s is
+	// transport work, not a business rule, so it cannot be laundered through
+	// `domain` without inventing a pass-through there. The rule this does not
+	// weaken: `http` still may not touch `db`, and may not publish rules of its
+	// own — it reads the bus, it does not decide what goes on it.
+	http: ['domain', 'mcp', 'media', 'web', 'events'],
 	// `web` ships to the browser. Its only data source is the HTTP API.
 	web: []
 };
