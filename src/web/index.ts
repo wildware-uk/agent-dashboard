@@ -21,10 +21,31 @@ export {
 	type Requester
 } from './actions';
 export { renderMarkdown } from './markdown';
+export {
+	CELL_RATIO,
+	DEFAULT_RATIO,
+	MAX_RATIO,
+	MIN_RATIO,
+	durationLabel,
+	gridColumns,
+	intrinsic,
+	isViewable,
+	mediaLabel,
+	mediaUrl,
+	posterSrc,
+	thumbSrc,
+	thumbSrcset,
+	tileRatio,
+	videoSrc
+} from './media';
 export { agentLabel, avatarFor, type Avatar } from './avatar';
 export { LEVELS, levelStyle, type LevelStyle } from './levels';
 export { dayKey, dayLabel, groupByDay, timeLabel, type DayGroup, type Dated } from './days';
 export type {
+	MediaKind,
+	MediaStatus,
+	MediaVariant,
+	MediaView,
 	ProjectStatus,
 	ProjectView,
 	SnapshotResponse,

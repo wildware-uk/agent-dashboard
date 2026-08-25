@@ -47,6 +47,14 @@ refetch cannot drift apart — and reads the stream cursor _before_ the state, f
 the reason given in `stream/snapshot.ts`. The page hands that snapshot to
 `$web/Shell.svelte`, which adopts it and then goes live from that cursor.
 
+Every update in that snapshot carries its own `media`: one entry per attachment,
+with the stored `width`/`height`, the `status`, and the `variants` that
+`/media/:id/:variant` will actually answer for right now. It rides on the update
+rather than in a map beside the timeline because `media.ready` is answered the
+way every event is — refetch the page, reconcile by id — so the new variants have
+to arrive on the row that renders them. Nothing here builds a URL: an address is
+`/media/:id/:variant` for every deployment, and the browser knows that rule.
+
 That snapshot also carries `agentNames`: every agent id this deployment knows
 mapped to its display name, revoked and long-offline agents included. Presence
 cannot supply it — a timeline is mostly the work of agents that have gone — and a

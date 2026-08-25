@@ -22,8 +22,10 @@ import {
 	isDomainError,
 	listAgentNames,
 	listProjects,
+	listUpdateMedia,
 	listUpdates,
-	type DomainContext
+	type DomainContext,
+	type MediaAttachment
 } from '$domain';
 import type { AuthConfig, SessionCookieReader } from '../auth';
 import { ownerAuthenticated, unauthenticatedResponse } from './owner';
@@ -53,8 +55,25 @@ export type SnapshotQuery = {
  * to drift.
  */
 export type SnapshotProjects = ReturnType<typeof listProjects>;
+
+/**
+ * An update as the timeline sends it: the domain's row plus its media (design §7).
+ *
+ * The media rides on the card rather than in a map beside the timeline, and that
+ * is what makes the live swap fall out of the transport already in place: a
+ * browser hearing `media.ready` refetches this page and replaces the row by id
+ * (`src/web/timeline.svelte.ts`), so the new variants arrive with the row that
+ * renders them and there is no second piece of state to reconcile.
+ *
+ * Always an array, never absent: a card that reads `media.length` should not
+ * have to guard against a plain-text update.
+ */
+export type SnapshotUpdate = ReturnType<typeof listUpdates>['updates'][number] & {
+	media: MediaAttachment[];
+};
+
 export type SnapshotUpdates = {
-	items: ReturnType<typeof listUpdates>['updates'];
+	items: SnapshotUpdate[];
 	/** Pass back as `cursor` to page further into the past. `null` at the end. */
 	nextCursor: string | null;
 	hasMore: boolean;
@@ -144,7 +163,16 @@ function readUpdates(query: SnapshotQuery, ctx: DomainContext): SnapshotUpdates 
 		limit: query.limit,
 		cursor: query.cursor
 	});
-	return { items: page.updates, nextCursor: page.nextCursor, hasMore: page.hasMore };
+
+	// One read for the whole page, after the page is known — media is a property
+	// of the rows that came back, not a filter on which rows come back.
+	const media = listUpdateMedia(
+		ctx,
+		page.updates.map((update) => update.id)
+	);
+	const items = page.updates.map((update) => ({ ...update, media: media[update.id] ?? [] }));
+
+	return { items, nextCursor: page.nextCursor, hasMore: page.hasMore };
 }
 
 /**

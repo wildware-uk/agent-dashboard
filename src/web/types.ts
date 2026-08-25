@@ -30,6 +30,48 @@ export type ProjectView = {
 	updatedAt: number;
 };
 
+/** Media a card can carry (design §3, §6). */
+export type MediaKind = 'image' | 'video';
+
+/**
+ * Where a media item is in the pipeline (design §6).
+ *
+ * `pending` is a placeholder, `failed` is a stated failure, and only `ready`
+ * has anything to render. The browser never guesses from a missing file.
+ */
+export type MediaStatus = 'pending' | 'ready' | 'failed';
+
+/**
+ * Every address `/media/:id/:variant` answers (design §6).
+ *
+ * Re-declared here rather than imported from `$media`, for the reason at the top
+ * of this file: this module ships to the browser. The set is pinned by
+ * `media.test.ts` against the server's own list, which is the copy that would
+ * otherwise rot.
+ */
+export type MediaVariant = 'original' | 'thumb-640' | 'thumb-1600' | 'poster' | 'video';
+
+/**
+ * One attachment, as the timeline snapshot sends it.
+ *
+ * No URLs: an address is `/media/:id/:variant` everywhere, so `variants` — the
+ * addresses that will actually answer right now — is all the browser needs, and
+ * it is what stops the grid asking for a transcode a web-playable mp4 never got
+ * (`src/media/derive.ts`). `width` and `height` are the stored dimensions, which
+ * is what lets a cell reserve its box before the bytes load.
+ */
+export type MediaView = {
+	id: string;
+	updateId: string | null;
+	kind: MediaKind;
+	mime: string;
+	status: MediaStatus;
+	width: number | null;
+	height: number | null;
+	durationMs: number | null;
+	variants: MediaVariant[];
+};
+
 /** One update as a card renders it. `body` is untrusted markdown (design §8). */
 export type UpdateView = {
 	id: string;
@@ -43,6 +85,15 @@ export type UpdateView = {
 	pinned: boolean;
 	createdAt: number;
 	deletedAt: number | null;
+	/**
+	 * The media grid's contents, in upload order (design §7).
+	 *
+	 * Optional only because a card is renderable without it — a spec builds one
+	 * from three fields, and an update posted before this field existed is a
+	 * plain-text card either way. Every real response carries an array, empty
+	 * included.
+	 */
+	media?: MediaView[];
 };
 
 /** The timeline page inside a snapshot response. */

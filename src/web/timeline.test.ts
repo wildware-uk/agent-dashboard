@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { Timeline, type TimelineOptions } from './timeline.svelte';
-import { FakeStream, aProject, anUpdate, fakeApi } from './testing';
+import { FakeStream, aMedia, aProject, anUpdate, fakeApi } from './testing';
 
 /**
  * The client store, driven the way the server drives it: a snapshot, then
@@ -205,6 +205,90 @@ describe('update.deleted', () => {
 
 		expect(feed.pendingCount).toBe(0);
 		expect(feed.items.map((item) => item.id)).toEqual(['u2', 'u1']);
+	});
+});
+
+/**
+ * The live swap (design §6 step 5): the one thing the media UI must not fake.
+ *
+ * `media.ready` carries identifiers, like every other event, so the store's
+ * answer is the same as for anything else — refetch the page and reconcile by id
+ * — and the new variants arrive on the row that renders them. What these tests
+ * pin down is that the store *listens* at all, and that the row it ends up
+ * holding is the ready one.
+ */
+describe('media.ready', () => {
+	const pending = anUpdate({
+		id: 'u5',
+		seq: 20,
+		body: 'a screenshot',
+		media: [
+			aMedia({
+				id: 'm1',
+				updateId: 'u5',
+				status: 'pending',
+				width: null,
+				height: null,
+				variants: []
+			})
+		]
+	});
+	const ready = { ...pending, media: [aMedia({ id: 'm1', updateId: 'u5' })] };
+
+	it('refetches the card whose media just became renderable', async () => {
+		api = fakeApi({ seq: 20, projects: [aProject()], items: [pending] });
+		const feed = timeline();
+		feed.hydrate(api.snapshot());
+		feed.start();
+
+		// The pipeline finished: the same row now answers with its variants.
+		api.replace({ items: [ready], seq: 21 });
+		stream.emit('media.ready', {
+			seq: 21,
+			payload: { mediaId: 'm1', updateId: 'u5', kind: 'image' }
+		});
+		await api.settle();
+
+		expect(feed.items[0].media).toEqual([aMedia({ id: 'm1', updateId: 'u5' })]);
+		expect(feed.seq).toBe(21);
+	});
+
+	it('replaces the row in place instead of announcing an arrival', async () => {
+		api = fakeApi({ seq: 20, projects: [aProject()], items: [pending] });
+		const feed = timeline();
+		feed.hydrate(api.snapshot());
+		feed.start();
+		// The reader is somewhere down the timeline, so an *arrival* would be held
+		// back and counted. A card the reader is already looking at getting its
+		// image is not an arrival, and must not become a "1 new" pill.
+		feed.hold(true);
+
+		api.replace({ items: [ready], seq: 21 });
+		stream.emit('media.ready', {
+			seq: 21,
+			payload: { mediaId: 'm1', updateId: 'u5', kind: 'image' }
+		});
+		await api.settle();
+
+		expect(feed.pendingCount).toBe(0);
+		expect(feed.items[0].media?.[0].status).toBe('ready');
+	});
+
+	it('ignores one it has already accounted for', async () => {
+		api = fakeApi({ seq: 20, projects: [aProject()], items: [pending] });
+		const feed = timeline();
+		feed.hydrate(api.snapshot());
+		feed.start();
+
+		// Replay after a reconnect: at or below the snapshot cursor, so there is
+		// nothing to go and get.
+		stream.emit('media.ready', {
+			seq: 20,
+			payload: { mediaId: 'm1', updateId: 'u5', kind: 'image' }
+		});
+		await api.settle();
+
+		expect(api.calls).toEqual([]);
 	});
 });
 

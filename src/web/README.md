@@ -30,7 +30,11 @@ Notes carried from the design (§7):
 | `Shell.svelte`                      | The three-region layout, the header, the mobile drawer, and the one store instance per page. |
 | `Sidebar.svelte`                    | Projects, pinned first, archived behind a toggle.                                            |
 | `Timeline.svelte`                   | The scroll container, the day groups, and the "N new" pill.                                  |
-| `UpdateCard.svelte`                 | One update: level colour, avatar, markdown, media region.                                    |
+| `UpdateCard.svelte`                 | One update: level colour, avatar, markdown, media grid.                                      |
+| `MediaGrid.svelte`                  | The grid on a card, and the lightbox it opens (§7).                                          |
+| `MediaTile.svelte`                  | One cell: the placeholder, the failed state, the image, the inline video.                    |
+| `Lightbox.svelte`                   | Full-size viewing, keyboard navigable, focus trapped and returned.                           |
+| `media.ts`                          | Pure media decisions: addresses, cell shapes, sources, labels.                               |
 | `Markdown.svelte`                   | The only `{@html}` in the client.                                                            |
 | `RightRail.svelte`                  | Live agents with their session metadata; open tasks still a placeholder (§7).                |
 | `timeline.svelte.ts`                | The client store: snapshot, stream, pending arrivals, paging.                                |
@@ -43,6 +47,41 @@ Notes carried from the design (§7):
 | `avatar.ts`, `levels.ts`, `days.ts` | Pure helpers: name hash, level palette, day grouping.                                        |
 | `types.ts`                          | The wire shapes, declared here because this module may not import `$db`.                     |
 | `testing.ts`                        | Test-only fakes: a scripted `EventSource` and a fake snapshot API.                           |
+
+## Media on a card
+
+Three things a media grid has to get right, and all three are decided before
+anything is fetched (§6, §7).
+
+**The box comes from the stored dimensions.** A cell's aspect ratio is set from
+`width`/`height` on the row, so the space an image will take is reserved at first
+paint and the timeline does not jump as thumbnails load. A card carrying three or
+four shots gets one uniform cell shape instead, because the alternative in a
+narrow column is a staircase — and a uniform cell is a decided box for the states
+that have nothing to show yet, too.
+
+**The browser only asks for an address that exists.** The row carries the list of
+variants the pipeline has produced, and every source is chosen from it. That is
+not defensive: a web-playable mp4 gets no transcode (`src/media/derive.ts`), so
+`/media/:id/video` 404s for exactly the videos that needed no work, and guessing
+would give the owner a broken player. Video plays inline from its poster frame
+with `preload="none"`, so a card costs one jpeg until somebody presses play.
+
+**The swap is the transport, not a special case.** `media.ready` is watched by
+the store like every other event: it refetches the page and reconciles by id, the
+replacement row carries its new variants, and the placeholder becomes the image.
+No component subscribes to anything, nothing reloads, and `Shell.svelte.spec.ts`
+holds on to the card's DOM node across the swap to prove it.
+
+A `pending` item is a labelled placeholder and a `failed` one says so in words —
+never an `<img>` with no source, which is a broken icon and a mystery, and never
+a variant address, because every one of them 404s for a failed row.
+
+The lightbox holds only what can be enlarged, which is images: video plays where
+it sits rather than becoming a stop on the way through a card. It takes focus on
+open, keeps `Tab` inside itself, and hands focus back to the cell that opened it,
+because a reader who closes a dialog from halfway down a long timeline must not
+be dumped at the top of the document.
 
 ## How the client stays correct
 

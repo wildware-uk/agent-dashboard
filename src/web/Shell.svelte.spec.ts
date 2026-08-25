@@ -3,7 +3,15 @@ import { describe, expect, it } from 'vitest';
 import Shell from './Shell.svelte';
 import { Presence } from './presence.svelte';
 import { Timeline } from './timeline.svelte';
-import { FakeStream, aLiveAgent, aProject, anUpdate, fakeAgentsApi, fakeApi } from './testing';
+import {
+	FakeStream,
+	aLiveAgent,
+	aMedia,
+	aProject,
+	anUpdate,
+	fakeAgentsApi,
+	fakeApi
+} from './testing';
 
 /**
  * The shell as a whole. Responsive behaviour is CSS, and no stylesheet is loaded
@@ -118,6 +126,82 @@ describe('attributing the cards', () => {
 
 		// No reload, no second snapshot: the rail's read is what named it.
 		await expect.poll(card).toContain('build-bot');
+	});
+});
+
+/**
+ * The live swap, end to end in one page (design §6 step 5, §7).
+ *
+ * This is the criterion the feature exists for and the one easiest to fake, so
+ * it is asserted through the whole shell rather than on a component: a real
+ * store, the fake `/api/snapshot` pair the other specs use, and a `media.ready`
+ * frame delivered exactly as the server serialises it. Nothing here reloads,
+ * remounts or re-renders the page — proved by holding on to the card's own DOM
+ * node across the swap.
+ */
+describe('media becoming ready while the page is open', () => {
+	const pending = aMedia({
+		id: 'm1',
+		updateId: 'u1',
+		status: 'pending',
+		width: null,
+		height: null,
+		variants: []
+	});
+	const ready = aMedia({ id: 'm1', updateId: 'u1' });
+
+	function mountWithMedia() {
+		const card = anUpdate({ id: 'u1', seq: 4, body: 'a screenshot', media: [pending] });
+		const api = fakeApi({ seq: 4, projects: [aProject()], items: [card] });
+		const stream = new FakeStream();
+		const feed = new Timeline({
+			fetch: api.fetch,
+			openStream: () => stream,
+			schedule: (run) => api.queue.push(run)
+		});
+		return { api, stream, card, screen: render(Shell, { snapshot: api.snapshot(), feed }) };
+	}
+
+	it('turns the placeholder into the image with no reload', async () => {
+		const { api, stream, card, screen } = mountWithMedia();
+
+		// What the owner sees the moment the update lands: a sized placeholder,
+		// because the pipeline has not run yet.
+		await expect.element(screen.getByText('Processing…')).toBeInTheDocument();
+		expect(document.querySelector('[data-media-grid] img')).toBeNull();
+		const article = document.querySelector('article');
+
+		// The derivative job finishes and the server publishes (design §6 step 5).
+		api.replace({ items: [{ ...card, media: [ready] }], seq: 5 });
+		stream.emit('media.ready', {
+			seq: 5,
+			payload: { mediaId: 'm1', updateId: 'u1', kind: 'image' }
+		});
+		await api.settle();
+
+		await expect
+			.poll(() => document.querySelector('[data-media-grid] img')?.getAttribute('src'))
+			.toBe('/media/m1/thumb-640');
+		expect(document.body.textContent).not.toContain('Processing…');
+		// The same card, still mounted: this was a swap, not a re-render of the page.
+		expect(document.querySelector('article')).toBe(article);
+	});
+
+	it('leaves the card where it is: an image arriving is not a new update', async () => {
+		const { api, stream, card } = mountWithMedia();
+		const before = document.querySelectorAll('article').length;
+
+		api.replace({ items: [{ ...card, media: [ready] }], seq: 5 });
+		stream.emit('media.ready', {
+			seq: 5,
+			payload: { mediaId: 'm1', updateId: 'u1', kind: 'image' }
+		});
+		await api.settle();
+
+		await expect.poll(() => document.querySelector('[data-media-grid] img') !== null).toBe(true);
+		expect(document.querySelectorAll('article')).toHaveLength(before);
+		// No "1 new" pill: nothing arrived, one card changed.
+		expect(document.body.textContent).not.toContain('new update');
 	});
 });
 

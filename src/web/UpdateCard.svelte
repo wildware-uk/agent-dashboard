@@ -12,6 +12,7 @@
 	import Avatar from './Avatar.svelte';
 	import { agentLabel } from './avatar';
 	import Markdown from './Markdown.svelte';
+	import MediaGrid from './MediaGrid.svelte';
 	import UpdateActions from './UpdateActions.svelte';
 	import type { OwnerActions } from './actions';
 	import { timeLabel } from './days';
@@ -32,7 +33,14 @@
 		agentName,
 		/** Arrived over the stream, so it animates in exactly once. */
 		isNew = false,
-		/** The media grid (design §7). Rendered by the media-in-the-UI slice. */
+		/**
+		 * An override for the media region (design §7).
+		 *
+		 * Left in place now that the region has real contents: the card renders
+		 * {@link MediaGrid} from `update.media` by default, and a snippet replaces
+		 * it — which is what keeps the card renderable in a context that wants
+		 * something else there without the grid having to know about it.
+		 */
 		media,
 		/**
 		 * The owner's write calls (design §7). Given one, the card grows a pin and
@@ -102,11 +110,21 @@
 		<Markdown body={update.body} />
 
 		<!--
-			Media region (design §7). Deliberately present and empty: the media
-			slice renders a grid and a lightbox into it, and `media.ready` swaps a
-			placeholder for the real asset live, so the seam exists before the
-			feature does.
+			Media region (design §7): the grid, sized from the stored dimensions, and
+			the lightbox it opens.
+
+			The card still renders from the row and nothing else, which is the whole
+			of the live swap: `media.ready` makes the store refetch and replace this
+			update by id (`timeline.svelte.ts`), the replacement carries its variants,
+			and the placeholder becomes the image with nothing here subscribing to
+			anything and no reload.
 		-->
-		<div data-media-region class="contents">{@render media?.(update)}</div>
+		<div data-media-region class="contents">
+			{#if media}
+				{@render media(update)}
+			{:else}
+				<MediaGrid items={update.media ?? []} />
+			{/if}
+		</div>
 	</div>
 </article>
