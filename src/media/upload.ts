@@ -100,7 +100,11 @@ export function createUpload(settings: MediaSettings, input: CreateUploadInput):
 
 	const limit = kind === 'image' ? settings.maxImageBytes : settings.maxVideoBytes;
 	if (input.bytes > limit) {
-		throw tooLarge(`a ${kind} may be at most ${limit} bytes; this one declares ${input.bytes}`);
+		// "an image" / "a video": the article has to follow the noun.
+		const article = kind === 'image' ? 'an' : 'a';
+		throw tooLarge(
+			`${article} ${kind} may be at most ${limit} bytes; this one declares ${input.bytes}`
+		);
 	}
 
 	if (!findAgentById(input.db, input.agentId)) {

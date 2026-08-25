@@ -16,10 +16,18 @@
  * refuse to start than to serve a dashboard the owner can be locked out of.
  */
 import { building } from '$app/environment';
-import { assertClientAddressTrustworthy } from '$config';
+import { assertBodyLimitAllowsUploads, assertClientAddressTrustworthy, loadConfig } from '$config';
 import { startMediaSweeper, startPresenceSweeper } from '$domain';
 
 assertClientAddressTrustworthy(process.env);
+
+// BODY_SIZE_LIMIT is enforced by adapter-node before any route runs, so a value
+// below the upload caps rejects large uploads with a 413 this app never sees,
+// after the agent has already spent its upload token. The adapter's default is
+// 512K, far below the caps here, so the usual mistake is never setting it.
+// Guarded by `building` because loadConfig needs the deployment's secrets, which
+// do not exist while the bundle is being built.
+if (!building) assertBodyLimitAllowsUploads(process.env, loadConfig(process.env));
 
 // Presence is derived from heartbeats, but a session that stopped beating is
 // still an open row, and a later approval gate aimed at one would wait on an
