@@ -81,6 +81,7 @@ export {
 	checkedMediaIds,
 	createUpload,
 	ingestUpload,
+	listUpdateMedia,
 	readMediaVariant,
 	startMediaSweeper,
 	sweepMedia,
@@ -89,6 +90,7 @@ export {
 	type CreateUploadInput,
 	type IngestUploadInput,
 	type IngestedMedia,
+	type MediaAttachment,
 	type MediaSweeperOptions,
 	type UploadGrant
 } from './media';

@@ -24,9 +24,18 @@
  * and it does so *after* attaching, so a browser that fetches the update on
  * hearing about it sees the whole card.
  */
-import { attachMediaToUpdate, findMediaById, findUpdateById, isId } from '$db';
+import {
+	attachMediaToUpdate,
+	findMediaById,
+	findUpdateById,
+	isId,
+	listMediaForUpdate,
+	type MediaKind,
+	type MediaStatus
+} from '$db';
 import {
 	createUpload as mintUpload,
+	derivativesFor,
 	ingest,
 	isMediaError,
 	mediaSettings,
@@ -279,6 +288,79 @@ export function assertAttachable(
 	}
 
 	return mediaIds;
+}
+
+/**
+ * One media item as a browser renders it (design §6 step 5, §7).
+ *
+ * Three fields carry the weight. `status` is what the grid switches on: a
+ * placeholder while `pending`, a failed state on `failed`, the asset on `ready`.
+ * `width`/`height` are the *stored* dimensions, which is what lets a cell
+ * reserve its box before a byte has loaded, so the timeline does not jump as
+ * images arrive. And `variants` is the set of `/media/:id/:variant` addresses
+ * that will actually answer right now, so the browser never asks for one that
+ * would 404 — which matters most for video, because a web-playable mp4 gets no
+ * transcode (`src/media/derive.ts`) and has to be played from `original`.
+ *
+ * No URLs: an address is `/media/:id/:variant` for every deployment, so sending
+ * five strings per item would be five copies of a rule the client already has.
+ */
+export type MediaAttachment = {
+	id: string;
+	updateId: string | null;
+	kind: MediaKind;
+	mime: string;
+	status: MediaStatus;
+	/** Measured by the pipeline; `null` until it has run. */
+	width: number | null;
+	height: number | null;
+	durationMs: number | null;
+	/** Which variants exist. Empty for a row with no bytes, and for a failure. */
+	variants: Variant[];
+};
+
+/**
+ * The media on a page of updates, grouped by update.
+ *
+ * Read as a second query rather than folded into `listUpdates`, because the
+ * timeline is the same list whether or not a caller cares about media, and
+ * because this is the read that `media.ready` makes stale: a browser hearing
+ * that event refetches the page it is showing and gets the new variants here,
+ * with no other part of the snapshot having to know why (design §4).
+ *
+ * Updates with nothing attached are absent rather than present-and-empty, so a
+ * timeline of plain text costs one key per page instead of fifty.
+ *
+ * One query per update, deliberately: the alternative is a variadic `IN (...)`
+ * in `$db` for a page of at most 200 rows against a local SQLite file, and the
+ * per-item derivative read would still be there. `derivativesFor` is asked
+ * rather than reimplemented so that the variant vocabulary has exactly one
+ * definition, in the module that serves it.
+ */
+export function listUpdateMedia(
+	ctx: DomainContext,
+	updateIds: readonly string[]
+): Record<string, MediaAttachment[]> {
+	const byUpdate: Record<string, MediaAttachment[]> = {};
+
+	for (const updateId of updateIds) {
+		const rows = listMediaForUpdate(ctx.db, updateId);
+		if (rows.length === 0) continue;
+
+		byUpdate[updateId] = rows.map((row) => ({
+			id: row.id,
+			updateId: row.updateId,
+			kind: row.kind,
+			mime: row.mime,
+			status: row.status,
+			width: row.width,
+			height: row.height,
+			durationMs: row.durationMs,
+			variants: derivativesFor({ db: ctx.db, id: row.id }).map((available) => available.variant)
+		}));
+	}
+
+	return byUpdate;
 }
 
 /**

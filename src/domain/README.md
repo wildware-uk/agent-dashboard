@@ -89,6 +89,11 @@ Decisions worth knowing before changing them:
   such ids instead, because retrying it must be safe. Neither publishes an event:
   `media.ready` is the derivative pipeline's announcement, and `update.created`
   goes out _after_ the media is attached so a browser sees a whole card.
+- **A browser is told what a media item offers, not where it lives** (§6, §7).
+  `listUpdateMedia` answers with the stored dimensions, the status and the
+  variants that `/media/:id/:variant` will serve _now_ — asked of `$media` rather
+  than reimplemented, so the variant vocabulary has one definition in the module
+  that serves it. Paths never leave `$media`, and no URL is built here at all.
 - **Orphaned media is collected an hour after upload** (§3). `startMediaSweeper()`
   runs `sweepMedia` every fifteen minutes and is started by `src/hooks.server.ts`
   beside the presence sweeper; it takes `pending` and `failed` rows as well as

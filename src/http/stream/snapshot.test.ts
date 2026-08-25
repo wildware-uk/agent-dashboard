@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { EventBus } from '$events';
+import { insertMedia } from '$db';
 import { createProject, notFound, postUpdate, updateProject } from '$domain';
 import { harness } from '$domain/testing';
 import { SESSION_COOKIE, signSession } from '../auth';
@@ -189,6 +190,78 @@ describe('reading the real state through the domain', () => {
 		// Neither agent has ever registered a session, so presence knows nothing
 		// about either of them — and the cards still have to say who posted (#20).
 		expect(snapshot.agentNames).toEqual({ [writer]: 'docs-writer', [bot]: 'build-bot' });
+	});
+
+	/**
+	 * Media rides on the card it belongs to (design §7).
+	 *
+	 * The alternative — a map beside the timeline — would need the client to keep
+	 * two things reconciled, and `media.ready` is answered by refetching the page
+	 * of updates: the row the client replaces has to arrive carrying its own
+	 * media, or the swap is a second request the transport never asked for.
+	 */
+	it('hangs each update`s media on the update itself, sized and with its variants', () => {
+		const ctx = harness();
+		const agentId = ctx.agent();
+		const { project } = createProject(ctx, { name: 'Agent Dashboard' });
+		const media = insertMedia(ctx.db, {
+			agentId,
+			kind: 'image',
+			mime: 'image/png',
+			bytes: 4321,
+			sha256: 'abc',
+			width: 1200,
+			height: 800
+		});
+		const update = postUpdate(ctx, {
+			project: project.slug,
+			agentId,
+			body: 'a shot',
+			mediaIds: [media.id]
+		});
+		postUpdate(ctx, { project: project.slug, agentId, body: 'no shot' });
+
+		const snapshot = readFullSnapshot({ limit: 10 }, ctx);
+		const [plain, withMedia] = snapshot.updates.items;
+
+		expect(withMedia.id).toBe(update.id);
+		expect(withMedia.media).toEqual([
+			{
+				id: media.id,
+				updateId: update.id,
+				kind: 'image',
+				mime: 'image/png',
+				status: 'pending',
+				width: 1200,
+				height: 800,
+				durationMs: null,
+				variants: ['original']
+			}
+		]);
+		// Never absent: a card that reads `media.length` must not have to guard.
+		expect(plain.media).toEqual([]);
+	});
+
+	it('carries media on a page read through the updates-only endpoint too', () => {
+		const ctx = harness();
+		const agentId = ctx.agent();
+		const { project } = createProject(ctx, { name: 'Agent Dashboard' });
+		const media = insertMedia(ctx.db, {
+			agentId,
+			kind: 'video',
+			mime: 'video/mp4',
+			bytes: 900,
+			sha256: 'def',
+			durationMs: 7000
+		});
+		postUpdate(ctx, { project: project.slug, agentId, body: 'a clip', mediaIds: [media.id] });
+
+		// This is the endpoint "load older" reads, and the one the store refetches
+		// on `media.ready` — so it has to answer with the same shape.
+		const snapshot = readUpdatesSnapshot({ limit: 10 }, ctx);
+
+		expect(snapshot.updates.items[0].media.map((item) => item.kind)).toEqual(['video']);
+		expect(snapshot.updates.items[0].media[0].durationMs).toBe(7000);
 	});
 
 	it('filters the project list by status when asked', () => {

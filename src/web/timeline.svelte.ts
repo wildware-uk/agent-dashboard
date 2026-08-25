@@ -63,6 +63,11 @@ const WATCHED = [
 	// by id, which is what replaces the row this page already renders.
 	'update.updated',
 	'update.deleted',
+	// A derivative job finished (design §6 step 5). Also an identifier, so the
+	// answer is the same: refetch the page and reconcile by id, and the card that
+	// was showing a placeholder is replaced by the one carrying its variants.
+	// Nothing else in the store knows this event exists, and nothing needs to.
+	'media.ready',
 	'project.created',
 	'project.updated',
 	'resync'

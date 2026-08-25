@@ -1,4 +1,10 @@
-import { findMediaById, insertMedia, listMediaForUpdate, setMediaStatus } from '$db';
+import {
+	findMediaById,
+	insertMedia,
+	listMediaForUpdate,
+	setMediaStatus,
+	upsertDerivative
+} from '$db';
 import { ORPHAN_AGE_MS } from '$media';
 import { bodyOf, pngBytes, tempSettings } from '$media/testing';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -9,6 +15,7 @@ import {
 	attachMedia,
 	createUpload,
 	ingestUpload,
+	listUpdateMedia,
 	readMediaVariant,
 	startMediaSweeper,
 	sweepMedia
@@ -403,5 +410,131 @@ describe('sweepMedia', () => {
 
 		expect(swept.media).toBe(1);
 		expect(findMediaById(ctx.db, orphan)).toBeUndefined();
+	});
+});
+
+/**
+ * What the browser is told about the media on a card (design §6 step 5, §7).
+ *
+ * The rule these tests pin down: the wire carries the *stored* dimensions and
+ * the variants that actually exist, because both are what lets a grid reserve
+ * the right box before a byte of image has loaded, and what stops it offering an
+ * address that would answer 404.
+ */
+describe('listUpdateMedia', () => {
+	/** A ready image with the two thumbnails the pipeline produces (design §6). */
+	function readyImage(over: Partial<Parameters<typeof insertMedia>[1]> = {}): string {
+		const id = landed({ width: 1200, height: 800, ...over });
+		for (const width of [640, 1600]) {
+			upsertDerivative(ctx.db, {
+				mediaId: id,
+				kind: 'thumb',
+				path: `xx/${id}/thumb-${width}.webp`,
+				bytes: 100,
+				width,
+				height: Math.round((width * 800) / 1200)
+			});
+		}
+		return id;
+	}
+
+	it('groups an update`s media in the order it was uploaded', () => {
+		const update = postUpdate(ctx, { project: 'agent-dashboard', agentId, body: 'shots' });
+		const first = readyImage();
+		const second = readyImage();
+		attachMedia(ctx, { agentId, updateId: update.id, mediaIds: [first, second] });
+
+		const byUpdate = listUpdateMedia(ctx, [update.id]);
+
+		expect(byUpdate[update.id].map((item) => item.id)).toEqual([first, second]);
+		expect(listMediaForUpdate(ctx.db, update.id).map((row) => row.id)).toEqual([first, second]);
+	});
+
+	it('carries the stored dimensions, so a grid can size the box before it loads', () => {
+		const update = postUpdate(ctx, { project: 'agent-dashboard', agentId, body: 'shot' });
+		attachMedia(ctx, { agentId, updateId: update.id, mediaIds: [readyImage()] });
+
+		const [item] = listUpdateMedia(ctx, [update.id])[update.id];
+
+		expect(item).toMatchObject({ kind: 'image', status: 'ready', width: 1200, height: 800 });
+	});
+
+	it('names the variants a ready image really has', () => {
+		const update = postUpdate(ctx, { project: 'agent-dashboard', agentId, body: 'shot' });
+		attachMedia(ctx, { agentId, updateId: update.id, mediaIds: [readyImage()] });
+
+		const [item] = listUpdateMedia(ctx, [update.id])[update.id];
+
+		expect([...item.variants].sort()).toEqual(['original', 'thumb-640', 'thumb-1600'].sort());
+	});
+
+	it('offers a poster and the transcode for a video, and the original for one that needs none', () => {
+		const update = postUpdate(ctx, { project: 'agent-dashboard', agentId, body: 'clip' });
+		const transcoded = landed({ kind: 'video', mime: 'video/quicktime', durationMs: 7000 });
+		const playable = landed({ kind: 'video', mime: 'video/mp4', durationMs: 3000 });
+		for (const id of [transcoded, playable]) {
+			upsertDerivative(ctx.db, {
+				mediaId: id,
+				kind: 'poster',
+				path: `xx/${id}/poster.jpg`,
+				bytes: 9
+			});
+		}
+		upsertDerivative(ctx.db, {
+			mediaId: transcoded,
+			kind: 'mp4',
+			path: `xx/${transcoded}/video.mp4`,
+			bytes: 99
+		});
+		attachMedia(ctx, { agentId, updateId: update.id, mediaIds: [transcoded, playable] });
+
+		const items = listUpdateMedia(ctx, [update.id])[update.id];
+
+		expect(items[0].variants).toContain('video');
+		expect(items[0].variants).toContain('poster');
+		expect(items[0].durationMs).toBe(7000);
+		// A web-playable mp4 gets no transcode (`src/media/derive.ts`), so the only
+		// thing the browser can play is the original — and it has to be told that.
+		expect(items[1].variants).not.toContain('video');
+		expect(items[1].variants).toEqual(expect.arrayContaining(['original', 'poster']));
+	});
+
+	it('says a pending item is pending and offers it no derivative to render', () => {
+		const update = postUpdate(ctx, { project: 'agent-dashboard', agentId, body: 'shot' });
+		const pending = landed({ status: 'pending' });
+		attachMedia(ctx, { agentId, updateId: update.id, mediaIds: [pending] });
+
+		const [item] = listUpdateMedia(ctx, [update.id])[update.id];
+
+		expect(item.status).toBe('pending');
+		expect(item.variants).not.toContain('thumb-640');
+	});
+
+	it('says a failed item is failed and offers nothing at all to render', () => {
+		const update = postUpdate(ctx, { project: 'agent-dashboard', agentId, body: 'shot' });
+		const broken = readyImage();
+		attachMedia(ctx, { agentId, updateId: update.id, mediaIds: [broken] });
+		setMediaStatus(ctx.db, broken, { status: 'failed' });
+
+		const [item] = listUpdateMedia(ctx, [update.id])[update.id];
+
+		expect(item.status).toBe('failed');
+		// Every address 404s for a failed row (`src/media/serve.ts`), so a UI that
+		// was handed one would render a broken image icon.
+		expect(item.variants).toEqual([]);
+	});
+
+	it('reads many updates at once and leaves out the ones with nothing attached', () => {
+		const withMedia = postUpdate(ctx, { project: 'agent-dashboard', agentId, body: 'shot' });
+		const without = postUpdate(ctx, { project: 'agent-dashboard', agentId, body: 'words' });
+		attachMedia(ctx, { agentId, updateId: withMedia.id, mediaIds: [readyImage()] });
+
+		const byUpdate = listUpdateMedia(ctx, [withMedia.id, without.id, 'no-such-update']);
+
+		expect(Object.keys(byUpdate)).toEqual([withMedia.id]);
+	});
+
+	it('reads nothing for no updates', () => {
+		expect(listUpdateMedia(ctx, [])).toEqual({});
 	});
 });

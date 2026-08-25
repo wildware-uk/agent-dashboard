@@ -11,7 +11,7 @@
  * (design §4) — because a double that is more generous than the server would
  * hide exactly the bugs these tests exist to catch.
  */
-import type { ProjectView, SnapshotResponse, UpdateView } from './types';
+import type { MediaView, ProjectView, SnapshotResponse, UpdateView } from './types';
 import type { OwnerActions } from './actions';
 import type { AgentsSnapshot, LiveAgentView } from './presence.svelte';
 import type { StreamLike } from './timeline.svelte';
@@ -46,6 +46,28 @@ export function anUpdate(overrides: Partial<UpdateView> = {}): UpdateView {
 		pinned: false,
 		createdAt: Date.UTC(2026, 7, 25, 10),
 		deletedAt: null,
+		...overrides
+	};
+}
+
+/**
+ * A media attachment with sensible defaults: a ready image with both thumbnails.
+ *
+ * The default is the case the grid renders, so a spec that cares about a
+ * placeholder or a failure has to say so — which is the right way round, because
+ * those two are the states most easily faked by never testing them.
+ */
+export function aMedia(overrides: Partial<MediaView> = {}): MediaView {
+	return {
+		id: 'm1',
+		updateId: 'u1',
+		kind: 'image',
+		mime: 'image/png',
+		status: 'ready',
+		width: 1200,
+		height: 800,
+		durationMs: null,
+		variants: ['original', 'thumb-640', 'thumb-1600'],
 		...overrides
 	};
 }

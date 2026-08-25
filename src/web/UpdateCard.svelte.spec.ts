@@ -1,7 +1,7 @@
 import { render } from 'vitest-browser-svelte';
 import { describe, expect, it } from 'vitest';
 import UpdateCard from './UpdateCard.svelte';
-import { anUpdate, fakeActions } from './testing';
+import { aMedia, anUpdate, fakeActions } from './testing';
 
 /**
  * The card in a real browser. The markdown case here is the one that matters:
@@ -109,11 +109,21 @@ describe('the card', () => {
 		await expect.element(screen.getByRole('heading', { name: 'Build green' })).toBeInTheDocument();
 	});
 
-	it('keeps a media region for the media slice to fill', async () => {
+	it('keeps a media region, empty when the update carries nothing', async () => {
 		render(UpdateCard, { update: anUpdate() });
 
-		// Present and empty: the seam exists before the feature does (design §7).
 		expect(document.querySelector('[data-media-region]')).not.toBeNull();
+		expect(document.querySelector('[data-media-grid]')).toBeNull();
+	});
+
+	it('renders the media on the row, without being handed anything else', async () => {
+		// The card renders from the row: no store, no fetch, no snippet. That is
+		// what makes it the same card whether it came from the server render or
+		// from the store replacing it after `media.ready`.
+		render(UpdateCard, { update: anUpdate({ media: [aMedia({ id: 'm1' })] }) });
+
+		expect(document.querySelector('[data-media-grid]')).not.toBeNull();
+		expect(document.querySelector('img')?.getAttribute('src')).toBe('/media/m1/thumb-640');
 	});
 
 	it('animates in only when it arrived live', async () => {
