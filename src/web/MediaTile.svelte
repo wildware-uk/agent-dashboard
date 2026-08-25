@@ -34,6 +34,7 @@
 		videoSrc
 	} from './media';
 	import type { MediaView } from './types';
+	import VideoPlayer from './VideoPlayer.svelte';
 
 	let {
 		item,
@@ -107,26 +108,19 @@
 		<!--
 			Inline, from the poster frame (design §7). `preload="none"` is the point
 			of having generated a poster at all: the card costs one jpeg until the
-			owner presses play.
+			owner presses play. Controls come from VideoPlayer rather than the
+			browser, which is what makes frame stepping possible.
 		-->
-		<!--
-			There is no caption track to point at: the pipeline produces a poster and
-			an h264 transcode (design §6), and nothing anywhere generates subtitles
-			for an agent's screen recording.
-		-->
-		<!-- svelte-ignore a11y_media_has_caption -->
-		<video
-			src={source}
-			poster={poster ?? undefined}
-			controls
-			playsinline
-			preload="none"
-			aria-label={label}
-			class="absolute inset-0 size-full bg-black object-contain"
-		></video>
+		<VideoPlayer src={source} {poster} {label} />
 		{#if duration}
+			<!--
+				Top right, not bottom: the player's control bar owns the bottom edge,
+				and down there this badge sat on top of the fullscreen button. It still
+				earns its place — it tells you how long the clip is before you commit
+				to loading a byte of it.
+			-->
 			<span
-				class="pointer-events-none absolute right-1.5 bottom-1.5 rounded bg-black/70 px-1.5 py-0.5 text-xs text-white tabular-nums"
+				class="pointer-events-none absolute top-1.5 right-1.5 z-10 rounded bg-black/70 px-1.5 py-0.5 text-xs text-white tabular-nums"
 			>
 				{duration}
 			</span>

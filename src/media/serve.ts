@@ -72,6 +72,9 @@ const DERIVATIVE_ROWS = {
 	{ kind: DerivativeKind; width: number | null }
 >;
 
+/** An inclusive byte span, as HTTP counts them. */
+export type ByteRange = { start: number; end: number };
+
 /** One servable file. The path stays inside this module; callers get `open()`. */
 export type MediaFile = {
 	mediaId: string;
@@ -81,8 +84,14 @@ export type MediaFile = {
 	bytes: number;
 	/** Strong validator, safe to use with `immutable` because content never changes. */
 	etag: string;
-	/** A fresh stream of the bytes, for a response body. */
-	open: () => ReadableStream<Uint8Array>;
+	/**
+	 * A fresh stream of the bytes, for a response body.
+	 *
+	 * With `range`, only that inclusive byte span is read — which is what makes a
+	 * `206` cheap: seeking a video asks for a window near the end of the file, and
+	 * streaming the whole thing to satisfy it would defeat the point.
+	 */
+	open: (range?: ByteRange) => ReadableStream<Uint8Array>;
 };
 
 /**
@@ -124,7 +133,12 @@ export async function openVariant(
 		// Content at a given address never changes, so the hash of the original
 		// plus the variant name is a complete validator.
 		etag: `"${media.sha256}-${variant}"`,
-		open: () => Readable.toWeb(createReadStream(found.path)) as ReadableStream<Uint8Array>
+		open: (range?: ByteRange) =>
+			Readable.toWeb(
+				range
+					? createReadStream(found.path, { start: range.start, end: range.end })
+					: createReadStream(found.path)
+			) as ReadableStream<Uint8Array>
 	};
 }
 

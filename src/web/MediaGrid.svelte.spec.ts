@@ -3,7 +3,7 @@ import { tick } from 'svelte';
 import { render } from 'vitest-browser-svelte';
 import { describe, expect, it } from 'vitest';
 import MediaGrid from './MediaGrid.svelte';
-import { CELL_RATIO } from './media';
+import { CELL_RATIO, mediaLabel } from './media';
 import { aMedia } from './testing';
 import type { MediaVariant } from './types';
 
@@ -164,6 +164,16 @@ describe('media that failed', () => {
 });
 
 describe('video', () => {
+	const clipItem = aMedia({
+		id: 'v1',
+		kind: 'video',
+		mime: 'video/mp4',
+		width: 1280,
+		height: 720,
+		durationMs: 7400,
+		variants: ['original', 'poster', 'video']
+	});
+
 	const clip = (variants: MediaVariant[]) =>
 		aMedia({
 			id: 'v1',
@@ -202,7 +212,25 @@ describe('video', () => {
 	it('is not swept into the lightbox: it plays where it sits', async () => {
 		const screen = render(MediaGrid, { items: [clip(['original', 'poster', 'video'])] });
 
-		expect(screen.getByRole('button').elements()).toHaveLength(0);
+		// The tile's own accessible name belongs to the video, not to a button that
+		// would enlarge it. Asserted by name rather than by counting buttons,
+		// because the player contributes its own controls (frame stepping) and a
+		// bare count would break every time those change while proving nothing.
+		expect(
+			screen.getByRole('button', { name: mediaLabel(clipItem, 0, 1) }).elements()
+		).toHaveLength(0);
+		expect(screen.getByRole('dialog').elements()).toHaveLength(0);
+	});
+
+	it('gives the owner frame-by-frame control, which native controls cannot', async () => {
+		const screen = render(MediaGrid, { items: [clip(['original', 'poster', 'video'])] });
+
+		await expect
+			.element(screen.getByRole('button', { name: 'Back one frame' }))
+			.toBeInTheDocument();
+		await expect
+			.element(screen.getByRole('button', { name: 'Forward one frame' }))
+			.toBeInTheDocument();
 	});
 });
 
