@@ -99,3 +99,35 @@ export function loadConfig(env: RawEnv): Config {
 	});
 	throw new Error(`Invalid configuration:\n  ${problems.join('\n  ')}`);
 }
+
+/**
+ * Refuse to boot a proxied deployment that would mis-key its rate limiter.
+ *
+ * adapter-node derives `getClientAddress()` from the socket peer unless
+ * `ADDRESS_HEADER` names a forwarded-for header. Behind the reference Caddy
+ * deployment (design §12) that peer is always `127.0.0.1`, so every visitor on
+ * the internet shares one rate-limit bucket and five wrong password guesses from
+ * a stranger lock the owner out for the window.
+ *
+ * An `https://` PUBLIC_BASE_URL means something else is terminating TLS, which
+ * means a proxy, which means the header is required. `TRUST_SOCKET_ADDRESS=true`
+ * is the escape hatch for the rare deployment terminating TLS in this process.
+ *
+ * @throws an `Error` naming the variables to set.
+ */
+export function assertClientAddressTrustworthy(env: RawEnv): void {
+	const proxied = (env.PUBLIC_BASE_URL ?? '').startsWith('https://');
+	if (!proxied) return;
+	if (env.TRUST_SOCKET_ADDRESS === 'true') return;
+	if ((env.ADDRESS_HEADER ?? '') !== '') return;
+
+	throw new Error(
+		'Invalid configuration:\n' +
+			'  PUBLIC_BASE_URL is https, so a reverse proxy is terminating TLS, but\n' +
+			'  ADDRESS_HEADER is unset. Every request would report the proxy as its\n' +
+			'  client address, so the login rate limiter would treat all visitors as\n' +
+			'  one client and any stranger could lock the owner out.\n' +
+			'  Set ADDRESS_HEADER=X-Forwarded-For and XFF_DEPTH=1 (one proxy), or set\n' +
+			'  TRUST_SOCKET_ADDRESS=true if this process really does face the internet.'
+	);
+}

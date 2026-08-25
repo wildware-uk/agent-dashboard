@@ -1,7 +1,7 @@
-import { mkdtempSync, readdirSync, readFileSync, statSync } from 'node:fs';
+import { mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, relative, resolve } from 'node:path';
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, describe, expect, it } from 'vitest';
 import {
 	closeDatabase,
 	databaseFile,
@@ -13,9 +13,21 @@ import {
 import { loadConfig } from '$config';
 import { appliedMigrations } from './migrate';
 
-const tempDataDir = () => mkdtempSync(join(tmpdir(), 'agent-dashboard-db-'));
+// Every directory handed out here holds a real SQLite file plus its WAL, so they
+// are tracked and removed. Without this the suite leaves one behind per call,
+// every run, forever.
+const tempDirs: string[] = [];
+const tempDataDir = () => {
+	const dir = mkdtempSync(join(tmpdir(), 'agent-dashboard-db-'));
+	tempDirs.push(dir);
+	return dir;
+};
 
 afterEach(() => closeDatabase());
+afterAll(() => {
+	for (const dir of tempDirs) rmSync(dir, { recursive: true, force: true });
+	tempDirs.length = 0;
+});
 
 describe('databaseFile', () => {
 	it('puts the database inside DATA_DIR', () => {
