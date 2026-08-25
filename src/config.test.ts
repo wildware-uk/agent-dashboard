@@ -1,7 +1,13 @@
 import { readFileSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { describe, expect, it } from 'vitest';
-import { assertClientAddressTrustworthy, CONFIG_VARS, loadConfig } from './config';
+import {
+	assertBodyLimitAllowsUploads,
+	assertClientAddressTrustworthy,
+	CONFIG_VARS,
+	loadConfig,
+	parseBodySizeLimit
+} from './config';
 
 /** The minimum an operator must set; everything else has a default. */
 const required = {
@@ -132,5 +138,44 @@ describe('assertClientAddressTrustworthy', () => {
 		expect(() => assertClientAddressTrustworthy({ ...proxied, ADDRESS_HEADER: '' })).toThrow(
 			/ADDRESS_HEADER is unset/
 		);
+	});
+});
+
+describe('parseBodySizeLimit', () => {
+	it.each([
+		['512K', 524288],
+		['200M', 209715200],
+		['1G', 1073741824],
+		['1024', 1024]
+	])('reads %s as %i bytes', (raw, bytes) => {
+		expect(parseBodySizeLimit(raw)).toBe(bytes);
+	});
+
+	it('returns null for a value the adapter would reject itself', () => {
+		expect(parseBodySizeLimit('lots')).toBeNull();
+	});
+});
+
+describe('assertBodyLimitAllowsUploads', () => {
+	const config = loadConfig(required);
+
+	it('refuses the adapter default, which is far below the upload caps', () => {
+		// The common case: a deployment that never sets BODY_SIZE_LIMIT at all.
+		expect(() => assertBodyLimitAllowsUploads({}, config)).toThrow(/BODY_SIZE_LIMIT is 512K/);
+	});
+
+	it('refuses a value below the largest accepted upload', () => {
+		expect(() => assertBodyLimitAllowsUploads({ BODY_SIZE_LIMIT: '1M' }, config)).toThrow(
+			/adapter-node enforces BODY_SIZE_LIMIT/
+		);
+	});
+
+	it('accepts a value at least as large as the biggest upload', () => {
+		const enough = String(Math.max(config.MAX_IMAGE_BYTES, config.MAX_VIDEO_BYTES));
+		expect(() => assertBodyLimitAllowsUploads({ BODY_SIZE_LIMIT: enough }, config)).not.toThrow();
+	});
+
+	it('leaves an unparseable value for the adapter to complain about', () => {
+		expect(() => assertBodyLimitAllowsUploads({ BODY_SIZE_LIMIT: 'lots' }, config)).not.toThrow();
 	});
 });

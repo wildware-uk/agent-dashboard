@@ -131,3 +131,56 @@ export function assertClientAddressTrustworthy(env: RawEnv): void {
 			'  TRUST_SOCKET_ADDRESS=true if this process really does face the internet.'
 	);
 }
+
+/** Bytes in each suffix adapter-node accepts for `BODY_SIZE_LIMIT`. */
+const BYTE_SUFFIXES: Record<string, number> = {
+	K: 1024,
+	M: 1024 * 1024,
+	G: 1024 * 1024 * 1024
+};
+
+/** adapter-node's own default when `BODY_SIZE_LIMIT` is unset. */
+export const ADAPTER_BODY_SIZE_DEFAULT = '512K';
+
+/**
+ * Parse a `BODY_SIZE_LIMIT` value the way adapter-node does.
+ *
+ * @returns the value in bytes, or `null` if it is not a value the adapter would
+ *   accept (it refuses to boot on those itself, so this does not second-guess it).
+ */
+export function parseBodySizeLimit(raw: string): number | null {
+	const match = /^(\d+)([KMG])?$/.exec(raw.trim());
+	if (!match) return null;
+	const multiplier = match[2] ? BYTE_SUFFIXES[match[2]] : 1;
+	return Number(match[1]) * multiplier;
+}
+
+/**
+ * Refuse to boot when the adapter would reject uploads the app promises to accept.
+ *
+ * `BODY_SIZE_LIMIT` is enforced by adapter-node before any route runs, so a value
+ * below `MAX_VIDEO_BYTES` rejects large uploads with a 413 this app never sees and
+ * cannot explain — the agent gets an opaque failure and its upload token is spent.
+ * The adapter's default of 512K is far below the defaults here, so the common case
+ * is a deployment that never sets it at all.
+ *
+ * @throws an `Error` naming the value to set.
+ */
+export function assertBodyLimitAllowsUploads(env: RawEnv, config: Config): void {
+	const raw = env.BODY_SIZE_LIMIT ?? ADAPTER_BODY_SIZE_DEFAULT;
+	const limit = parseBodySizeLimit(raw);
+	// An unparseable value is the adapter's error to report, not ours.
+	if (limit === null) return;
+
+	const largest = Math.max(config.MAX_IMAGE_BYTES, config.MAX_VIDEO_BYTES);
+	if (limit >= largest) return;
+
+	throw new Error(
+		'Invalid configuration:\n' +
+			`  BODY_SIZE_LIMIT is ${raw} (${limit} bytes) but this deployment accepts uploads\n` +
+			`  up to ${largest} bytes. adapter-node enforces BODY_SIZE_LIMIT before any route\n` +
+			'  runs, so larger uploads would be rejected with a 413 the app never sees and\n' +
+			'  cannot explain, after the agent has already spent its upload token.\n' +
+			`  Set BODY_SIZE_LIMIT=${largest} (or lower MAX_IMAGE_BYTES / MAX_VIDEO_BYTES).`
+	);
+}

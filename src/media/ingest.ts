@@ -75,14 +75,36 @@ export type IngestResult = {
  *
  * @throws {@link MediaError} — `token_rejected` (forged, unknown, expired or
  *   spent), `too_large`, `unsupported_type` (bytes disagree with the
- *   reservation, or are not on the allowlist), `invalid_argument` (empty body),
+ *   reservation, or are not on the allowlist), `invalid_argument` (no readable
+ *   body — thrown before the token is spent, so a retry works),
  *   `conflict` (bytes already landed for this media).
  */
+/**
+ * What an agent sees when its PUT arrived with no readable body.
+ *
+ * Almost always a missing `Content-Type`: the server never receives those bytes,
+ * so the message names the fix rather than describing the symptom.
+ */
+const NO_BODY =
+	'the request had no body. Send `Content-Type` set to the mime you declared to ' +
+	'create_upload — a PUT without a Content-Type header has its body discarded ' +
+	'before it reaches this route. This token has NOT been used; retry with the ' +
+	'same upload_url.';
+
 export async function ingest(settings: MediaSettings, input: IngestInput): Promise<IngestResult> {
 	const now = input.now ?? Date.now();
 
 	const tokenId = parseUploadToken(settings.tokenSecret, input.token);
 	if (!tokenId) throw rejected();
+
+	// Checked BEFORE the token is spent. adapter-node discards the body of any
+	// request that arrives without a `Content-Type` (`get_raw_body` in
+	// @sveltejs/kit returns null for it), which is exactly what
+	// `fetch(url, { method: 'PUT', body: buffer })` sends. Consuming the token
+	// first would burn it on bytes the server never received, so the agent's
+	// retry would fail as `token_rejected` and it would loop forever minting
+	// fresh tokens.
+	if (!input.body) throw mediaInvalid(NO_BODY);
 
 	// Single use, atomically, and only if unexpired: the winner of a race is the
 	// only caller that gets a row back.
@@ -101,8 +123,6 @@ export async function ingest(settings: MediaSettings, input: IngestInput): Promi
 		// `Content-Length` is ever trusted for.
 		throw overCap(token.maxBytes);
 	}
-
-	if (!input.body) throw mediaInvalid('the request had no body');
 
 	const written = await streamToTempFile(settings, {
 		body: input.body,

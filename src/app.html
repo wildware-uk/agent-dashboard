@@ -12,7 +12,10 @@
 			flash, and no reliance on a media query that cannot tell "no preference"
 			from "prefers light". This blocking script then downgrades to light when
 			the OS asks for light, or applies the owner's explicit choice if they made
-			one. It must stay inline and above %sveltekit.head% to run before paint.
+			one. It must stay inline, and above the head placeholder below, to run
+			before paint. (Do not write that placeholder's literal name here: the
+			template substitutes the first occurrence, so naming it in this comment
+			injects the real head into the comment and leaves the tag below intact.)
 		-->
 		<script>
 			(() => {
