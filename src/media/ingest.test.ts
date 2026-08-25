@@ -293,7 +293,9 @@ describe('the token', () => {
 			'',
 			'nonsense',
 			id,
-			`${id}.${signature.slice(0, -1)}A`,
+			// A different last character, whatever it currently is: hardcoding one
+			// makes this case a no-op — and a passing test — once in sixty-four runs.
+			`${id}.${signature.slice(0, -1)}${signature.endsWith('A') ? 'B' : 'A'}`,
 			signUploadToken('a-different-secret-of-sufficient-length', id)
 		]) {
 			const body = countingBody(bytes, 16);

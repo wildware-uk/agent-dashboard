@@ -47,6 +47,7 @@ export {
 	constantTimeEquals,
 	hashAgentToken,
 	isTokenShaped,
+	listAgentNames,
 	listAgents,
 	mintAgentToken,
 	noteAgentSeen,

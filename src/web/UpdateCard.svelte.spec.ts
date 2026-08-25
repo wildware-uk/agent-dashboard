@@ -62,6 +62,47 @@ describe('the card', () => {
 		await expect.element(screen.getByText('agent-7')).toBeInTheDocument();
 	});
 
+	it('attributes the update to the agent, not to its id', async () => {
+		const agentId = '01M0X5XHT67FCP294SSA3B2XHV';
+		const screen = render(UpdateCard, {
+			update: anUpdate({ agentId }),
+			agentName: 'build-bot'
+		});
+
+		await expect.element(screen.getByText('build-bot')).toBeInTheDocument();
+		expect(document.querySelector('article')?.textContent).not.toContain(agentId);
+		expect(document.querySelector('article')?.getAttribute('aria-label')).toBe(
+			'Info update from build-bot'
+		);
+		expect(document.querySelector('[data-hue]')?.textContent?.trim()).toBe('BB');
+	});
+
+	it('badges two differently-named agents differently', async () => {
+		// The bug (#20): both of these used to read "01", because every ULID begins
+		// `01` until 2039, so the hue was the only thing telling them apart.
+		render(UpdateCard, {
+			update: anUpdate({ id: 'u1', agentId: '01M0X5XHT67FCP294SSA3B2XHV' }),
+			agentName: 'docs-writer'
+		});
+		render(UpdateCard, {
+			update: anUpdate({ id: 'u2', agentId: '01M0X5XHT67FCP294SSAKQ9WFP' }),
+			agentName: 'build-bot'
+		});
+
+		const badges = [...document.querySelectorAll('[data-hue]')].map((badge) =>
+			badge.textContent?.trim()
+		);
+		expect(badges).toEqual(['DW', 'BB']);
+	});
+
+	it('shortens an id nobody has a name for instead of printing all 26 characters', async () => {
+		const agentId = '01M0X5XHT67FCP294SSA3B2XHV';
+		const screen = render(UpdateCard, { update: anUpdate({ agentId }) });
+
+		await expect.element(screen.getByText('agent-3b2xhv')).toBeInTheDocument();
+		expect(document.querySelector('article')?.textContent).not.toContain(agentId);
+	});
+
 	it('renders a title when there is one', async () => {
 		const screen = render(UpdateCard, { update: anUpdate({ title: 'Build green' }) });
 

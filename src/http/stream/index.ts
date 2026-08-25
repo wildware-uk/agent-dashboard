@@ -34,6 +34,7 @@ export {
 export type {
 	FullSnapshot,
 	Snapshot,
+	SnapshotAgentNames,
 	SnapshotHandlerOptions,
 	SnapshotProjects,
 	SnapshotQuery,

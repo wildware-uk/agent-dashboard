@@ -176,6 +176,21 @@ describe('reading the real state through the domain', () => {
 		expect(second).not.toHaveProperty('projects');
 	});
 
+	it('carries a name for every agent in the timeline, online or long gone', () => {
+		const ctx = harness();
+		const writer = ctx.agent('docs-writer');
+		const bot = ctx.agent('build-bot');
+		const { project } = createProject(ctx, { name: 'Agent Dashboard' });
+		postUpdate(ctx, { project: project.slug, agentId: writer, body: 'wrote the docs' });
+		postUpdate(ctx, { project: project.slug, agentId: bot, body: 'green' });
+
+		const snapshot = readFullSnapshot({ limit: 10 }, ctx);
+
+		// Neither agent has ever registered a session, so presence knows nothing
+		// about either of them — and the cards still have to say who posted (#20).
+		expect(snapshot.agentNames).toEqual({ [writer]: 'docs-writer', [bot]: 'build-bot' });
+	});
+
 	it('filters the project list by status when asked', () => {
 		const { ctx } = seeded();
 

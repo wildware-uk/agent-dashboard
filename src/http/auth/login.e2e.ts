@@ -1,11 +1,11 @@
 import { expect, test } from '@playwright/test';
 
-// The guard, against the real Node-adapter build. This runs with no
-// `ADMIN_PASSWORD_HASH` in the environment — as CI does — which is exactly the
-// case that must fail closed: no session can be minted, so every browser route
-// still bounces to a login page that says the deployment is not configured.
-// Logging in for real is covered by the unit tests around `$http/auth`, which do
-// not need a server.
+// The guard, against the real Node-adapter build. The shared server is
+// configured (it has to be: `src/config.ts` refuses to boot otherwise), but no
+// test here holds its password and no request here carries a session cookie —
+// which is the case that must fail closed, on every browser route. Logging in
+// for real is covered by `shell.e2e.ts`, which boots its own server with a hash
+// it knows, and by the unit tests around `$http/auth`, which need no server.
 
 test.describe('the session guard', () => {
 	test('sends an unauthenticated visitor to the login page', async ({ page }) => {

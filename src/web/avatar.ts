@@ -54,3 +54,47 @@ export function avatarFor(name: string): Avatar {
 	const key = name.trim().toLowerCase();
 	return { initials: initialsFor(key), hue: hash(key) % 360 };
 }
+
+/**
+ * How much of an unresolved id is kept.
+ *
+ * The **tail**, not the head: a ULID's leading characters are its timestamp, so
+ * two agents minted the same week share them, while the trailing characters are
+ * the random half. Six of those are enough to tell two rows apart by eye.
+ */
+const ID_TAIL = 6;
+
+/**
+ * The longest id shown whole.
+ *
+ * Nothing this app mints is shorter than a 26-character ULID, so an id under
+ * this length came from a human, a fixture or a migration — and those are
+ * usually meaningful (`claude-code`), which shortening would throw away.
+ */
+const ID_READABLE_MAX = 12;
+
+/**
+ * What to call the agent that posted an update.
+ *
+ * The name when the timeline has resolved one, and otherwise something a person
+ * can actually read. The fallback matters more than it looks: an unresolved
+ * poster used to render its raw id, which is 26 characters of noise on the card
+ * *and* — because every ULID begins `01` until September 2039 — made every
+ * avatar in the timeline show the same two letters (#20).
+ *
+ * @param agentId the poster's id, which is always known.
+ * @param name the display name, if anything has resolved one.
+ */
+export function agentLabel(agentId: string, name?: string | null): string {
+	const named = name?.trim() ?? '';
+	if (named !== '') return named;
+
+	const id = agentId.trim();
+	// A card with no poster at all is not a case the API can produce, but it is
+	// one a component must survive: a badge and a header still have to say
+	// something.
+	if (id === '') return 'unknown agent';
+	if (id.length <= ID_READABLE_MAX) return id;
+
+	return `agent-${id.slice(-ID_TAIL).toLowerCase()}`;
+}

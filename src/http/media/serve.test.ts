@@ -1,6 +1,6 @@
 import { harness, type Harness } from '$domain/testing';
-import { createUpload as mintUpload, ingest } from '$media';
-import { bodyOf, pngBytes, tempSettings } from '$media/testing';
+import { createUpload as mintUpload, ingest, processMedia } from '$media';
+import { bodyOf, exifImageBytes, pngBytes, sampleVideoBytes, tempSettings } from '$media/testing';
 import { insertMedia } from '$db';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { SESSION_COOKIE, signSession } from '../auth';
@@ -136,5 +136,54 @@ describe('GET /media/:id/:variant', () => {
 		});
 
 		expect(response.status).toBe(503);
+	});
+});
+
+describe('GET /media/:id/:variant, once derivatives exist', () => {
+	/** Upload, then run the derivative pipeline over it, as the worker would. */
+	async function derived(bytes: Uint8Array, mime: string): Promise<string> {
+		const created = mintUpload(settings, {
+			db: ctx.db,
+			agentId,
+			filename: `shot.${mime.split('/')[1]}`,
+			mime,
+			bytes: bytes.length,
+			now: ctx.now()
+		});
+		await ingest(settings, {
+			db: ctx.db,
+			token: created.token,
+			body: bodyOf(bytes),
+			now: ctx.now()
+		});
+		const outcome = await processMedia(settings, { db: ctx.db, id: created.mediaId, bus: ctx.bus });
+		expect(outcome.status, JSON.stringify(outcome)).toBe('ready');
+		return created.mediaId;
+	}
+
+	it('serves both thumbnails as webp — the addresses that 404 before the pipeline runs', async () => {
+		const id = await derived(await exifImageBytes({ width: 1800, height: 900 }), 'image/png');
+
+		for (const variant of ['thumb-640', 'thumb-1600']) {
+			const response = await get(id, variant);
+
+			expect(response.status, variant).toBe(200);
+			expect(response.headers.get('content-type'), variant).toBe('image/webp');
+			expect(response.headers.get('x-content-type-options'), variant).toBe('nosniff');
+			expect(Number(response.headers.get('content-length'))).toBeGreaterThan(0);
+			expect((await response.arrayBuffer()).byteLength).toBe(
+				Number(response.headers.get('content-length'))
+			);
+		}
+	});
+
+	it('serves a video poster frame as jpeg', async () => {
+		const id = await derived(await sampleVideoBytes({ seconds: 1 }), 'video/mp4');
+
+		const response = await get(id, 'poster');
+
+		expect(response.status).toBe(200);
+		expect(response.headers.get('content-type')).toBe('image/jpeg');
+		expect((await response.arrayBuffer()).byteLength).toBeGreaterThan(0);
 	});
 });

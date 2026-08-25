@@ -56,8 +56,8 @@ export type UpdatesPage = {
 /**
  * `GET /api/snapshot` and `GET /api/snapshot/updates`.
  *
- * `projects` is absent from the updates-only endpoint, which is exactly why it
- * is optional here rather than in a second type.
+ * `projects` and `agentNames` are absent from the updates-only endpoint, which
+ * is exactly why they are optional here rather than in a second type.
  */
 export type SnapshotResponse = {
 	/** The newest event seq this state accounts for. */
@@ -65,4 +65,10 @@ export type SnapshotResponse = {
 	at: string;
 	projects?: ProjectView[];
 	updates: UpdatesPage;
+	/**
+	 * Agent id to display name, for every agent this deployment knows — the
+	 * offline and the revoked included, because that is who most of a timeline
+	 * was posted by.
+	 */
+	agentNames?: Record<string, string>;
 };

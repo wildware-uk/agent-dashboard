@@ -74,6 +74,42 @@ export function tempUploadFile(settings: MediaSettings, name: string): string {
 }
 
 /**
+ * Where one derivative goes, in both the forms the pipeline needs.
+ *
+ * The name comes from the variant, never from anything a caller passed: it is
+ * one of the four literals in `./derive.ts`, so the same closed set that
+ * `/media/:id/:variant` will address is the set that can be written.
+ *
+ * `relative` is what goes in the row — media root relative, with `/`
+ * separators so the value means the same thing on any host that later opens
+ * this database — and `absolute` is where the bytes are written.
+ */
+export function derivativeTarget(
+	settings: MediaSettings,
+	id: string,
+	name: string
+): { relative: string; absolute: string } {
+	const checked = checkedId(id);
+	return {
+		relative: `${checked.slice(0, 2)}/${checked}/${name}`,
+		absolute: join(mediaDir(settings, checked), name)
+	};
+}
+
+/**
+ * Where the reason a media item failed is written.
+ *
+ * `media` has no column for it — the schema (design §3) records a status and
+ * nothing else — so the note lives next to the bytes it is about, which is also
+ * where an operator is already looking. It is not a derivative and no row names
+ * it, so `/media/:id/:variant` cannot address it: the only way to read it is
+ * `readMediaFailure`.
+ */
+export function failureFile(settings: MediaSettings, id: string): string {
+	return join(mediaDir(settings, id), 'error.txt');
+}
+
+/**
  * A derivative's path, as `derivatives.path` stores it: relative to the media root.
  *
  * Re-checked on the way out even though only this application writes those rows.

@@ -276,6 +276,54 @@ describe('paging into the past', () => {
 	});
 });
 
+describe('who posted what', () => {
+	it('adopts the agent names the page was rendered with', () => {
+		api = fakeApi({
+			seq: 11,
+			projects: [aProject()],
+			items: [second, first],
+			agentNames: { a1: 'docs-writer' }
+		});
+		const feed = timeline();
+
+		feed.hydrate(api.snapshot());
+
+		expect(feed.agentNames).toEqual({ a1: 'docs-writer' });
+	});
+
+	it('learns the name of an agent that appeared after the page loaded', async () => {
+		const feed = timeline();
+		feed.hydrate(api.snapshot());
+		feed.start();
+		api.replace({ seq: 12, items: [third, second, first], agentNames: { a1: 'build-bot' } });
+
+		stream.emit('update.created', { seq: 12, payload: { updateId: 'u3', projectId: 'p1' } });
+		await api.settle();
+
+		expect(feed.agentNames).toEqual({ a1: 'build-bot' });
+	});
+
+	it('keeps the names it holds when a page of the timeline carries none', async () => {
+		// `/api/snapshot/updates` is updates and nothing else. A store that took
+		// its silence for "no agents have names" would blank every card header on
+		// the first click of "load older".
+		api = fakeApi({
+			seq: 11,
+			projects: [aProject()],
+			items: [second, first],
+			hasMore: true,
+			agentNames: { a1: 'docs-writer' }
+		});
+		const feed = timeline();
+		feed.hydrate(api.snapshot());
+		api.replace({ items: [anUpdate({ id: 'u0', seq: 9 })], hasMore: false });
+
+		await feed.loadOlder();
+
+		expect(feed.agentNames).toEqual({ a1: 'docs-writer' });
+	});
+});
+
 describe('one project at a time', () => {
 	it('scopes every request to the selected project', async () => {
 		const feed = timeline({ project: 'agent-dashboard' });

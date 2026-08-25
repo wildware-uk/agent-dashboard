@@ -3,6 +3,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { isMediaError } from './errors';
 import {
 	derivativeFile,
+	derivativeTarget,
+	failureFile,
 	mediaDir,
 	mediaRoot,
 	originalFile,
@@ -88,5 +90,40 @@ describe('a derivative path from the database', () => {
 	it('refuses a stored path that climbs out of the media root', () => {
 		expect(() => derivativeFile(settings, '../../etc/passwd')).toThrow();
 		expect(() => derivativeFile(settings, '/etc/passwd')).toThrow();
+	});
+});
+
+describe('where a derivative goes', () => {
+	it('gives the row its media-root-relative path and the writer its absolute one', () => {
+		const id = newId();
+
+		expect(derivativeTarget(settings, id, 'thumb-640.webp')).toEqual({
+			relative: `${id.slice(0, 2)}/${id}/thumb-640.webp`,
+			absolute: `${mediaDir(settings, id)}/thumb-640.webp`
+		});
+	});
+
+	it('round-trips through the check the serving path applies to a stored path', () => {
+		const id = newId();
+		const target = derivativeTarget(settings, id, 'poster.jpg');
+
+		expect(derivativeFile(settings, target.relative)).toBe(target.absolute);
+	});
+
+	it('stores the path with forward slashes, so the row means the same on any host', () => {
+		expect(derivativeTarget(settings, newId(), 'video.mp4').relative).not.toContain('\\');
+	});
+
+	it('refuses an id it did not mint, before anything is written', () => {
+		expect(() => derivativeTarget(settings, '../../etc', 'poster.jpg')).toThrow();
+		expect(() => failureFile(settings, 'not-an-id')).toThrow();
+	});
+});
+
+describe('the failure note', () => {
+	it('sits beside the bytes and is not a variant, so nothing can serve it', () => {
+		const id = newId();
+
+		expect(failureFile(settings, id)).toBe(`${mediaDir(settings, id)}/error.txt`);
 	});
 });

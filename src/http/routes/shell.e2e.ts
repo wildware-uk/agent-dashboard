@@ -7,11 +7,11 @@ import { expect, test, type Page, type Route } from '@playwright/test';
 /**
  * The **authenticated** shell, end to end (design §7).
  *
- * `page.e2e.ts` cannot cover this: the suite's shared server runs with no
- * `ADMIN_PASSWORD_HASH`, so the guard 303s `/` to `/login` and every assertion
- * there lands on the login page. This file therefore boots a *second* server —
- * the same `node build` output, its own port, its own throwaway data directory —
- * with a known password hash, logs in for real, and asserts the dashboard.
+ * `page.e2e.ts` cannot cover this: nothing there knows the shared server's
+ * password, so the guard 303s `/` to `/login` and every assertion there lands on
+ * the login page. This file therefore boots a *second* server — the same
+ * `node build` output, its own port, its own throwaway data directory — with a
+ * password hash it knows, logs in for real, and asserts the dashboard.
  *
  * What is real here: the Node-adapter server, the session cookie, the server
  * render, the client store, the stylesheet, and the browser. What is faked is
@@ -50,7 +50,12 @@ test.beforeAll(async () => {
 			ADMIN_PASSWORD_HASH: PASSWORD_HASH,
 			SESSION_SECRET: 'e2e-session-secret-at-least-32-chars-long',
 			TOKEN_SECRET: 'e2e-token-secret-at-least-32-chars-long!',
-			PUBLIC_BASE_URL: ORIGIN
+			PUBLIC_BASE_URL: ORIGIN,
+			// adapter-node caps request bodies at 512K by default, well under the
+			// 200 MiB of video this app advertises, and startup refuses that
+			// mismatch rather than serving 413s it cannot explain. Without this the
+			// server below never comes up.
+			BODY_SIZE_LIMIT: '209715200'
 		}
 	});
 
@@ -96,6 +101,8 @@ type Update = {
 	body: string;
 	level?: 'info' | 'success' | 'warn' | 'error';
 	title?: string | null;
+	/** Who posted it. A ULID in production, which is the point of #20. */
+	agentId?: string;
 };
 
 const project = {
@@ -110,12 +117,12 @@ const project = {
 	updatedAt: Date.now()
 };
 
-function update({ id, seq, body, level = 'info', title = null }: Update) {
+function update({ id, seq, body, level = 'info', title = null, agentId = 'claude-code' }: Update) {
 	return {
 		id,
 		seq,
 		projectId: 'p1',
-		agentId: 'claude-code',
+		agentId,
 		sessionId: null,
 		title,
 		body,
@@ -150,6 +157,8 @@ function update({ id, seq, body, level = 'info', title = null }: Update) {
 function fakeServer(page: Page) {
 	let items: ReturnType<typeof update>[] = [];
 	let seq = 0;
+	let agentNames: Record<string, string> = {};
+	let live: { agentId: string; name: string }[] = [];
 	const gates: { open: Promise<void>; body: string }[] = [];
 
 	const snapshot = (route: Route) => {
@@ -157,14 +166,37 @@ function fakeServer(page: Page) {
 			seq,
 			at: new Date().toISOString(),
 			projects: [project],
-			updates: { items, nextCursor: null, hasMore: false }
+			updates: { items, nextCursor: null, hasMore: false },
+			// Every agent this deployment knows, offline and revoked included: this
+			// is what lets a card name a poster that presence has never heard of.
+			agentNames
 		});
 		return route.fulfill({ status: 200, contentType: 'application/json', body });
 	};
 
-	/** `GET /api/snapshot/agents`: nobody is beating, which is the honest answer here. */
+	/**
+	 * `GET /api/snapshot/agents`: who is beating right now.
+	 *
+	 * The heartbeat is stamped at request time, because the browser derives
+	 * presence against its own clock — a fixed timestamp would be expired before
+	 * the rail ever painted it.
+	 */
 	const agents = (route: Route) => {
-		const body = JSON.stringify({ seq, at: new Date().toISOString(), agents: [] });
+		const now = Date.now();
+		const body = JSON.stringify({
+			seq,
+			at: new Date().toISOString(),
+			agents: live.map((agent) => ({
+				...agent,
+				sessionId: `s-${agent.agentId}`,
+				startedAt: now,
+				lastHeartbeatAt: now,
+				sessions: 1,
+				host: 'wildware',
+				cwd: '/srv/ssd1/app',
+				model: 'opus'
+			}))
+		});
 		return route.fulfill({ status: 200, contentType: 'application/json', body });
 	};
 
@@ -194,6 +226,16 @@ function fakeServer(page: Page) {
 					body: next.body
 				});
 			});
+		},
+
+		/** The names `GET /api/snapshot` will carry from now on. */
+		setAgentNames(next: Record<string, string>) {
+			agentNames = next;
+		},
+
+		/** Who `GET /api/snapshot/agents` will say is online from now on. */
+		setLiveAgents(next: { agentId: string; name: string }[]) {
+			live = next;
 		},
 
 		/** What `GET /api/snapshot` will say from now on. */
@@ -270,6 +312,48 @@ test.describe('the authenticated shell', () => {
 
 		await expect(page.getByText('just landed')).toBeVisible();
 		await expect(page.locator('article[data-level="success"]')).toBeVisible();
+	});
+
+	test('attributes every card to an agent name rather than to a ULID', async ({ page }) => {
+		// Real agent ids. Every one of them begins `01` until September 2039, which
+		// is why a card showing the id says nothing about who posted it, and why
+		// the avatars all read "01" before #20.
+		const gone = '01M0X5XHT67FCP294SSA3B2XHV';
+		const beating = '01M0X5XHT67FCP294SSAKQ9WFP';
+		const nameless = '01M0X5XHT67FCP294SSAZZ7QRS';
+
+		const server = fakeServer(page);
+		await server.install();
+		server.setUpdates([
+			{ id: 'u1', seq: 1, body: 'wrote the docs', agentId: gone },
+			{ id: 'u2', seq: 2, body: 'build is green', agentId: beating },
+			{ id: 'u3', seq: 3, body: 'who posted this', agentId: nameless }
+		]);
+		// `docs-writer` is not online and never will be again; its updates are
+		// still on the page, which is the case presence alone cannot cover.
+		server.setAgentNames({ [gone]: 'docs-writer' });
+		server.setLiveAgents([{ agentId: beating, name: 'build-bot' }]);
+
+		await signIn(page);
+
+		const docs = page.locator('article', { hasText: 'wrote the docs' });
+		const build = page.locator('article', { hasText: 'build is green' });
+		const unknown = page.locator('article', { hasText: 'who posted this' });
+
+		// The offline agent, named from the timeline snapshot.
+		await expect(docs).toContainText('docs-writer');
+		await expect(docs).not.toContainText(gone);
+		// The agent that is beating, named from presence — the same read that a
+		// newly registered session provokes, with no reload.
+		await expect(build).toContainText('build-bot');
+		await expect(build).not.toContainText(beating);
+		// Two agents, two badges. Both of these used to read "01".
+		await expect(docs.locator('[data-hue]')).toHaveText('DW');
+		await expect(build.locator('[data-hue]')).toHaveText('BB');
+		// Nobody can name this one, and it still reads as something rather than as
+		// 26 characters of ULID.
+		await expect(unknown).toContainText('agent-zz7qrs');
+		await expect(unknown).not.toContainText(nameless);
 	});
 
 	test('offers an "N new" pill instead of moving a scrolled timeline', async ({ page }) => {

@@ -9,8 +9,11 @@
 	 * say so — because nothing happens when an agent goes quiet, and a UI that
 	 * waited for something to happen would show a green dot next to a dead run.
 	 *
-	 * The store is a prop with a default so the rail is self-contained in the
-	 * shell and injectable in a spec. Open tasks are still a placeholder: that is
+	 * The store is a prop with a default: the shell owns one and hands it down,
+	 * because the timeline needs the names presence learns as much as the rail
+	 * needs the heartbeats, and a spec can inject its own. Starting it here as
+	 * well as in the shell is deliberate and free — `start` and `stop` are
+	 * idempotent — so the rail still works on its own. Open tasks are still a placeholder: that is
 	 * the control-plane slice's slot, and inventing an empty state for data this
 	 * component cannot fetch would be a claim rather than a rendering.
 	 */

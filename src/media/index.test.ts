@@ -4,14 +4,20 @@ import { describe, expect, it } from 'vitest';
 import * as media from './index';
 
 describe('the $media surface', () => {
-	it('exposes the four things a caller does, plus its settings reader', () => {
+	it('exposes the things a caller does, plus its settings reader', () => {
 		for (const name of [
 			'createUpload',
 			'ingest',
 			'openVariant',
 			'derivativesFor',
 			'sweepOrphanedMedia',
-			'mediaSettings'
+			'mediaSettings',
+			// The derivative pipeline (design §6 steps 4-5): one item, the whole
+			// backlog, and the background worker that does it on a timer.
+			'processMedia',
+			'processPendingMedia',
+			'startDerivativeWorker',
+			'readMediaFailure'
 		] as const) {
 			expect(media[name], name).toBeTypeOf('function');
 		}
@@ -26,6 +32,8 @@ describe('the $media surface', () => {
 			'mediaDir',
 			'originalFile',
 			'derivativeFile',
+			'derivativeTarget',
+			'failureFile',
 			'tempUploadRoot',
 			'tempUploadFile'
 		]) {
@@ -69,5 +77,19 @@ describe('the module boundary', () => {
 		// the owner's browser (design §6, §8).
 		expect([...media.ALLOWED_MIMES]).not.toContain('image/svg+xml');
 		expect(media.isAllowedMime('image/svg+xml')).toBe(false);
+	});
+});
+
+describe('the derivative pipeline surface', () => {
+	it('produces the two thumbnail widths the design names', () => {
+		expect([...media.THUMB_WIDTHS]).toEqual([640, 1600]);
+	});
+
+	it('runs two jobs at a time', () => {
+		expect(media.DEFAULT_CONCURRENCY).toBe(2);
+	});
+
+	it('takes the poster frame at one second', () => {
+		expect(media.POSTER_AT_S).toBe(1);
 	});
 });

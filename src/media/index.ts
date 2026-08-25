@@ -16,10 +16,18 @@
  * and an `open()` (design §2 — "callers never learn paths"), and the temp
  * directory an upload streams through is outside the served tree entirely.
  *
- * Derivatives — thumbnails, poster frames, transcodes — are the next slice
- * (design §11 step 10). This one leaves an uploaded row `pending` with its real
- * size and hash, publishes nothing, and serves `original`; `openVariant` already
- * serves the other variants the moment rows exist for them.
+ * Derivatives are the second half (design §11 step 10, §6 steps 4-5):
+ *
+ * ```ts
+ * import { processPendingMedia, startDerivativeWorker } from '$media';
+ *
+ * startDerivativeWorker();                             // for the life of the process
+ * await processPendingMedia(settings, { db });         // or drain the backlog now
+ * ```
+ *
+ * The work is driven off the `media` table rather than off the upload, so media
+ * that landed before this code existed is derived too, and a restart
+ * mid-transcode resumes rather than losing the item.
  *
  * `./testing.ts` is a second, test-only entry point and is not re-exported here.
  */
@@ -71,3 +79,35 @@ export {
 	type SweepInput,
 	type SweepResult
 } from './sweeper';
+export {
+	POSTER_QUALITY,
+	REASON_MAX,
+	THUMB_QUALITY,
+	THUMB_WIDTHS,
+	processMedia,
+	readMediaFailure,
+	type DeriveOptions,
+	type DeriveOutcome
+} from './derive';
+export {
+	FFMPEG,
+	FFMPEG_TIMEOUT_MS,
+	FFPROBE,
+	POSTER_AT_S,
+	isWebPlayable,
+	posterSeconds,
+	probeVideo,
+	type VideoProbe
+} from './ffmpeg';
+export { DEFAULT_CONCURRENCY, type JobOutcome } from './queue';
+export {
+	DERIVATIVE_BATCH,
+	DerivativePipeline,
+	WORKER_INTERVAL_MS,
+	processPendingMedia,
+	startDerivativeWorker,
+	type PendingInput,
+	type PendingResult,
+	type PipelineOptions,
+	type WorkerOptions
+} from './pipeline';

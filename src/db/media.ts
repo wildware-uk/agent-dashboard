@@ -218,6 +218,35 @@ export function attachMediaToUpdate(
 }
 
 /**
+ * Media rows in one or more states, oldest first.
+ *
+ * The derivative pipeline's queue query (design §6 step 4): everything still
+ * `pending` is work to do, and `hasBytes` excludes the reservations whose PUT
+ * never happened, which have nothing to derive from. Bounded, because a
+ * neglected deployment can have thousands and this runs on a timer inside the
+ * process serving the dashboard.
+ */
+export function listMediaByStatus(
+	db: Db,
+	options: { statuses: readonly MediaStatus[]; hasBytes?: boolean; limit?: number }
+): Media[] {
+	if (options.statuses.length === 0) return [];
+
+	const placeholders = options.statuses.map(() => '?').join(', ');
+	const bytes = options.hasBytes ? `AND sha256 <> ''` : '';
+
+	return db
+		.prepare<unknown[], Row>(
+			`SELECT ${COLUMNS} FROM media
+			 WHERE status IN (${placeholders}) ${bytes}
+			 ORDER BY seq
+			 LIMIT ?`
+		)
+		.all(...options.statuses, options.limit ?? 500)
+		.map(toMedia);
+}
+
+/**
  * Media nothing references, older than the cutoff: the sweeper's query
  * (design §3 — a ready row with no update after an hour is garbage).
  */

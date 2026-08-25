@@ -72,6 +72,38 @@ describe('reading who is online', () => {
 	});
 });
 
+describe('the names presence learns', () => {
+	it('names every agent it has been told about, for the timeline to attribute cards with', async () => {
+		const { api, presence } = store({
+			agents: [aLiveAgent({ agentId: 'a1', name: 'docs-writer' })]
+		});
+
+		presence.start();
+		await api.settle();
+		presence.stop();
+
+		expect(presence.names).toEqual({ a1: 'docs-writer' });
+	});
+
+	it('keeps a name after the agent has gone quiet', async () => {
+		// A card posted an hour ago is still on screen after its agent has dropped
+		// off the rail, and it still has to say who posted it.
+		const { api, presence, advance } = store({
+			agents: [aLiveAgent({ agentId: 'a1', name: 'docs-writer', lastHeartbeatAt: NOW })]
+		});
+		presence.start();
+		await api.settle();
+
+		api.replace([]);
+		advance(PRESENCE_WINDOW_MS + 1000);
+		await presence.refresh();
+		presence.stop();
+
+		expect(presence.online).toEqual([]);
+		expect(presence.names).toEqual({ a1: 'docs-writer' });
+	});
+});
+
 describe('presence is derived in the browser too', () => {
 	it('drops an agent whose heartbeat aged out, with no event and no refetch', async () => {
 		const { api, presence, advance } = store({

@@ -10,6 +10,7 @@
 	 */
 	import type { Snippet } from 'svelte';
 	import Avatar from './Avatar.svelte';
+	import { agentLabel } from './avatar';
 	import Markdown from './Markdown.svelte';
 	import UpdateActions from './UpdateActions.svelte';
 	import type { OwnerActions } from './actions';
@@ -20,9 +21,13 @@
 	let {
 		update,
 		/**
-		 * What to call the poster. Falls back to the agent id, which is still a
-		 * stable key for the avatar hash; agent *names* arrive with the presence
-		 * slice, and this prop is where they will land.
+		 * What to call the poster.
+		 *
+		 * Resolved by the shell from the timeline snapshot (every agent this
+		 * deployment knows, offline and revoked included) and from presence (an
+		 * agent that registered a session since the page loaded). Absent only for
+		 * an agent neither of those can name, which {@link agentLabel} then renders
+		 * as a short readable id rather than 26 characters of ULID.
 		 */
 		agentName,
 		/** Arrived over the stream, so it animates in exactly once. */
@@ -44,7 +49,7 @@
 	} = $props();
 
 	const level = $derived(levelStyle(update.level));
-	const poster = $derived(agentName ?? update.agentId);
+	const poster = $derived(agentLabel(update.agentId, agentName));
 </script>
 
 <article
