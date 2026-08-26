@@ -123,6 +123,15 @@ export type ApprovalQuery = {
 	projectId?: string;
 	/** Default 100. */
 	limit?: number;
+	/**
+	 * Take the OLDEST rows rather than the newest.
+	 *
+	 * This matters precisely because `limit` truncates. The pending banner must
+	 * show the agents blocked longest, so newest-first plus a cap silently hid
+	 * exactly the rows it exists to surface. Default stays newest-first, which is
+	 * what a general listing wants.
+	 */
+	oldestFirst?: boolean;
 };
 
 /** Approvals newest first: the sticky banner reads the pending ones. */
@@ -131,7 +140,9 @@ export function listApprovals(db: Db, query: ApprovalQuery = {}): Approval[] {
 		state: orNull(query.state),
 		agent_id: orNull(query.agentId),
 		project_id: orNull(query.projectId),
-		limit: query.limit ?? 100
+		limit: query.limit ?? 100,
+		// SQLite has no booleans; the CASE in the ORDER BY reads this as 0 or 1.
+		oldest_first: query.oldestFirst === true ? 1 : 0
 	};
 
 	return db
@@ -140,7 +151,8 @@ export function listApprovals(db: Db, query: ApprovalQuery = {}): Approval[] {
 			 WHERE (:state IS NULL OR state = :state)
 			   AND (:agent_id IS NULL OR agent_id = :agent_id)
 			   AND (:project_id IS NULL OR project_id = :project_id)
-			 ORDER BY seq DESC
+			 ORDER BY CASE WHEN :oldest_first THEN seq END ASC,
+			          CASE WHEN :oldest_first THEN NULL ELSE seq END DESC
 			 LIMIT :limit`
 		)
 		.all(params)

@@ -80,6 +80,7 @@ export class Tasks {
 	private holders = 0;
 	private queued = false;
 	private inFlight: Promise<void> | null = null;
+	private again = false;
 
 	private readonly project: string | null;
 	private readonly fetcher: Fetcher;
@@ -170,15 +171,34 @@ export class Tasks {
 		this.status = 'idle';
 	}
 
-	/** Read the list now. Never two requests at once. */
+	/**
+	 * Read the queue now. Never two requests at once.
+	 *
+	 * A caller that arrives while a fetch is in flight must not simply be handed
+	 * that promise: the snapshot it is waiting on was built by the server BEFORE
+	 * the event that prompted this call, so applying it raises the cursor past an
+	 * item that was never delivered. This store has no poller, so nothing would
+	 * repair it until some later, unrelated event arrived — a blocked agent
+	 * silently absent from the banner, which is the one lie this must never tell.
+	 * So remember that another read is wanted and run it once the current one
+	 * settles (the same shape as `timeline.svelte.ts`).
+	 */
 	async refresh(): Promise<void> {
-		if (this.inFlight) return this.inFlight;
+		if (this.inFlight) {
+			this.again = true;
+			return this.inFlight;
+		}
 
 		this.inFlight = this.run();
 		try {
 			await this.inFlight;
 		} finally {
 			this.inFlight = null;
+		}
+
+		if (this.again) {
+			this.again = false;
+			await this.refresh();
 		}
 	}
 

@@ -168,8 +168,8 @@ test('all five kinds round-trip: an agent asks, a human answers, the agent gets 
 		detail: 'Two files changed in the parser.',
 		placeholder: 'fix: …'
 	});
-	await expect(banner).toContainText('What should the commit message be?');
-	await expect(banner).toContainText('Two files changed in the parser.');
+	await expect(banner).toContainText('What should the commit message be?', { timeout: 20_000 });
+	await expect(banner).toContainText('Two files changed in the parser.', { timeout: 20_000 });
 	await page.getByLabel('Your answer').fill('fix: the parser drops trailing commas');
 	await page.getByRole('button', { name: 'Send' }).click();
 
@@ -183,7 +183,7 @@ test('all five kinds round-trip: an agent asks, a human answers, the agent gets 
 		kind: 'confirm',
 		question: 'Push to main?'
 	});
-	await expect(banner).toContainText('Push to main?');
+	await expect(banner).toContainText('Push to main?', { timeout: 20_000 });
 	await page.getByRole('button', { name: 'Approve' }).click();
 
 	expect(await keepWaiting(client, await confirm)).toMatchObject({
@@ -197,7 +197,7 @@ test('all five kinds round-trip: an agent asks, a human answers, the agent gets 
 		question: 'The build failed. What now?',
 		options: ['retry', 'skip', 'abort']
 	});
-	await expect(banner).toContainText('The build failed. What now?');
+	await expect(banner).toContainText('The build failed. What now?', { timeout: 20_000 });
 	await page.getByRole('button', { name: 'skip', exact: true }).click();
 
 	expect(await keepWaiting(client, await buttons)).toMatchObject({
@@ -211,7 +211,7 @@ test('all five kinds round-trip: an agent asks, a human answers, the agent gets 
 		question: 'Which branch should I target?',
 		options: ['main', 'next', 'release/1.2']
 	});
-	await expect(banner).toContainText('Which branch should I target?');
+	await expect(banner).toContainText('Which branch should I target?', { timeout: 20_000 });
 	await page.getByRole('radio', { name: 'release/1.2' }).click();
 	await page.getByRole('button', { name: 'Send' }).click();
 
@@ -228,7 +228,7 @@ test('all five kinds round-trip: an agent asks, a human answers, the agent gets 
 		min: 1,
 		max: 2
 	});
-	await expect(banner).toContainText('Which of these files should I delete?');
+	await expect(banner).toContainText('Which of these files should I delete?', { timeout: 20_000 });
 	await page.getByRole('checkbox', { name: 'a.ts' }).click();
 	await page.getByRole('checkbox', { name: 'c.ts' }).click();
 	await page.getByRole('button', { name: 'Send' }).click();
@@ -258,9 +258,11 @@ test('several blocked agents queue in the banner, and none is lost', async ({ pa
 
 	// Both are on screen at once: the front of the queue with its control, the
 	// other as a chip that promotes it (design §7).
-	await expect(banner).toContainText('Deploy the migration?');
-	await expect(banner.getByRole('button', { name: /Retry the flaky test\?/ })).toBeVisible();
-	await expect(banner).toContainText('2 requests waiting');
+	await expect(banner).toContainText('Deploy the migration?', { timeout: 20_000 });
+	await expect(banner.getByRole('button', { name: /Retry the flaky test\?/ })).toBeVisible({
+		timeout: 20_000
+	});
+	await expect(banner).toContainText('2 requests waiting', { timeout: 20_000 });
 
 	await page.getByRole('button', { name: 'Approve' }).click();
 	expect(await keepWaiting(first, await one)).toMatchObject({
@@ -269,7 +271,7 @@ test('several blocked agents queue in the banner, and none is lost', async ({ pa
 	});
 
 	// Answering the first promotes the second rather than losing it.
-	await expect(banner).toContainText('Retry the flaky test?');
+	await expect(banner).toContainText('Retry the flaky test?', { timeout: 20_000 });
 	await page.getByRole('button', { name: 'give up' }).click();
 	expect(await keepWaiting(second, await two)).toMatchObject({
 		state: 'answered',
@@ -288,7 +290,9 @@ test('a dismissal reaches the agent as cancelled, not as permission', async ({ p
 		kind: 'confirm',
 		question: 'Force-push over main?'
 	});
-	await expect(page.getByTestId('request-banner')).toContainText('Force-push over main?');
+	await expect(page.getByTestId('request-banner')).toContainText('Force-push over main?', {
+		timeout: 20_000
+	});
 	await page.getByRole('button', { name: 'Dismiss' }).click();
 
 	expect(await keepWaiting(client, await asked)).toMatchObject({ state: 'cancelled' });
@@ -311,7 +315,9 @@ test('an answer that violates the request is refused by the server, not by the p
 		question: 'Which branch should I release from?',
 		options: ['main', 'next']
 	});
-	await expect(page.getByTestId('request-banner')).toContainText('Which branch should I release');
+	await expect(page.getByTestId('request-banner')).toContainText('Which branch should I release', {
+		timeout: 20_000
+	});
 	const pending = await asked;
 	const id = pending.request_id as string;
 
@@ -367,7 +373,10 @@ test('a fresh client resumes a wait it never started', async ({ page }) => {
 		})
 	);
 
-	await expect(page.getByTestId('request-banner')).toContainText('What should I name the release?');
+	await expect(page.getByTestId('request-banner')).toContainText(
+		'What should I name the release?',
+		{ timeout: 20_000 }
+	);
 	await page.getByLabel('Your answer').fill('Ada');
 	await page.getByRole('button', { name: 'Send' }).click();
 

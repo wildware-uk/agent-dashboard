@@ -217,3 +217,60 @@ describe('the wire format the banner reads', () => {
 		expect([...mine].sort()).toEqual([...REQUEST_KINDS].sort());
 	});
 });
+
+describe('an event that arrives while a read is already in flight', () => {
+	it('is not dropped: a second read runs once the first settles', async () => {
+		// The bug this covers: `refresh()` used to hand a concurrent caller the
+		// in-flight promise. That snapshot was built by the server BEFORE the new
+		// event existed, so the store applied stale state, raised its cursor past
+		// the new item and never refetched. With no poller on this store, a blocked
+		// agent stayed invisible in the banner until some later, unrelated event
+		// happened to arrive — the one lie the banner must never tell.
+		const first = aRequest({ id: 'r-first', question: 'First blocked agent?' });
+		const second = aRequest({ id: 'r-second', question: 'Second blocked agent?' });
+
+		let release: (() => void) | null = null;
+		const gate = new Promise<void>((resolve) => {
+			release = resolve;
+		});
+
+		const api = fakeRequestsApi({ seq: 4, requests: [first] });
+		let call = 0;
+		const gatedFetch = async (url: string) => {
+			call += 1;
+			if (call === 1) {
+				// The response is BUILT now, from the state as it is now, and only
+				// delivered after the gate opens. That is the real window: the server
+				// composed this snapshot before the second request existed, so it is
+				// already stale by the time the store applies it.
+				const stale = await api.fetch(url);
+				await gate;
+				return stale;
+			}
+			return api.fetch(url);
+		};
+
+		const stream = new FakeStream();
+		const requests = new Requests({
+			fetch: gatedFetch,
+			openStream: () => stream,
+			schedule: (run) => run(),
+			notify: null
+		});
+
+		requests.start();
+
+		// While that first read is parked, the second agent blocks.
+		api.replace([first, second], 9);
+		stream.emit('request.created', { seq: 9, payload: { requestId: 'r-second', kind: 'confirm' } });
+
+		release!();
+		await vi.waitFor(() => {
+			expect(requests.items.map((request) => request.id)).toEqual(['r-first', 'r-second']);
+		});
+
+		// Two reads, not one. With the event dropped, the stale snapshot was the
+		// only read and `r-second` stayed invisible.
+		expect(call).toBeGreaterThanOrEqual(2);
+	});
+});

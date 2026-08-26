@@ -142,6 +142,25 @@ describe('ingestUpload', () => {
 	});
 });
 
+describe('attachMedia and the update it names', () => {
+	it("refuses another agent's update, which its own description promises", () => {
+		// The tool says "an update YOU have already posted". Media ownership was
+		// filtered but the update's was not, so one agent could hang an image on
+		// another agent's card — a documented precondition the server did not check.
+		const otherAgent = ctx.agent('someone-else');
+		const theirUpdate = postUpdate(ctx, {
+			project: 'agent-dashboard',
+			agentId: otherAgent,
+			body: 'their work'
+		});
+		const mine = landed();
+
+		expect(
+			refusal(() => attachMedia(ctx, { updateId: theirUpdate.id, mediaIds: [mine], agentId }))
+		).toBe('not_found');
+	});
+});
+
 describe('attachMedia', () => {
 	it('points the agent`s own unattached media at its update', () => {
 		const update = postUpdate(ctx, { project: 'agent-dashboard', agentId, body: 'shipped' });

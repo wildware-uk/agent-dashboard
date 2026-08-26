@@ -204,15 +204,24 @@ export type AttachMediaResult = {
  * deliberate: an agent retrying `attach_media` after a timeout must not get an
  * error for work that already succeeded.
  *
- * @throws {@link DomainError} `not_found` for an update that does not exist or
- *   has been deleted; `invalid_argument` for an empty, malformed or oversized
- *   list.
+ * @throws {@link DomainError} `not_found` for an update that does not exist,
+ *   has been deleted, or belongs to another agent; `invalid_argument` for an
+ *   empty, malformed or oversized list.
  */
 export function attachMedia(ctx: DomainContext, input: AttachMediaInput): AttachMediaResult {
 	const mediaIds = checkedMediaIds(input.mediaIds);
 
 	const update = findUpdateById(ctx.db, input.updateId);
 	if (!update || update.deletedAt !== null) {
+		throw notFound(`no such update: ${input.updateId}`);
+	}
+
+	// The tool says "an update YOU have already posted", so check it. Media
+	// ownership was filtered below but the update's was not, which let one agent
+	// hang an image on another agent's card. Answered as `not_found` rather than a
+	// distinct code: whether an id exists but belongs to someone else is not an
+	// agent's business.
+	if (update.agentId !== input.agentId) {
 		throw notFound(`no such update: ${input.updateId}`);
 	}
 
