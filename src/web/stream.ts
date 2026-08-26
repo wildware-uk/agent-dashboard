@@ -140,9 +140,15 @@ export type Subscription = {
 
 const STREAM_PATH = '/api/stream';
 
-/** The lock and the channel are named after the endpoint they arbitrate. */
-const CHANNEL_NAME = 'agent-dashboard:stream';
-const LOCK_NAME = 'agent-dashboard:stream-leader';
+/**
+ * The lock and the channel are named after the endpoint they arbitrate.
+ *
+ * Exported because they are the contract *between tabs* rather than an
+ * implementation detail of one: `stream.e2e.ts` listens on the channel to prove
+ * that a frame the leading tab received reached the others.
+ */
+export const CHANNEL_NAME = 'agent-dashboard:stream';
+export const LOCK_NAME = 'agent-dashboard:stream-leader';
 
 /** How often the leading tab says it is still there. */
 const PING_MS = 5_000;
@@ -370,6 +376,8 @@ export class LeaderLink implements Link {
 	private pinger: ReturnType<typeof setInterval> | undefined;
 	private takeover: ReturnType<typeof setTimeout> | undefined;
 	private running = false;
+	/** Set when the election itself is unusable and this tab connected anyway. */
+	private soloed = false;
 	/** A follower's view of the leader's connection. */
 	private heard = true;
 
@@ -387,7 +395,7 @@ export class LeaderLink implements Link {
 
 	/** Whether this tab is the one holding the connection. */
 	get leading(): boolean {
-		return this.release !== null;
+		return this.release !== null || this.soloed;
 	}
 
 	get connected(): boolean {
@@ -433,8 +441,10 @@ export class LeaderLink implements Link {
 		// that waits, so there is nothing to abort.
 		this.abort = steal ? null : new AbortController();
 		const options = steal ? { steal: true } : { signal: this.abort!.signal };
-		this.options.locks
-			.request(this.name, options, () => {
+
+		let requested: Promise<unknown>;
+		try {
+			requested = this.options.locks.request(this.name, options, () => {
 				if (!this.running) return Promise.resolve();
 				// Held until this promise settles, which is what makes the callback
 				// the whole of this tab's leadership.
@@ -442,22 +452,37 @@ export class LeaderLink implements Link {
 					this.release = resolve;
 					this.lead();
 				});
-			})
-			.catch(() => {
-				// Aborted on `stop`, or stolen by a tab that thought this one had gone
-				// quiet. Either way this tab is not the leader any more: it lets the
-				// connection go and joins the queue behind whoever has it now, so a
-				// tab that was demoted is still the one that takes over when *that*
-				// tab closes.
-				//
-				// Deliberately without arming the takeover clock. The clock is armed
-				// again by the first thing the new leader says, and a tab that has
-				// just lost the lock re-arming it blind is how two tabs end up
-				// stealing it from each other forever.
-				this.release = null;
-				this.demote();
-				if (this.running) this.elect();
 			});
+		} catch {
+			// The election is not available to this tab at all. One connection of
+			// its own is a worse outcome than sharing and a much better one than a
+			// page that never hears anything again.
+			this.soloed = true;
+			this.lead();
+			return;
+		}
+
+		requested.catch(() => {
+			// Aborted on `stop`, or stolen by a tab that thought this one had gone
+			// quiet. Either way this tab is not the leader any more: it lets the
+			// connection go and joins the queue behind whoever has it now, so a
+			// tab that was demoted is still the one that takes over when *that*
+			// tab closes.
+			//
+			// Deliberately without arming the takeover clock. The clock is armed
+			// again by the first thing the new leader says, and a tab that has
+			// just lost the lock re-arming it blind is how two tabs end up
+			// stealing it from each other forever.
+			//
+			// Only a tab that *had* the lock asks for it again. A request that
+			// failed without ever holding it failed for a reason asking again
+			// would not change, and an election that rejects on sight would
+			// otherwise spin this tab forever.
+			const lost = this.release !== null;
+			this.release = null;
+			this.demote();
+			if (this.running && lost) this.elect();
+		});
 	}
 
 	/** Open the connection, and start saying so. */
@@ -490,6 +515,7 @@ export class LeaderLink implements Link {
 	private demote(): void {
 		clearInterval(this.pinger);
 		this.pinger = undefined;
+		this.soloed = false;
 		this.link?.stop();
 		this.link = null;
 	}

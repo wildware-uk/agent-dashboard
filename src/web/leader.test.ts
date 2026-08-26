@@ -333,6 +333,56 @@ describe('a tab with nothing left to serve', () => {
 	});
 });
 
+describe('when the election itself is unusable', () => {
+	it('connects anyway rather than leaving the tab deaf', () => {
+		const bus = new FakeBus();
+		const opened: string[] = [];
+		const link = new LeaderLink({
+			locks: {
+				request() {
+					// What a browser that refuses the api looks like from here.
+					throw new Error('SecurityError');
+				}
+			},
+			channel: () => bus.open(),
+			connect: () =>
+				new DirectLink((url) => {
+					opened.push(url);
+					return new FakeStream();
+				})
+		});
+		const stream = new SharedStream(link);
+
+		const held = stream.subscribe({ types: ['update.created'], listener: () => {} });
+
+		expect(opened).toEqual(['/api/stream']);
+		expect(stream.connected).toBe(true);
+		held.close();
+	});
+
+	it('does not ask again for a lock it was refused', async () => {
+		const bus = new FakeBus();
+		let asked = 0;
+		const link = new LeaderLink({
+			locks: {
+				request() {
+					asked += 1;
+					return Promise.reject(new Error('NotSupportedError'));
+				}
+			},
+			channel: () => bus.open(),
+			connect: () => new DirectLink(() => new FakeStream())
+		});
+		const stream = new SharedStream(link);
+		const held = stream.subscribe({ types: ['update.created'], listener: () => {} });
+
+		await settle();
+
+		expect(asked).toBe(1);
+		held.close();
+	});
+});
+
 describe('choosing a link for the platform', () => {
 	it('shares one connection where the browser can elect a leader', () => {
 		const bus = new FakeBus();

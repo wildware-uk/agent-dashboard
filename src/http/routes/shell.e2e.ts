@@ -400,11 +400,20 @@ test.describe('the authenticated shell', () => {
 		await expect(page.getByRole('navigation', { name: 'Projects' })).toBeHidden();
 		await expect(page.locator('[data-rail]')).toBeHidden();
 		await expect(page.getByText('a phone-sized update')).toBeVisible();
-		// Nothing overflows sideways on a phone.
-		const overflow = await page.evaluate(
-			() => document.documentElement.scrollWidth - window.innerWidth
-		);
-		expect(overflow).toBeLessThanOrEqual(0);
+		// Nothing overflows sideways on a phone — measured against the DEVICE width,
+		// not `window.innerWidth`.
+		//
+		// This assertion used to compare scrollWidth with innerWidth, which cannot
+		// fail the way that matters: when content refuses to shrink, the browser
+		// widens the layout viewport and zooms out, so both numbers grow together
+		// and the difference stays zero. A wide update really did push a 375px phone
+		// to a 723px layout viewport while this test stayed green.
+		const layout = await page.evaluate(() => ({
+			scrollWidth: document.documentElement.scrollWidth,
+			innerWidth: window.innerWidth
+		}));
+		expect(layout.innerWidth).toBe(375);
+		expect(layout.scrollWidth).toBeLessThanOrEqual(375);
 
 		await page.getByRole('button', { name: 'Open projects' }).click();
 
