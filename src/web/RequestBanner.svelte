@@ -167,8 +167,16 @@
 	>
 		<div class="flex min-w-0 flex-col gap-2 px-3 py-2 sm:px-4">
 			<div class="flex min-w-0 flex-wrap items-center gap-2">
+				<!--
+					A solid amber chip with black ink, not a semantic token and not a
+					translucent tint. This is the label that says an agent is stopped
+					dead, so it has to be legible in both themes without depending on
+					what is behind it: the tint version measured 1.05:1 in light mode
+					(invisible), and a tint plus a themed ink still only reached 2.57:1
+					at 10px bold. This pair is theme-independent and clears AA.
+				-->
 				<span
-					class="rounded bg-amber-500/20 px-1.5 py-0.5 text-[0.65rem] font-semibold tracking-wide text-amber-200 uppercase"
+					class="rounded bg-amber-500 px-1.5 py-0.5 text-[0.65rem] font-semibold tracking-wide text-black uppercase"
 				>
 					Waiting on you
 				</span>
@@ -271,7 +279,7 @@
 						type="button"
 						disabled={busy}
 						onclick={() => void answer(active, true)}
-						class="min-h-11 rounded bg-emerald-600 px-3 text-sm font-medium text-white disabled:opacity-50"
+						class="min-h-11 rounded bg-emerald-700 px-3 text-sm font-medium text-white disabled:opacity-50"
 					>
 						Approve
 					</button>
@@ -299,7 +307,7 @@
 						type="button"
 						disabled={busy || !ready}
 						onclick={submit}
-						class="min-h-11 rounded bg-emerald-600 px-3 text-sm font-medium text-white disabled:opacity-50"
+						class="min-h-11 rounded bg-emerald-700 px-3 text-sm font-medium text-white disabled:opacity-50"
 					>
 						Send
 					</button>

@@ -186,3 +186,23 @@ describe('countPendingApprovals', () => {
 		expect(countPendingApprovals(db, 'nobody')).toBe(0);
 	});
 });
+
+describe('the cap on a pending list', () => {
+	it('keeps the OLDEST rows, so the longest-blocked agent cannot fall off', () => {
+		// The cap and the order interact: newest-first plus a limit silently drops
+		// the agents blocked longest — exactly the rows the banner exists to
+		// surface. `oldestFirst` is what makes the truncation safe.
+		const asked = Array.from({ length: 12 }, (_, n) => ask({ question: `Q${n}` }));
+
+		const capped = listApprovals(db, { state: 'pending', limit: 5, oldestFirst: true });
+
+		expect(capped.map((row) => row.id)).toEqual(asked.slice(0, 5).map((row) => row.id));
+		// And the default is unchanged: a general listing still reads newest first.
+		expect(listApprovals(db, { state: 'pending', limit: 5 }).map((row) => row.id)).toEqual(
+			asked
+				.slice(-5)
+				.reverse()
+				.map((row) => row.id)
+		);
+	});
+});

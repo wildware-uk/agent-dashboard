@@ -319,7 +319,13 @@ export function cancelRequest(ctx: DomainContext, requestId: string): OwnerReque
 /** What is waiting on the owner right now, longest-blocked first (design §7). */
 export function listPendingRequests(ctx: DomainContext): OwnerRequest[] {
 	const now = ctx.now();
-	return listApprovals(ctx.db, { state: 'pending', limit: PENDING_REQUEST_LIMIT })
+	// `oldestFirst` is what makes the cap safe: newest-first plus a limit hid the
+	// agents blocked longest, which are the ones this list exists to surface.
+	return listApprovals(ctx.db, {
+		state: 'pending',
+		limit: PENDING_REQUEST_LIMIT,
+		oldestFirst: true
+	})
 		.map(toRequest)
 		.filter((request) => request.expiresAt > now)
 		.sort((a, b) => a.seq - b.seq);

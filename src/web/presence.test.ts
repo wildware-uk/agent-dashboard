@@ -329,11 +329,16 @@ describe('when the server is unreachable', () => {
 		presence.stop();
 	});
 
-	it('never has two reads out at once', async () => {
+	it('coalesces concurrent reads without discarding them', async () => {
+		// Concurrent callers are folded together, not stampeded — but not thrown
+		// away either. A caller arriving mid-flight is waiting on a snapshot the
+		// server built BEFORE whatever prompted it, so one follow-up read runs once
+		// the current one settles: three callers cost two sequential reads, not one
+		// read and two silently dropped events.
 		const { api, presence } = store();
 
 		await Promise.all([presence.refresh(), presence.refresh(), presence.refresh()]);
 
-		expect(api.calls).toHaveLength(1);
+		expect(api.calls).toHaveLength(2);
 	});
 });
