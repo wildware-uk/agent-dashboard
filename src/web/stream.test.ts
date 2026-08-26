@@ -312,6 +312,25 @@ describe('the two stores the shell mounts', () => {
 		expect(streams[0].listeners).toBe(0);
 	});
 
+	it('closes the gap for a store that joined after a frame had gone by', async () => {
+		const { feed, presence, timelineApi, agentsApi, streams } = shell();
+		// The rail is on screen first and opens the stream; an update lands before
+		// the timeline has taken its own hold.
+		presence.start();
+		await agentsApi.settle();
+		timelineApi.publish(anUpdate({ id: 'u2', seq: 12, body: 'landed early' }));
+		streams[0].emit('update.created', { seq: 12, payload: { updateId: 'u2', projectId: 'p1' } });
+		timelineApi.calls.length = 0;
+
+		feed.start();
+		await timelineApi.settle();
+
+		// The frame itself is gone, so the store reads its snapshot instead of
+		// rendering a page that is quietly one update out of date.
+		expect(timelineApi.calls).toEqual(['/api/snapshot?limit=50']);
+		expect(feed.items.map((item) => item.id)).toEqual(['u2', 'u1']);
+	});
+
 	it('resyncs both stores from one frame', async () => {
 		const { feed, presence, timelineApi, agentsApi, streams } = shell();
 		feed.start();

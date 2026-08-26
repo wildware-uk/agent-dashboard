@@ -79,3 +79,19 @@ describe('markdown an agent would actually write', () => {
 		expect(renderMarkdown('   ')).toBe('');
 	});
 });
+
+describe('wide content', () => {
+	it('wraps a table so it scrolls inside itself instead of widening the page', () => {
+		// A table's min-content width is the sum of its columns, and one that cannot
+		// shrink drags the layout with it: a five-column table pushed a 375px phone's
+		// layout viewport to 723px, zooming the whole dashboard out.
+		const html = renderMarkdown('| kind | answer |\n| --- | --- |\n| text | string |');
+
+		expect(html).toContain('<div class="md-scroll"><table>');
+		expect(html).toContain('</table></div>');
+	});
+
+	it('leaves prose alone', () => {
+		expect(renderMarkdown('just a sentence')).not.toContain('md-scroll');
+	});
+});

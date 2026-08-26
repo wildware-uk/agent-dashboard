@@ -148,13 +148,20 @@
 	</header>
 
 	<div
-		class="grid min-h-0 lg:grid-cols-[15rem_minmax(0,1fr)] xl:grid-cols-[15rem_minmax(0,1fr)_17rem]"
+		class="grid min-h-0 min-w-0 lg:grid-cols-[15rem_minmax(0,1fr)] xl:grid-cols-[15rem_minmax(0,1fr)_17rem]"
 	>
 		<aside class="hidden min-h-0 overflow-y-auto border-r border-border-subtle lg:block">
 			<Sidebar projects={feed.projects} activeSlug={project} {actions} />
 		</aside>
 
-		<main class="min-h-0" aria-label="Update timeline">
+		<!--
+			`min-w-0` is load-bearing, not tidiness. A grid item defaults to
+			`min-width: auto`, so it refuses to shrink below its content's intrinsic
+			width — one wide update dragged a 375px phone's layout viewport out to
+			723px, and the browser zoomed the whole dashboard out to compensate
+			(design §7).
+		-->
+		<main class="min-h-0 min-w-0" aria-label="Update timeline">
 			<TimelineView {feed} agentNames={posters} {media} {actions} />
 		</main>
 

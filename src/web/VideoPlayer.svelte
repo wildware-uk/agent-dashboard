@@ -150,9 +150,8 @@
 	/*
 		media-chrome themes entirely through CSS variables, so the player reads from
 		the same tokens as the rest of the dashboard rather than shipping its own
-		palette. Colours are given as literals here because these variables are
-		consumed inside the components' shadow roots, where Tailwind's utilities do
-		not reach.
+		palette. Colours are literals because these variables are consumed inside the
+		components' shadow roots, where Tailwind's utilities do not reach.
 	*/
 	.player {
 		--media-primary-color: rgb(244 244 245);
@@ -162,7 +161,7 @@
 		--media-range-thumb-height: 12px;
 		--media-range-thumb-width: 12px;
 		--media-range-thumb-border-radius: 9999px;
-		--media-control-height: 28px;
+		--media-control-height: 32px;
 		--media-font-size: 12px;
 		--media-text-color: rgb(244 244 245);
 
@@ -171,8 +170,10 @@
 		width: 100%;
 		height: 100%;
 		background: #000;
-		/* Controls adapt to the PLAYER's width, not the viewport's: the same player
-		   appears full-width on a card and as a small tile inside a media grid. */
+		/*
+			Controls adapt to the PLAYER's width, not the viewport's: the same player is
+			full-width on a card and a small tile inside a media grid (design §7).
+		*/
 		container-type: inline-size;
 	}
 
@@ -183,16 +184,13 @@
 	}
 
 	media-control-bar {
-		/* Sits over the frame rather than stealing height from it. */
 		--media-control-background: transparent;
 		display: flex;
 		align-items: center;
 		gap: 1px;
 		/*
-			A deep scrim, because the content underneath is the worst case for
-			legibility: gameplay capture with its own bright HUD burnt into the
-			frame. At lower opacity the game's score overlay reads through the bar
-			and looks like broken layout.
+			A deep scrim: the content underneath is the worst case for legibility,
+			gameplay capture with its own bright HUD burnt into the frame.
 		*/
 		background: linear-gradient(to top, rgb(0 0 0 / 0.92) 35%, rgb(0 0 0 / 0.55) 70%, transparent);
 		padding: 1.25rem 0.25rem 0.125rem;
@@ -200,8 +198,8 @@
 
 	/*
 		Everything except the scrub bar keeps its intrinsic width; only the range
-		absorbs the slack. Without this the time display and the step buttons
-		shrink into each other and the text overlaps the icons.
+		absorbs the slack, so the time display and the step buttons never shrink into
+		each other.
 	*/
 	media-control-bar > :not(media-time-range) {
 		flex: 0 0 auto;
@@ -219,25 +217,15 @@
 
 	/*
 		A FIXED width, never animated.
-		This slider used to expand from 0 on hover, which pushed the playback-rate
-		and fullscreen buttons to the right — so aiming at fullscreen moved it out
-		from under the pointer before the click landed. Controls must never resize
-		in response to the pointer approaching them.
+
+		This slider used to expand from zero on hover, which pushed the playback-rate
+		and fullscreen buttons right — so aiming at fullscreen moved it out from under
+		the pointer before the click landed. Nothing in this bar may resize because a
+		pointer approached it, and on a touch screen a hover-revealed control cannot
+		be reached at all (design §7).
 	*/
 	media-volume-range {
 		width: 4.5rem;
-	}
-
-	.step {
-			display: none;
-		}
-	}
-
-	@container (max-width: 260px) {
-		media-time-display,
-		media-mute-button {
-			display: none;
-		}
 	}
 
 	.step {
@@ -262,10 +250,35 @@
 	}
 
 	/*
+		Touch. A thumb needs 44px; icon buttons sized for a mouse are not usable
+		(design §7). Frame stepping goes entirely — it is a precision tool that a
+		thumb cannot use well, and the room is better spent on the scrub bar.
+	*/
+	@media (pointer: coarse) {
+		.player {
+			--media-control-height: 44px;
+			--media-range-thumb-height: 16px;
+			--media-range-thumb-width: 16px;
+		}
+
+		.step {
+			display: none;
+		}
+
+		media-control-bar {
+			gap: 2px;
+			padding: 1.5rem 0.375rem 0.25rem;
+		}
+	}
+
+	/*
+		Container queries LAST: they add no specificity, so source order is what makes
+		them win over the base rules above.
+
 		Below these widths the bar cannot hold everything without the scrub bar
-		collapsing to nothing, so controls drop in order of how easily they are
-		lived without. Playback rate and frame stepping are power tools; volume has
-		the mute button as a fallback; play, position and fullscreen always stay.
+		collapsing to nothing, so controls drop in order of how easily they are lived
+		without. Playback rate and frame stepping are power tools; volume has the mute
+		button as a fallback; play, position and fullscreen always stay.
 	*/
 	@container (max-width: 480px) {
 		media-playback-rate-button,
@@ -275,4 +288,15 @@
 	}
 
 	@container (max-width: 360px) {
+		.step {
+			display: none;
+		}
+	}
+
+	@container (max-width: 260px) {
+		media-time-display,
+		media-mute-button {
+			display: none;
+		}
+	}
 </style>

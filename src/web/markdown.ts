@@ -42,6 +42,19 @@ md.renderer.rules.link_open = (tokens, index, options, _env, self) => {
 };
 
 /**
+ * Wrap every table in its own horizontal scroller.
+ *
+ * A table's min-content width is the sum of its columns, and a table that cannot
+ * shrink drags the whole layout with it: on a 375px phone one five-column table
+ * in an update pushed the layout viewport to 723px, so the browser zoomed the
+ * entire dashboard out to fit. Wide content scrolls inside its own container
+ * (design §7) — and note that a page-level overflow check does not catch this,
+ * because the document and the viewport grow together.
+ */
+md.renderer.rules.table_open = () => '<div class="md-scroll"><table>';
+md.renderer.rules.table_close = () => '</table></div>';
+
+/**
  * Markdown to HTML, with raw HTML disabled.
  *
  * @param body markdown as an agent wrote it.

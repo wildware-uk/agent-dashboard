@@ -172,6 +172,11 @@ describe('end_session', () => {
  * Issue #21: an agent cannot handle an error it was never told about, so every
  * code a session tool can hand back has to appear in the description the agent
  * reads. The lists below are the codes exercised by the tests above.
+ *
+ * `register_session` is absent because it has none to name: its only argument is
+ * validated by its own schema before the domain sees it, and the agent behind
+ * the token is resolved during authentication, so a call that reaches the tool
+ * at all cannot come back with a domain code.
  */
 describe('the session tools document every code they can fail with', () => {
 	const documented: ReadonlyArray<[string, string, readonly string[]]> = [

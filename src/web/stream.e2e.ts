@@ -3,6 +3,7 @@ import { mkdtempSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { expect, test, type BrowserContext, type Page } from '@playwright/test';
+import { CHANNEL_NAME } from './stream';
 
 /**
  * The tab's one connection to `GET /api/stream`, in the browser (#19, design §4).
@@ -181,20 +182,25 @@ test.describe('the tab and its one connection', () => {
 
 		await signIn(page);
 		const second = await context.newPage();
-		// The follower refetches when it is handed a frame — events carry
-		// identifiers, not data — so its own reads are how a test knows it heard
-		// one, with no sleep to be flaky about.
-		const refetched: string[] = [];
-		second.on('request', (request) => {
-			if (request.url().includes('/api/snapshot')) refetched.push(request.url());
-		});
 		await second.goto('/');
 		await expect(second.getByLabel('Update timeline')).toBeVisible();
 		await expect.poll(() => opened.length).toBe(1);
-		const before = refetched.length;
+
+		// Listen on the channel the tabs share, so the test waits for the frame to
+		// have actually reached the second tab rather than for a length of time.
+		await second.evaluate((name) => {
+			const window_ = window as unknown as { seen: number[] };
+			window_.seen = [];
+			new BroadcastChannel(name).addEventListener('message', (event: MessageEvent) => {
+				const message = event.data as { kind: string; frame?: { seq: number } };
+				if (message.kind === 'frame' && message.frame) window_.seen.push(message.frame.seq);
+			});
+		}, CHANNEL_NAME);
 
 		deliver();
-		await expect.poll(() => refetched.length).toBeGreaterThan(before);
+		await expect
+			.poll(() => second.evaluate(() => (window as unknown as { seen: number[] }).seen))
+			.toEqual([9]);
 
 		// The tab that held the connection goes away, now the other one has been
 		// handed what arrived on it.
