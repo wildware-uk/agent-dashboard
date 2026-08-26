@@ -19,12 +19,13 @@
 import { EventBus, bus as sharedBus } from '$events';
 import {
 	context,
+	type DomainContext,
 	isDomainError,
 	listAgentNames,
 	listProjects,
+	listThread,
 	listUpdateMedia,
 	listUpdates,
-	type DomainContext,
 	type MediaAttachment
 } from '$domain';
 import type { AuthConfig, SessionCookieReader } from '../auth';
@@ -92,10 +93,22 @@ export type SnapshotUpdates = {
 export type SnapshotAgentNames = Record<string, string>;
 
 /** Everything a resyncing client needs in one consistent read. */
+/**
+ * Every thread the page can show, from the same domain call `GET /api/messages`
+ * uses.
+ *
+ * In the snapshot rather than fetched on mount: without it the page painted and
+ * then a card's replies appeared a beat later, which reads as the thread having
+ * been empty and then filling in. Scoped to the same project as the timeline, so
+ * a project view does not carry the whole deployment's conversation.
+ */
+export type SnapshotMessages = ReturnType<typeof listThread>;
+
 export type FullSnapshot = {
 	projects: SnapshotProjects;
 	updates: SnapshotUpdates;
 	agentNames: SnapshotAgentNames;
+	messages: SnapshotMessages;
 };
 
 /** Just the timeline, for paging and for a scoped refetch. */
@@ -146,7 +159,12 @@ export function readFullSnapshot(
 	// Every agent, not only the ones on this page: paging deeper into the past
 	// must not reach an update whose poster the client cannot name, and the whole
 	// map is smaller than one card's markdown.
-	return { projects, updates: readUpdates(query, ctx), agentNames: listAgentNames(ctx) };
+	return {
+		projects,
+		updates: readUpdates(query, ctx),
+		agentNames: listAgentNames(ctx),
+		messages: listThread(ctx, query.project ? { project: query.project } : {})
+	};
 }
 
 /** The timeline alone, for paging deeper or refetching one project. */

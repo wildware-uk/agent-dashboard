@@ -6,7 +6,8 @@ import { render } from 'vitest-browser-svelte';
 import { describe, expect, it } from 'vitest';
 import Tasks from './Tasks.svelte';
 import { Tasks as TaskStore } from './tasks.svelte';
-import { FakeStream, aProject, aTask, fakeActions, fakeTasksApi } from './testing';
+import type { ThreadSource } from './threads.svelte';
+import { FakeStream, aMessage, aProject, aTask, fakeActions, fakeTasksApi } from './testing';
 
 /**
  * The owner's task panel (design §7): a plain per-project list across todo,
@@ -22,6 +23,7 @@ function mount(
 		project?: string | null;
 		agentNames?: Record<string, string>;
 		seq?: number;
+		threads?: ThreadSource;
 	} = {}
 ) {
 	const api = fakeTasksApi({ seq: options.seq ?? 4, tasks: options.tasks ?? [] });
@@ -44,7 +46,8 @@ function mount(
 			project: options.project ?? null,
 			projects: [aProject(), aProject({ id: 'p2', slug: 'other', name: 'Other' })],
 			agentNames: options.agentNames ?? { a1: 'scout' },
-			actions: acts.actions
+			actions: acts.actions,
+			threads: options.threads
 		})
 	};
 }
@@ -268,5 +271,57 @@ describe('on a phone', () => {
 			// Rounded: 2.75rem lands a few ten-thousandths under 44 in a real layout.
 			expect(Math.round(button.getBoundingClientRect().height), name).toBeGreaterThanOrEqual(44);
 		}
+	});
+});
+
+describe('the conversation on a task', () => {
+	it('replies against the task, not against an update', async () => {
+		// #14 built the plumbing for this (postMessage takes a task, the store
+		// exposes forTask) while the panel that needed it belonged to #11, so it
+		// went unwired. A task is the other thing an agent and its owner talk
+		// about — "why is this blocked", "use the other branch".
+		const { screen, acts, api } = mount({
+			tasks: [aTask({ id: 't1', title: 'Cut the release' })],
+			threads: { for: () => [], forTask: () => [] }
+		});
+		await api.settle();
+
+		await screen.getByRole('button', { name: 'Reply' }).first().click();
+		await screen.getByRole('textbox', { name: /repl/i }).first().fill('use release/1.0');
+		await screen.getByRole('button', { name: /send/i }).first().click();
+
+		await expect
+			.poll(() =>
+				acts.calls.filter((call) => call.name === 'postMessage').map((call) => call.args[0])
+			)
+			.toEqual([{ task: 't1', body: 'use release/1.0' }]);
+	});
+
+	it('shows what has already been said about it', async () => {
+		const said = [aMessage({ id: 'm1', taskId: 't1', author: 'human', body: 'blocked on what?' })];
+
+		const { screen, api } = mount({
+			tasks: [aTask({ id: 't1' })],
+			threads: { for: () => [], forTask: (id: string) => (id === 't1' ? said : []) }
+		});
+		await api.settle();
+
+		await expect.element(screen.getByText('blocked on what?')).toBeInTheDocument();
+	});
+
+	it('gives the reply control a thumb-sized target, measured', async () => {
+		// Measured, not asserted by class name: this file loads the real
+		// stylesheet, so `min-h-11` really is 44px here (design §7).
+		const { screen, api } = mount({
+			tasks: [aTask({ id: 't1' })],
+			threads: { for: () => [], forTask: () => [] }
+		});
+		await api.settle();
+
+		const reply = screen.getByRole('button', { name: 'Reply' }).first();
+		await expect.element(reply).toBeInTheDocument();
+		const box = (await reply.element()).getBoundingClientRect();
+
+		expect(box.height).toBeGreaterThanOrEqual(44);
 	});
 });
