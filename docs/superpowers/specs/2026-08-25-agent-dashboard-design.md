@@ -194,33 +194,51 @@ identifier as an argument**, so one agent cannot post as another.
 - `complete_task({task_id, result, post_update?})`
 - `get_messages({since?, project?, mark_read?})` — `mark_read` defaults to true and
   advances that agent's cursor.
-- `request_approval({question, options?, project?, update_id?, timeout_s?})`
-- `await_approval({approval_id})`
+- `request_input({kind, question, detail?, options?, placeholder?, multiline?, default?, min?, max?, project?, update?, timeout_s?})`
+- `await_request({request_id})`
 
 Fourteen tools is real context in every agent's window. If that becomes a problem,
 `end_session` and `attach_media` are the first to fold into their neighbours.
 
-### Approval gate semantics
+### Owner requests
+
+An agent frequently needs something only its owner can supply, and what it needs
+depends entirely on the work it was asked to do. Permission is only one shape of
+that, so a single versatile tool covers all of them:
+
+| kind | the agent wants | answer |
+|---|---|---|
+| `text` | free text — a commit message, a name, a missing value | string |
+| `confirm` | permission to do something consequential | boolean |
+| `buttons` | one action from several — "retry / skip / abort" | the chosen action |
+| `choice` | one option picked from a list | one value |
+| `multi_choice` | any number of options | list of values |
+
+**The server validates every answer against the request that asked for it**: a
+`choice` answer must be one of the offered options, `multi_choice` must respect
+`min` and `max`, `text` must respect `max_length`. The agent acts on these answers,
+and a browser is not a trustworthy client.
 
 Holding an HTTP request until a human clicks does not work: MCP clients time out
 tool calls long before a human necessarily responds, and a dropped connection
-loses the wait. The gate is therefore a **bounded long-poll with durable resume**.
+loses the wait. Every kind is therefore a **bounded long-poll with durable resume**.
 
-1. `request_approval` writes a `pending` row, publishes `approval.created`, and the
-   browser shows a card with the question and option buttons.
+1. `request_input` writes a `pending` row, publishes `request.created`, and the
+   browser shows the prompt with the control that kind calls for.
 2. The call parks on the event bus for at most `HOLD_S` (default 55 seconds,
    deliberately under the common 60 second client tool timeout).
-3. If decided within the hold, it returns `{state, value, decided_at}` where state
-   is `approved` or `rejected`.
-4. If still pending, it returns `{state: "pending", approval_id, poll_after_ms}`.
-   The tool description instructs the agent to call `await_approval(approval_id)`
+3. If answered within the hold, it returns `{state: "answered", response, answered_at}`,
+   where `response` is `{kind, value}` and `value` is a string, a boolean or a list
+   of strings depending on the kind.
+4. If still pending, it returns `{state: "pending", request_id, poll_after_ms}`.
+   The tool description instructs the agent to call `await_request(request_id)`
    and keep looping while `state === "pending"`.
 
-The wait is durable because the approval lives in the database rather than in a
-socket: an agent that crashes mid-wait restarts, calls `await_approval`, and
+The wait is durable because the request lives in the database rather than in a
+socket: an agent that crashes mid-wait restarts, calls `await_request`, and
 resumes. `expires_at` (from `timeout_s`, default one hour) flips the row to
-`timeout`. Deleting the card in the UI flips it to `cancelled`. Every parked
-waiter unblocks on the same `approval.decided` event.
+`timeout`. Dismissing the prompt in the UI flips it to `cancelled`. Every parked
+waiter unblocks on the same `request.answered` event.
 
 ## 6. Media pipeline
 
@@ -255,9 +273,12 @@ Dark-first, system-aware, Tailwind. Three regions on desktop:
   Video plays inline.
 - **Right rail** — live agents (derived presence) and open tasks.
 
-**Pending approvals get a sticky top banner, not a rail item.** An approval is the
-one case where an agent is stopped dead waiting on the owner, so it must be
-impossible to miss. Optional browser notification on `approval.created`.
+**Pending requests get a sticky top banner, not a rail item.** A request is the one
+case where an agent is stopped dead waiting on the owner, so it must be impossible
+to miss. Each kind renders its own control — a text field, a row of action buttons,
+a radio list, a checkbox list, approve and reject — and several outstanding requests
+queue rather than overwrite one another. Optional browser notification on
+`request.created`.
 
 Tasks are a plain per-project list across todo / claimed / done. No drag and drop.
 
