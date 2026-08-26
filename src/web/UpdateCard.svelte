@@ -13,11 +13,12 @@
 	import { agentLabel } from './avatar';
 	import Markdown from './Markdown.svelte';
 	import MediaGrid from './MediaGrid.svelte';
+	import Thread from './Thread.svelte';
 	import UpdateActions from './UpdateActions.svelte';
 	import type { OwnerActions } from './actions';
 	import { timeLabel } from './days';
 	import { levelStyle } from './levels';
-	import type { UpdateView } from './types';
+	import type { MessageView, UpdateView } from './types';
 
 	let {
 		update,
@@ -43,21 +44,48 @@
 		 */
 		media,
 		/**
-		 * The owner's write calls (design §7). Given one, the card grows a pin and
-		 * a delete; without one it renders exactly as it always has, which is what
-		 * keeps every existing card spec honest.
+		 * The owner's write calls (design §7). Given one, the card grows a pin, a
+		 * delete and a reply box; without one it renders exactly as it always has,
+		 * which is what keeps every existing card spec honest.
 		 */
-		actions
+		actions,
+		/**
+		 * This card's thread, oldest first (design §7).
+		 *
+		 * Handed down rather than fetched, because the page reads every thread in
+		 * one request: fifty cards asking individually would be fifty requests to
+		 * discover that most of them have no replies (`threads.svelte.ts`).
+		 */
+		messages = [],
+		/**
+		 * Agent id to display name, for the *other* speakers in the thread.
+		 *
+		 * `agentName` names this card's poster; a thread can hold replies from any
+		 * agent, and an unnamed one would print as a ULID.
+		 */
+		agentNames = {}
 	}: {
 		update: UpdateView;
 		agentName?: string;
 		isNew?: boolean;
 		media?: Snippet<[UpdateView]>;
 		actions?: OwnerActions;
+		messages?: MessageView[];
+		agentNames?: Record<string, string>;
 	} = $props();
 
 	const level = $derived(levelStyle(update.level));
 	const poster = $derived(agentLabel(update.agentId, agentName));
+
+	/**
+	 * Posting the reply is the action client's job, not the card's: the write
+	 * publishes `message.created`, the tab hears it on the stream and the thread
+	 * refetches, so the reply arrives here the same way it arrives in a tab that
+	 * was only watching (design §4).
+	 */
+	async function reply(body: string): Promise<void> {
+		await actions?.postMessage({ update: update.id, body });
+	}
 </script>
 
 <article
@@ -126,5 +154,14 @@
 				<MediaGrid items={update.media ?? []} />
 			{/if}
 		</div>
+
+		<!--
+			The conversation on this card (design §7). Only for the owner: the reply
+			box is a write, and a card rendered without an action client has nobody
+			to write as.
+		-->
+		{#if actions}
+			<Thread {messages} {agentNames} onreply={reply} />
+		{/if}
 	</div>
 </article>

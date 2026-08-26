@@ -1,7 +1,7 @@
 import { render } from 'vitest-browser-svelte';
 import { describe, expect, it } from 'vitest';
 import UpdateCard from './UpdateCard.svelte';
-import { aMedia, anUpdate, fakeActions } from './testing';
+import { aMedia, aMessage, anUpdate, fakeActions } from './testing';
 
 /**
  * The card in a real browser. The markdown case here is the one that matters:
@@ -160,5 +160,58 @@ describe('the owner controls on a card', () => {
 		render(UpdateCard, { update: anUpdate({ id: 'u9', pinned: true }) });
 
 		expect(document.querySelector('article')?.textContent).toContain('Pinned');
+	});
+});
+
+describe('the thread on a card (design §7)', () => {
+	it('is absent, reply box and all, on a card with no action client', async () => {
+		const screen = render(UpdateCard, {
+			update: anUpdate(),
+			messages: [aMessage({ body: 'nice one' })]
+		});
+
+		expect(screen.getByRole('button', { name: 'Reply' }).elements()).toHaveLength(0);
+		expect(document.querySelector('[data-thread]')).toBeNull();
+	});
+
+	it('renders the messages it was handed inline, under the body', async () => {
+		const api = fakeActions();
+		const screen = render(UpdateCard, {
+			update: anUpdate({ body: 'shipped it' }),
+			messages: [aMessage({ id: 'm1', body: 'nice one' })],
+			actions: api.actions
+		});
+
+		await expect.element(screen.getByText('nice one')).toBeInTheDocument();
+		expect(document.querySelectorAll('[data-message]')).toHaveLength(1);
+	});
+
+	it('replies on the card it is on, and posts nothing else', async () => {
+		const api = fakeActions();
+		const screen = render(UpdateCard, {
+			update: anUpdate({ id: 'u42' }),
+			actions: api.actions
+		});
+
+		await screen.getByRole('button', { name: 'Reply' }).click();
+		await screen.getByLabelText('Reply to this update').fill('try the other branch');
+		await screen.getByRole('button', { name: 'Send reply' }).click();
+
+		expect(api.calls).toEqual([
+			{ name: 'postMessage', args: [{ update: 'u42', body: 'try the other branch' }] }
+		]);
+	});
+
+	it('names an agent in the thread from the map the shell resolved', async () => {
+		const api = fakeActions();
+		const screen = render(UpdateCard, {
+			update: anUpdate({ agentId: 'a1' }),
+			agentName: 'scout',
+			agentNames: { a2: 'release bot' },
+			messages: [aMessage({ author: 'agent:a2', body: 'on it' })],
+			actions: api.actions
+		});
+
+		await expect.element(screen.getByText('release bot')).toBeInTheDocument();
 	});
 });

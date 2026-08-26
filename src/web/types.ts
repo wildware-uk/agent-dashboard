@@ -123,3 +123,66 @@ export type SnapshotResponse = {
 	 */
 	agentNames?: Record<string, string>;
 };
+
+/** Where a task is in its life (design §3). */
+export type TaskState = 'todo' | 'claimed' | 'done' | 'cancelled';
+
+/**
+ * One task as `GET /api/snapshot/tasks` sends it.
+ *
+ * `body` is the brief the owner wrote and `result` is what the agent reported,
+ * so both are untrusted text as far as rendering goes — they are shown as text,
+ * never as markup, for the same reason an update's markdown renders with raw HTML
+ * disabled (design §8).
+ */
+export type TaskView = {
+	id: string;
+	seq: number;
+	projectId: string;
+	/** The claimant, or the agent the owner targeted it at, or `null`. */
+	agentId: string | null;
+	title: string;
+	body: string;
+	state: TaskState;
+	createdAt: number;
+	claimedAt: number | null;
+	doneAt: number | null;
+	result: string | null;
+};
+
+/** `GET /api/snapshot/tasks`. */
+export type TasksSnapshot = {
+	/** The newest event seq this state accounts for. */
+	seq: number;
+	at: string;
+	tasks: TaskView[];
+};
+
+/**
+ * One message as `GET /api/messages` sends it (design §3, §7).
+ *
+ * `author` is the literal `human` or `agent:<agent_id>`, which is a string
+ * rather than an id because the owner is not a row in a single-owner
+ * deployment. `body` is markdown and untrusted like any other body on this page:
+ * it goes through the same renderer with raw HTML disabled (design §8), which
+ * `Thread.svelte.spec.ts` asserts in a real browser.
+ */
+export type MessageView = {
+	id: string;
+	seq: number;
+	projectId: string | null;
+	updateId: string | null;
+	taskId: string | null;
+	author: string;
+	body: string;
+	createdAt: number;
+};
+
+/** `GET /api/messages`: every thread in scope, stamped with the cursor it is good to. */
+export type MessagesSnapshot = {
+	/** The newest event seq this state accounts for. */
+	seq: number;
+	at: string;
+	/** Oldest first: a conversation is read downwards. */
+	messages: MessageView[];
+};

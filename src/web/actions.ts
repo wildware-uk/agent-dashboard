@@ -15,7 +15,7 @@
  * The returned row is still handed back, because a control needs to know the
  * call succeeded before it closes its form.
  */
-import type { ProjectStatus, ProjectView, UpdateView } from './types';
+import type { MessageView, ProjectStatus, ProjectView, TaskView, UpdateView } from './types';
 
 /** Just enough of `fetch`. The browser's own satisfies it. */
 export type Requester = (url: string, init: RequestInit) => Promise<Response>;
@@ -25,6 +25,48 @@ export type NewProject = {
 	name: string;
 	description?: string | null;
 	slug?: string;
+};
+
+/**
+ * What the new-task form sends (design §7).
+ *
+ * `agentId` is the owner targeting one agent — the one place in this product
+ * where an agent id is an argument rather than an identity, because the owner is
+ * the one saying it and the session cookie is what proves that.
+ */
+export type NewTask = {
+	project: string;
+	title: string;
+	body?: string | null;
+	agentId?: string | null;
+};
+
+/**
+ * What the owner may change about a task.
+ *
+ * Two things, and deliberately not the state machine: reassigning it, and
+ * cancelling it. Claiming and completing belong to the agent doing the work
+ * (design §5), so there is no `state: 'done'` here for a browser to fake.
+ */
+export type TaskPatch = {
+	agentId?: string | null;
+	state?: 'cancelled';
+};
+
+/**
+ * What the reply box sends (design §7).
+ *
+ * The scope is what the message hangs off — a card, a task, or a project — and
+ * exactly one of them is given. There is no `author` field: the owner is the
+ * literal `human` and the server decides that from the session cookie, so a
+ * browser cannot write a message as anybody else.
+ */
+export type NewMessage = {
+	body: string;
+	/** The update being replied to. */
+	update?: string;
+	task?: string;
+	project?: string;
 };
 
 /** The fields the owner may change about a project (design §7). */
@@ -62,6 +104,9 @@ export type OwnerActions = {
 	patchProject(reference: string, patch: ProjectPatch): Promise<ProjectView>;
 	setUpdatePinned(id: string, pinned: boolean): Promise<UpdateView>;
 	deleteUpdate(id: string): Promise<UpdateView>;
+	createTask(input: NewTask): Promise<TaskView>;
+	patchTask(id: string, patch: TaskPatch): Promise<TaskView>;
+	postMessage(input: NewMessage): Promise<MessageView>;
 };
 
 /**
@@ -72,12 +117,12 @@ export type OwnerActions = {
  * handlers.
  */
 export function ownerActions(request: Requester = defaultRequest): OwnerActions {
-	async function send<Key extends 'project' | 'update'>(
+	async function send<Key extends 'project' | 'update' | 'task' | 'message'>(
 		key: Key,
 		url: string,
 		method: string,
 		body?: unknown
-	): Promise<Key extends 'project' ? ProjectView : UpdateView> {
+	): Promise<Sent<Key>> {
 		const init: RequestInit = { method, headers: { accept: 'application/json' } };
 		if (body !== undefined) {
 			init.body = JSON.stringify(body);
@@ -106,9 +151,21 @@ export function ownerActions(request: Requester = defaultRequest): OwnerActions 
 			send('project', `/api/projects/${encodeURIComponent(reference)}`, 'PATCH', patch),
 		setUpdatePinned: (id, pinned) =>
 			send('update', `/api/updates/${encodeURIComponent(id)}`, 'PATCH', { pinned }),
-		deleteUpdate: (id) => send('update', `/api/updates/${encodeURIComponent(id)}`, 'DELETE')
+		deleteUpdate: (id) => send('update', `/api/updates/${encodeURIComponent(id)}`, 'DELETE'),
+		createTask: (input) => send('task', '/api/tasks', 'POST', input),
+		patchTask: (id, patch) => send('task', `/api/tasks/${encodeURIComponent(id)}`, 'PATCH', patch),
+		postMessage: (input) => send('message', '/api/messages', 'POST', input)
 	};
 }
+
+/** Which row an endpoint answers with, keyed by the field it arrives under. */
+type Sent<Key extends 'project' | 'update' | 'task' | 'message'> = Key extends 'project'
+	? ProjectView
+	: Key extends 'update'
+		? UpdateView
+		: Key extends 'task'
+			? TaskView
+			: MessageView;
 
 /**
  * What to show the owner when an action failed.

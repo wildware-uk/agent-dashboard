@@ -16,18 +16,33 @@
  * | `PATCH /api/projects/[reference]`| Rename, re-describe, pin, archive.          |
  * | `PATCH /api/updates/[id]`        | Pin or unpin one update.                    |
  * | `DELETE /api/updates/[id]`       | Soft delete one update.                     |
+ * | `POST /api/tasks`                | Create a task, optionally assigned.         |
+ * | `PATCH /api/tasks/[id]`          | Reassign one task, or cancel it.            |
+ * | `GET /api/messages`              | One thread, or every thread in a project.   |
+ * | `POST /api/messages`             | Reply as the owner: the literal `human`.    |
  *
- * All four require the owner's session and answer `401 {"error":"unauthenticated"}`
+ * All of them require the owner's session and answer `401 {"error":"unauthenticated"}`
  * without it. Every success publishes exactly one event, so a second open tab
  * follows along over `GET /api/stream` without polling.
  */
 export {
 	createProjectHandler,
+	createTaskHandler,
 	deleteUpdateHandler,
 	patchProjectHandler,
+	patchTaskHandler,
 	patchUpdateHandler,
 	readCreateProject,
+	readCreateTask,
 	readProjectPatch,
+	readTaskPatch,
 	readUpdatePatch
 } from './actions';
-export type { OwnerActionEvent, OwnerHandler, OwnerHandlerOptions } from './actions';
+export type { OwnerActionEvent, OwnerHandler, OwnerHandlerOptions, TaskPatch } from './actions';
+export {
+	listMessagesHandler,
+	postMessageHandler,
+	readReply,
+	readThreadQuery,
+	type MessageHandlerOptions
+} from './messages';

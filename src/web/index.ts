@@ -39,10 +39,13 @@ export {
 	ActionError,
 	actionMessage,
 	ownerActions,
+	type NewMessage,
 	type NewProject,
+	type NewTask,
 	type OwnerActions,
 	type ProjectPatch,
-	type Requester
+	type Requester,
+	type TaskPatch
 } from './actions';
 export { renderMarkdown } from './markdown';
 export {
@@ -72,11 +75,28 @@ export type {
 	MediaView,
 	ProjectStatus,
 	ProjectView,
+	MessageView,
+	MessagesSnapshot,
 	SnapshotResponse,
+	TaskState,
+	TaskView,
+	TasksSnapshot,
 	UpdateLevel,
 	UpdateView,
 	UpdatesPage
 } from './types';
+/**
+ * The page's message threads (design §7). One store per page, read by every
+ * card, so a fifty-card timeline costs one request rather than fifty.
+ */
+export { Threads } from './threads.svelte';
+export type { ThreadSource, ThreadsOptions, ThreadsStatus } from './threads.svelte';
+/**
+ * The owner's task list (design §5, §7). One store per page, rendered in the
+ * rail on a desktop and in the rail drawer on a phone.
+ */
+export { Tasks } from './tasks.svelte';
+export type { TasksOptions, TasksStatus } from './tasks.svelte';
 export { PRESENCE_WINDOW_MS, Presence, heartbeatLabel } from './presence.svelte';
 export type {
 	AgentsSnapshot,

@@ -18,7 +18,7 @@
  *   between an agent that retries with a corrected argument and one that gives
  *   up on the transport.
  */
-import { isDomainError, type Project, type Update } from '$domain';
+import { isDomainError, type Message, type Project, type Task, type Update } from '$domain';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 
 /** Milliseconds since the epoch, as agents should read it. */
@@ -122,5 +122,73 @@ export function updateView(update: Update): UpdateView {
 		pinned: update.pinned,
 		body_chars: update.body.length,
 		created_at: iso(update.createdAt)
+	};
+}
+
+export type TaskView = {
+	id: string;
+	project_id: string;
+	/** The claimant, or the agent the owner targeted it at, or `null`. */
+	agent_id: string | null;
+	title: string;
+	/**
+	 * The brief, in full.
+	 *
+	 * Unlike {@link UpdateView}, which reports only a length, a task's body is the
+	 * instruction the agent is about to act on: sending a character count and
+	 * making it call a second tool for the words would be a strange economy.
+	 */
+	body: string;
+	state: string;
+	created_at: string;
+	claimed_at: string | null;
+	done_at: string | null;
+	/** What the claimant reported when it finished, or `null` while it has not. */
+	result: string | null;
+};
+
+/** A task as a tool reports it. `id` is what `claim_task` takes back. */
+export function taskView(task: Task): TaskView {
+	return {
+		id: task.id,
+		project_id: task.projectId,
+		agent_id: task.agentId,
+		title: task.title,
+		body: task.body,
+		state: task.state,
+		created_at: iso(task.createdAt),
+		claimed_at: task.claimedAt === null ? null : iso(task.claimedAt),
+		done_at: task.doneAt === null ? null : iso(task.doneAt),
+		result: task.result
+	};
+}
+
+export type MessageView = {
+	id: string;
+	project_id: string | null;
+	update_id: string | null;
+	task_id: string | null;
+	/** The literal `human`, or `agent:<agent_id>` (design §3). */
+	author: string;
+	/** Markdown, as it was written. */
+	body: string;
+	created_at: string;
+};
+
+/**
+ * A message as a tool reports it.
+ *
+ * The body *is* echoed, unlike {@link updateView}'s: this is the one thing the
+ * agent did not write and is calling to find out.
+ */
+export function messageView(message: Message): MessageView {
+	return {
+		id: message.id,
+		project_id: message.projectId,
+		update_id: message.updateId,
+		task_id: message.taskId,
+		author: message.author,
+		body: message.body,
+		created_at: iso(message.createdAt)
 	};
 }

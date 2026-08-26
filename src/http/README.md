@@ -76,8 +76,12 @@ publishes are all tested without a server. Public entry point:
 | `PATCH /api/projects/[reference]` | Rename, re-describe, pin, archive or unarchive. `reference` is a slug or an id. |
 | `PATCH /api/updates/[id]`         | Pin or unpin one update. Nothing else about an update is editable.              |
 | `DELETE /api/updates/[id]`        | Soft delete one update (§3).                                                    |
+| `GET /api/messages`               | One card's thread, or every thread in a project. Stamped with its seq.          |
+| `POST /api/messages`              | Reply as the owner — the literal `human`, decided from the cookie (§3).         |
+| `POST /api/tasks`                 | Put a task on a project, optionally targeted at one agent (§7).                 |
+| `PATCH /api/tasks/[id]`           | Reassign one task, or cancel it. Not claim, and not complete.                   |
 
-All four require the owner's session and answer `401 {"error":"unauthenticated"}`
+All of them require the owner's session and answer `401 {"error":"unauthenticated"}`
 without it, checked in the handler as well as in the hook because these are the
 only endpoints that can destroy anything. A refusal carries the domain's own code
 (`invalid_argument`, `not_found`, `conflict`) as `400`, `404`, `409`, so the
@@ -87,6 +91,23 @@ Every success publishes exactly one event, because the domain publishes it — s
 second open tab follows a rename, a pin, an archive or a delete over
 `GET /api/stream` with nothing to poll. `owner/live-sync.test.ts` is that claim as
 a test: real domain, real bus, real snapshot endpoint, two stores, one write.
+
+The task routes are the owner's half of the control plane, and the omissions are
+the point: there is no endpoint that claims a task or marks one done. Those are
+`claim_task` and `complete_task` over MCP (§5), so a browser cannot record work
+that no agent did. `PATCH /api/tasks/[id]` therefore accepts an assignee or
+`state: "cancelled"` and refuses any other state outright rather than dropping it
+quietly. `GET /api/snapshot/tasks` reads the open tasks and the finished tail
+separately, so a project with a long history cannot answer with fifty done tasks
+and hide the one thing the panel is for.
+
+`owner/messages.ts` holds the two message routes and shares that wrapper rather
+than repeating it: a second copy of the auth check is a second chance to forget
+it. `GET /api/messages` answers the whole scope in one request — every message in
+a project, its cards' threads included — because a fifty-card timeline asking per
+card would be fifty requests to discover that most cards have no replies.
+`owner/messages-live.test.ts` is the reply's live path as a test: the owner types
+in one tab and both tabs' threads show it, with no reload.
 
 The `SameSite=Lax` session cookie is what makes these safe from cross-site
 forgery: a third-party page's request arrives with no session at all.
@@ -137,6 +158,7 @@ without a server. Public entry point: `src/http/stream/index.ts`.
 | `GET /api/snapshot`         | Projects plus the newest timeline page, stamped with the seq it is good to.  |
 | `GET /api/snapshot/updates` | The timeline alone, for paging (`?cursor=`) or a scoped refetch.             |
 | `GET /api/snapshot/agents`  | Who is online right now, derived from heartbeats. No query, no pages.        |
+| `GET /api/snapshot/tasks`   | The task list for `?project=`, or for every project. No pages.               |
 
 `/api/snapshot/agents` is the right rail's own read. Presence is derived and
 never stored (§4), so it takes no filter and no cursor: the answer is whoever has

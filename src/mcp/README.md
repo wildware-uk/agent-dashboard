@@ -76,7 +76,8 @@ throttled, while a request with no credentials costs nothing to refuse.
 
 ## Tools
 
-Eight of the fourteen in design §5 are built (§11 steps 5, 9 and 12):
+The tools built so far, of the fourteen in design §5 (§11 steps 5, 9, 12, 13 and 14).
+`TOOL_NAMES` is the list that cannot drift:
 
 | Tool               | Takes                                                                           | Does                                               |
 | ------------------ | ------------------------------------------------------------------------------- | -------------------------------------------------- |
@@ -88,6 +89,10 @@ Eight of the fourteen in design §5 are built (§11 steps 5, 9 and 12):
 | `register_session` | `meta?` (`{host, cwd, model}`)                                                  | Opens a session; returns `heartbeat_interval_s`.   |
 | `heartbeat`        | `session_id`                                                                    | Stays online; piggybacks the three work counts.    |
 | `end_session`      | `session_id`                                                                    | Closes the run. Idempotent.                        |
+| `get_messages`     | `since?`, `project?`, `mark_read?`                                              | Reads what the owner said. Advances your cursor.   |
+| `list_tasks`       | `project?`, `state?`, `mine?`                                                   | The work queue. `mine` is your token, not an id.   |
+| `claim_task`       | `task_id`                                                                       | One atomic claim; the loser gets `conflict`.       |
+| `complete_task`    | `task_id`, `result`, `post_update?`                                             | Closes your claim, optionally posting a card.      |
 
 `post_update` takes `media_ids` and refuses the whole post if any id is not the
 caller's to attach — an image an agent believes it published must not be silently
@@ -115,8 +120,25 @@ refuse with in its own description — `not_found`, `invalid_argument`, and for
 `heartbeat` `conflict` — because an agent cannot handle an error it was never told
 about.
 
+`claim_task` is the one tool written for contention. The domain does it in a
+single `UPDATE ... WHERE state='todo'` (`src/domain/tasks.ts`), so two agents
+reaching for the same task produce one claim and one clean `conflict` saying it
+was already claimed — never a task with two owners. Its description tells the
+loser not to retry but to list `todo` tasks and claim another, because retrying a
+task somebody else is now working on is the one thing that would waste the whole
+race. `list_tasks({mine: true})` resolves to the bearer token's agent and takes no
+identifier, so an agent can never read another's queue; and `complete_task`'s
+`post_update` is off by default, because ten small tasks finishing in a row would
+bury the feed the product exists to keep readable.
+
+`get_messages` is the only tool whose default has a side effect: `mark_read`
+defaults to true, so the ordinary call means "give me what is new and remember
+that I have it". A narrowed read — one project, or an explicit `since` — will not
+move the cursor past a message it did not hand over, so delivery is at-least-once
+rather than at-most-once: an agent may be given the same message twice, and can
+never silently lose one. The reasoning is in `src/domain/messages.ts`.
+
 Still to come, in build order (§11):
-`list_tasks` / `claim_task` / `complete_task` (13), `get_messages` (14),
 `request_approval` / `await_approval` (15).
 
 ## Testing

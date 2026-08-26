@@ -16,7 +16,8 @@ Notes carried from the design (§7):
   follows that attribute. Semantic tokens (`surface`, `content`, `accent`, …) are
   defined in `src/http/routes/app.css`.
 - Desktop is three regions: project sidebar, update timeline, live agents +
-  open tasks rail. Mobile is one column with the sidebar as a drawer.
+  open tasks rail. Mobile is one column with the sidebar as a drawer and the rail
+  as a second drawer, so nothing that only lives in the rail is lost on a phone.
 - **Pending approvals get a sticky top banner, not a rail item** — an approval is
   the one case where an agent is stopped dead waiting on the owner.
 - Agent markdown is untrusted: render with raw HTML disabled (§8).
@@ -36,10 +37,14 @@ Notes carried from the design (§7):
 | `Lightbox.svelte`                   | Full-size viewing, keyboard navigable, focus trapped and returned.                           |
 | `media.ts`                          | Pure media decisions: addresses, cell shapes, sources, labels.                               |
 | `Markdown.svelte`                   | The only `{@html}` in the client.                                                            |
-| `RightRail.svelte`                  | Live agents with their session metadata; open tasks still a placeholder (§7).                |
+| `RightRail.svelte`                  | Live agents with their session metadata (§7).                                                |
+| `Tasks.svelte`                      | The task list — todo, claimed, done — plus creating, assigning and cancelling (§7).          |
+| `tasks.svelte.ts`                   | The task store: the list, live on `task.created` and `task.updated` (§5, §7).                |
 | `stream.ts`                         | The tab's one connection to `/api/stream`, shared by every consumer (§4).                    |
 | `timeline.svelte.ts`                | The client store: snapshot, stream, pending arrivals, paging.                                |
 | `presence.svelte.ts`                | The live-agents store: who is online, derived against a ticking clock (§4).                  |
+| `threads.svelte.ts`                 | The page's message threads: one request for every card, live on `message.created` (§7).      |
+| `Thread.svelte`                     | One card's conversation, and the box the owner replies in (§7).                              |
 | `actions.ts`                        | The owner's write calls: create, rename, pin, archive, delete (§7).                          |
 | `NewProject.svelte`                 | Create a project from the browser.                                                           |
 | `ProjectActions.svelte`             | Per-project menu: pin, rename, re-describe, archive, unarchive.                              |
@@ -48,6 +53,52 @@ Notes carried from the design (§7):
 | `avatar.ts`, `levels.ts`, `days.ts` | Pure helpers: name hash, level palette, day grouping.                                        |
 | `types.ts`                          | The wire shapes, declared here because this module may not import `$db`.                     |
 | `testing.ts`                        | Test-only fakes: a scripted `EventSource` and a fake snapshot API.                           |
+
+## The task panel
+
+A plain per-project list across todo, claimed and done, with no drag and drop —
+which the design asks for (§7) and the surface argues for: 17rem in the rail, a
+thumb's width on a phone.
+
+**The owner creates and steers; the agent claims and completes.** So the panel
+offers exactly two writes — put work on a project, and reassign or withdraw it —
+and no control that would mark work done. Claiming is `claim_task` over MCP, and
+a browser that could fake it would be a browser that lies about who did the work.
+
+**Nothing renders optimistically.** A control awaits its call, the server
+publishes `task.created` or `task.updated`, and the change comes back through the
+store on the stream — the same route it takes when an agent claims something from
+the other side of the world. That is why "a claim appears with no reload" and
+"the owner's own click appears" are one code path rather than two.
+
+**One store, two mounts.** The panel is in the rail on a desktop and in the rail
+drawer on a phone, because §7 is explicit that information which only exists in
+the rail must still be reachable on a small screen. The store refcounts its
+holders, so closing the drawer does not unsubscribe the rail's copy.
+
+## The conversation on a card
+
+The owner replies on a card and the thread renders inline (§7). Three decisions
+shape it, and all three come from the transport rather than from taste.
+
+**One request for the whole page, not one per card.** A timeline holds fifty
+cards and almost none of them have replies, so `threads.svelte.ts` reads every
+message in scope in one go and hands each card its own by id. A card that fetched
+for itself would turn one page load into fifty requests to learn that nothing
+happened.
+
+**Nothing is inserted optimistically.** The reply box `await`s the post and then
+does nothing: the write publishes `message.created`, the tab hears it on its own
+stream and the store refetches, so the reply lands in the tab that sent it by
+exactly the path it lands in a tab that was only watching. That is the same rule
+`actions.ts` keeps for every other control, and it is why there is no state here
+that can disagree with the server.
+
+**A message body is untrusted like any other.** It renders through
+`Markdown.svelte`, whose renderer has raw HTML disabled (§8), so an agent that
+replies with `<script>` puts a `<script>` on the screen and not one in the
+owner's browser. `Thread.svelte.spec.ts` asserts that in a real browser rather
+than trusting the string test alone.
 
 ## Media on a card
 

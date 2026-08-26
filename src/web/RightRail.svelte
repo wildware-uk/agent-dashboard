@@ -13,9 +13,14 @@
 	 * because the timeline needs the names presence learns as much as the rail
 	 * needs the heartbeats, and a spec can inject its own. Starting it here as
 	 * well as in the shell is deliberate and free — `start` and `stop` are
-	 * idempotent — so the rail still works on its own. Open tasks are still a placeholder: that is
-	 * the control-plane slice's slot, and inventing an empty state for data this
-	 * component cannot fetch would be a claim rather than a rendering.
+	 * idempotent — so the rail still works on its own.
+	 *
+	 * Tasks are the rail's other half in design §7, and they exist now: the shell
+	 * renders `Tasks.svelte` under this component, in the same column. They are
+	 * not mounted from in here because the task panel writes as well as reads — it
+	 * needs the owner's actions, the project list and the agent names, all of
+	 * which the shell already holds — and a rail that reached for those itself
+	 * would be a second place they are wired.
 	 */
 	import { onMount } from 'svelte';
 	import Avatar from './Avatar.svelte';
@@ -102,10 +107,5 @@
 				{/each}
 			</ul>
 		{/if}
-	</section>
-
-	<section class="flex flex-col gap-2">
-		<h2 class="text-xs font-semibold tracking-wide text-content-muted uppercase">Open tasks</h2>
-		<p class="text-content-muted">Tasks arrive with the control-plane slice.</p>
 	</section>
 </div>

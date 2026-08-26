@@ -54,6 +54,8 @@ import {
 } from '$db';
 import { context, type DomainContext } from './context';
 import { conflict, invalid, notFound } from './errors';
+import { countUnreadMessages } from './messages';
+import { countOpenTasks } from './tasks';
 import { optionalText } from './text';
 
 /**
@@ -372,15 +374,15 @@ export type WorkCounter = (ctx: DomainContext, agentId: string) => number;
 /**
  * The seam the control-plane slices fill in.
  *
- * Tasks, messages and approvals do not exist yet, so each answers zero. When
- * they land, each slice replaces **one function here** — nothing about the
- * heartbeat response moves, and no agent's parsing of it changes.
+ * Each slice replaces **one function here** as it lands — nothing about the
+ * heartbeat response moves, and no agent's parsing of it changes. Tasks (#11)
+ * and messages (#14) have done exactly that; approvals still answer zero.
  */
 export const WORK_COUNTERS: Record<keyof WorkCounts, WorkCounter> = {
-	/** #14, messages: unread is `read_cursors` versus `messages.seq` (design §3). */
-	unreadMessages: () => 0,
-	/** #11, tasks: this agent's `todo` and `claimed` rows. */
-	openTasks: () => 0,
+	/** Messages after this agent's cursor, its own excluded (`./messages.ts`). */
+	unreadMessages: (ctx, agentId) => countUnreadMessages(ctx, agentId),
+	/** This agent's `todo` and `claimed` rows (`./tasks.ts`). */
+	openTasks: (ctx, agentId) => countOpenTasks(ctx, agentId),
 	/** #15, approvals: this agent's `pending` rows. */
 	pendingApprovals: () => 0
 };

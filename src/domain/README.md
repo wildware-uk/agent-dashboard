@@ -50,6 +50,8 @@ const { updates, nextCursor } = listUpdates(ctx, { project: 'agent-dashboard', l
 | `projects.ts` | `createProject`, `listProjects`, `updateProject`, `findProject`, `resolveProject`.    |
 | `updates.ts`  | `postUpdate`, `listUpdates`, `deleteUpdate`.                                          |
 | `sessions.ts` | `registerSession`, `heartbeat`, `endSession`, `listLiveAgents`, the sweeper.          |
+| `messages.ts` | `postMessage`, `readMessages`, `listThread`, `countUnreadMessages`.                   |
+| `tasks.ts`    | `createTask`, `listTasks`, `claimTask`, `completeTask`, `cancelTask`, `assignTask`.   |
 
 Decisions worth knowing before changing them:
 
@@ -74,6 +76,36 @@ Decisions worth knowing before changing them:
   presence state exists to lose. One consequence is deliberate: crossing the 90s
   line writes nothing, so going quiet is _observed_ by the rail rather than
   announced.
+- **Unread is a cursor, never a flag** (§3): `read_cursors` holds one integer per
+  reader, so "unread" is `messages.seq` against that integer and a second reader
+  is a row rather than a migration. `readMessages` therefore only ever advances
+  the cursor over messages it actually handed over — a read narrowed to one
+  project, or started from an explicit `since`, stops short of anything it
+  stepped over. The consequence is at-least-once delivery: the same message can
+  come back twice, and cannot silently vanish. The heartbeat's `unreadMessages`
+  count is the same comparison, so the two can never disagree.
+- **A claim is one statement** (§5): `claimTask` is a single
+  `UPDATE tasks SET state='claimed' … WHERE id = ? AND state = 'todo'`, so of two
+  agents racing for the same task SQLite picks the winner and the loser's update
+  touches nothing. The loser's _message_ comes from re-reading the row
+  afterwards, which is safe precisely because the outcome was already decided by
+  the failed write. `completeTask` works the same way: the "is this still your
+  claim" check is part of the statement, not a read before it.
+- **The owner assigns; the agent claims.** A task the owner targeted at one agent
+  may only be claimed by that agent, and that one check _is_ a read before the
+  write — deliberately, because assignees change in a browser rather than in a
+  race, and the guarantee that matters (one claimant) does not depend on it.
+- **`openTasks` in a heartbeat is this agent's own `todo` and `claimed` rows.**
+  An unclaimed task on the queue is not work anybody has been given, and counting
+  it would tell every agent in the deployment it had something to do.
+- **`messages.author` is a string, not a foreign key** (§3): the literal `human`,
+  or `agent:<agent_id>`. There is no user table in a single-owner deployment, and
+  a nullable `agent_id` plus a flag would be two columns encoding one fact.
+  `authorText` and `parseAuthor` are the only places that format is written.
+- **A message's project comes from what it hangs off.** A reply on an update
+  takes the update's project; naming a project that contradicts it is refused
+  rather than reconciled, because quietly filing a message somewhere the caller
+  did not ask for and reporting success is worse than a 400.
 - **`heartbeat` piggybacks `{unreadMessages, openTasks, pendingApprovals}`** so an
   agent never polls three tools to find work (§5). Each count is one function in
   `WORK_COUNTERS`; the slices that own tasks, messages and approvals replace one

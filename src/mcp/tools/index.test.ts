@@ -31,7 +31,11 @@ describe('the tool set', () => {
 			'attach_media',
 			'register_session',
 			'heartbeat',
-			'end_session'
+			'end_session',
+			'list_tasks',
+			'claim_task',
+			'complete_task',
+			'get_messages'
 		]);
 	});
 
@@ -122,7 +126,11 @@ describe('tool argument schemas', () => {
 			attach_media: ['update_id', 'media_ids'],
 			register_session: [],
 			heartbeat: ['session_id'],
-			end_session: ['session_id']
+			end_session: ['session_id'],
+			list_tasks: [],
+			claim_task: ['task_id'],
+			complete_task: ['task_id', 'result'],
+			get_messages: []
 		});
 	});
 });
