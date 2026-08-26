@@ -96,6 +96,62 @@ export type UpdateView = {
 	media?: MediaView[];
 };
 
+/**
+ * The five shapes an owner request takes (design §5).
+ *
+ * Re-declared here rather than imported from `$domain`, for the reason at the
+ * top of this file: this module ships to the browser. `src/web/requests.test.ts`
+ * pins the list against the server's own.
+ */
+export type RequestKind = 'text' | 'confirm' | 'buttons' | 'choice' | 'multi_choice';
+
+/** The kind-specific knobs a control reads: how to render, and what to enforce. */
+export type RequestConfig = {
+	placeholder?: string;
+	multiline?: boolean;
+	default?: string;
+	/** `multi_choice`: fewest selections. `text`: shortest answer. */
+	min?: number;
+	/** `multi_choice`: most selections. `text`: longest answer. */
+	max?: number;
+};
+
+/** What the owner said, typed by kind. */
+export type RequestAnswer = { kind: RequestKind; value: string | boolean | string[] };
+
+/** How a request ended, or that it has not. */
+export type RequestState = 'pending' | 'answered' | 'timeout' | 'cancelled';
+
+/**
+ * One owner request, as the banner renders it (design §5, §7).
+ *
+ * `seq` is the queue order: the agent that has been blocked longest is answered
+ * first, and it is the server's ordering rather than the banner's.
+ */
+export type RequestView = {
+	id: string;
+	seq: number;
+	agentId: string;
+	projectId: string | null;
+	updateId: string | null;
+	kind: RequestKind;
+	question: string;
+	detail: string | null;
+	options: string[] | null;
+	config: RequestConfig | null;
+	state: RequestState;
+	expiresAt: number;
+	answeredAt: number | null;
+	answer: RequestAnswer | null;
+};
+
+/** `GET /api/snapshot/requests`: everything waiting on the owner right now. */
+export type RequestsSnapshot = {
+	seq: number;
+	at: string;
+	requests: RequestView[];
+};
+
 /** The timeline page inside a snapshot response. */
 export type UpdatesPage = {
 	items: UpdateView[];

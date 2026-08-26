@@ -49,6 +49,10 @@ export type {
 	Project,
 	ProjectStatus,
 	ReadCursor,
+	RequestAnswer,
+	RequestConfig,
+	RequestKind,
+	RequestValue,
 	Session,
 	SessionMeta,
 	Task,
@@ -146,6 +150,7 @@ export {
 } from './messages';
 export { advanceReadCursor, getReadCursor, readCursorSeq } from './read-cursors';
 export {
+	countPendingApprovals,
 	decideApproval,
 	expireApprovals,
 	findApprovalById,

@@ -1,19 +1,26 @@
 /**
- * `approvals` (design §3, §5).
+ * `approvals` — the owner-request table (design §3, §5).
  *
- * The approval gate is durable because the answer lives in this table rather
- * than in a socket: an agent that crashes mid-wait comes back, reads the row,
- * and carries on. Two guarantees come from here:
+ * A request is durable because the answer lives in this table rather than in a
+ * socket: an agent that crashes mid-wait comes back, reads the row, and carries
+ * on. Three guarantees come from here:
  *
- * - `decideApproval` only fires on a `pending` row, so a decision, a UI cancel
- *   and the expiry sweeper cannot fight over the same approval.
+ * - `decideApproval` only fires on a `pending` row, so an answer, a UI dismiss
+ *   and the expiry sweeper cannot fight over the same request.
  * - `expireApprovals` returns what it changed, so the event bus can unblock
  *   exactly those waiters.
+ * - `countPendingApprovals` is one indexed count, so the heartbeat can carry it
+ *   on every beat without a table scan.
+ *
+ * The `state` column keeps migration 001's vocabulary — `approved` and
+ * `rejected` are the two settled values — while `answer` carries the structured
+ * result for every kind. `$domain` presents that pair as one `answered` state;
+ * this layer stores rows and does not interpret them.
  */
 import type { Db } from './connection';
 import { newId } from './ids';
 import { jsonOf, jsonText, orNull } from './rows';
-import type { Approval, ApprovalState } from './types';
+import type { Approval, ApprovalState, RequestAnswer, RequestConfig, RequestKind } from './types';
 
 type Row = {
 	seq: number;
@@ -21,16 +28,20 @@ type Row = {
 	agent_id: string;
 	project_id: string | null;
 	update_id: string | null;
+	kind: RequestKind;
 	question: string;
+	detail: string | null;
 	options: string | null;
+	config: string | null;
 	state: ApprovalState;
 	expires_at: number;
 	decided_at: number | null;
 	decided_value: string | null;
+	answer: string | null;
 };
 
-const COLUMNS = `seq, id, agent_id, project_id, update_id, question, options, state, expires_at,
-	decided_at, decided_value`;
+const COLUMNS = `seq, id, agent_id, project_id, update_id, kind, question, detail, options, config,
+	state, expires_at, decided_at, decided_value, answer`;
 
 function toApproval(row: Row): Approval {
 	return {
@@ -39,12 +50,16 @@ function toApproval(row: Row): Approval {
 		agentId: row.agent_id,
 		projectId: row.project_id,
 		updateId: row.update_id,
+		kind: row.kind,
 		question: row.question,
+		detail: row.detail,
 		options: jsonOf<string[]>(row.options),
+		config: jsonOf<RequestConfig>(row.config),
 		state: row.state,
 		expiresAt: row.expires_at,
 		decidedAt: row.decided_at,
-		decidedValue: row.decided_value
+		decidedValue: row.decided_value,
+		answer: jsonOf<RequestAnswer>(row.answer)
 	};
 }
 
@@ -53,9 +68,15 @@ export type NewApproval = {
 	agentId: string;
 	projectId?: string | null;
 	updateId?: string | null;
+	/** Which of the five kinds (design §5). Defaults to `confirm`, as the column does. */
+	kind?: RequestKind;
 	question: string;
-	/** The buttons the owner is offered. Absent means a plain approve/reject. */
+	/** The longer explanation the banner shows under the question. */
+	detail?: string | null;
+	/** The options the owner is offered. Absent for `text` and `confirm`. */
 	options?: readonly string[] | null;
+	/** Kind-specific knobs: placeholder, multiline, default, min, max. */
+	config?: RequestConfig | null;
 	/** From the tool's `timeout_s`; the sweeper flips the row when it passes. */
 	expiresAt: number;
 	state?: ApprovalState;
@@ -67,8 +88,11 @@ export function insertApproval(db: Db, input: NewApproval): Approval {
 		agent_id: input.agentId,
 		project_id: orNull(input.projectId),
 		update_id: orNull(input.updateId),
+		kind: input.kind ?? 'confirm',
 		question: input.question,
+		detail: orNull(input.detail),
 		options: input.options ? jsonText([...input.options]) : null,
+		config: jsonText(input.config),
 		state: input.state ?? 'pending',
 		expires_at: input.expiresAt
 	};
@@ -76,9 +100,11 @@ export function insertApproval(db: Db, input: NewApproval): Approval {
 	const inserted = db
 		.prepare<typeof row, Row>(
 			`INSERT INTO approvals
-				(id, agent_id, project_id, update_id, question, options, state, expires_at)
+				(id, agent_id, project_id, update_id, kind, question, detail, options, config, state,
+				 expires_at)
 			 VALUES
-				(:id, :agent_id, :project_id, :update_id, :question, :options, :state, :expires_at)
+				(:id, :agent_id, :project_id, :update_id, :kind, :question, :detail, :options, :config,
+				 :state, :expires_at)
 			 RETURNING ${COLUMNS}`
 		)
 		.get(row)!;
@@ -121,11 +147,28 @@ export function listApprovals(db: Db, query: ApprovalQuery = {}): Approval[] {
 		.map(toApproval);
 }
 
+/**
+ * How many of this agent's requests are still waiting on the owner.
+ *
+ * A count rather than a list because that is all the heartbeat reports, and it
+ * rides the `(agent_id, state)` index migration 002 adds — an agent beating
+ * every thirty seconds must not cost a scan.
+ */
+export function countPendingApprovals(db: Db, agentId: string): number {
+	return db
+		.prepare<[string], { n: number }>(
+			`SELECT COUNT(*) AS n FROM approvals WHERE agent_id = ? AND state = 'pending'`
+		)
+		.get(agentId)!.n;
+}
+
 /** Every state a pending approval can be moved to. */
 export type ApprovalDecision = {
 	state: Exclude<ApprovalState, 'pending'>;
-	/** Which option the owner picked, when the agent offered options. */
+	/** The scalar the decision produced, when there is one. */
 	value?: string | null;
+	/** The structured answer (design §5). The authority; `value` is a convenience. */
+	answer?: RequestAnswer | null;
 	at?: number;
 };
 
@@ -133,7 +176,7 @@ export type ApprovalDecision = {
  * Decide a pending approval.
  *
  * @returns the decided row, or `undefined` if it was already decided, expired or
- *   cancelled — so exactly one caller publishes `approval.decided`.
+ *   cancelled — so exactly one caller publishes the settling event.
  */
 export function decideApproval(
 	db: Db,
@@ -144,12 +187,14 @@ export function decideApproval(
 		id,
 		state: decision.state,
 		value: orNull(decision.value),
+		answer: jsonText(decision.answer),
 		at: decision.at ?? Date.now()
 	};
 
 	const row = db
 		.prepare<typeof params, Row>(
-			`UPDATE approvals SET state = :state, decided_value = :value, decided_at = :at
+			`UPDATE approvals
+			 SET state = :state, decided_value = :value, answer = :answer, decided_at = :at
 			 WHERE id = :id AND state = 'pending'
 			 RETURNING ${COLUMNS}`
 		)

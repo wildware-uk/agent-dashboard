@@ -15,7 +15,14 @@
  * The returned row is still handed back, because a control needs to know the
  * call succeeded before it closes its form.
  */
-import type { MessageView, ProjectStatus, ProjectView, TaskView, UpdateView } from './types';
+import type {
+	MessageView,
+	ProjectStatus,
+	ProjectView,
+	RequestView,
+	TaskView,
+	UpdateView
+} from './types';
 
 /** Just enough of `fetch`. The browser's own satisfies it. */
 export type Requester = (url: string, init: RequestInit) => Promise<Response>;
@@ -107,6 +114,16 @@ export type OwnerActions = {
 	createTask(input: NewTask): Promise<TaskView>;
 	patchTask(id: string, patch: TaskPatch): Promise<TaskView>;
 	postMessage(input: NewMessage): Promise<MessageView>;
+	/**
+	 * Answer an agent's request (design §5).
+	 *
+	 * `value` is sent exactly as the control produced it — a string, a boolean or
+	 * a list — and is checked against the request server-side. The browser does
+	 * not get to decide what a valid answer is, so nothing here reshapes it.
+	 */
+	answerRequest(id: string, value: string | boolean | string[]): Promise<RequestView>;
+	/** Dismiss it without answering: the agent is told `cancelled`. */
+	dismissRequest(id: string): Promise<RequestView>;
 };
 
 /**
@@ -117,7 +134,7 @@ export type OwnerActions = {
  * handlers.
  */
 export function ownerActions(request: Requester = defaultRequest): OwnerActions {
-	async function send<Key extends 'project' | 'update' | 'task' | 'message'>(
+	async function send<Key extends 'project' | 'update' | 'task' | 'message' | 'request'>(
 		key: Key,
 		url: string,
 		method: string,
@@ -154,18 +171,23 @@ export function ownerActions(request: Requester = defaultRequest): OwnerActions 
 		deleteUpdate: (id) => send('update', `/api/updates/${encodeURIComponent(id)}`, 'DELETE'),
 		createTask: (input) => send('task', '/api/tasks', 'POST', input),
 		patchTask: (id, patch) => send('task', `/api/tasks/${encodeURIComponent(id)}`, 'PATCH', patch),
-		postMessage: (input) => send('message', '/api/messages', 'POST', input)
+		postMessage: (input) => send('message', '/api/messages', 'POST', input),
+		answerRequest: (id, value) =>
+			send('request', `/api/requests/${encodeURIComponent(id)}/answer`, 'POST', { value }),
+		dismissRequest: (id) => send('request', `/api/requests/${encodeURIComponent(id)}`, 'DELETE')
 	};
 }
 
 /** Which row an endpoint answers with, keyed by the field it arrives under. */
-type Sent<Key extends 'project' | 'update' | 'task' | 'message'> = Key extends 'project'
+type Sent<Key extends 'project' | 'update' | 'task' | 'message' | 'request'> = Key extends 'project'
 	? ProjectView
 	: Key extends 'update'
 		? UpdateView
 		: Key extends 'task'
 			? TaskView
-			: MessageView;
+			: Key extends 'request'
+				? RequestView
+				: MessageView;
 
 /**
  * What to show the owner when an action failed.

@@ -13,6 +13,7 @@
  */
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { attachMediaTool } from './attach-media';
+import { awaitRequestTool } from './await-request';
 import { claimTaskTool } from './claim-task';
 import { completeTaskTool } from './complete-task';
 import { createProjectTool } from './create-project';
@@ -24,9 +25,11 @@ import { listProjectsTool } from './list-projects';
 import { listTasksTool } from './list-tasks';
 import { postUpdateTool } from './post-update';
 import { registerSessionTool } from './register-session';
+import { requestInputTool } from './request-input';
 import type { AnyMcpTool, ToolDeps } from './types';
 
 export { attachMediaTool } from './attach-media';
+export { awaitRequestTool } from './await-request';
 export { claimTaskTool } from './claim-task';
 export { completeTaskTool } from './complete-task';
 export { createProjectTool } from './create-project';
@@ -38,6 +41,7 @@ export { listProjectsTool } from './list-projects';
 export { listTasksTool } from './list-tasks';
 export { postUpdateTool } from './post-update';
 export { registerSessionTool } from './register-session';
+export { requestInputTool } from './request-input';
 export type { AnyMcpTool, McpTool, ToolDeps, ToolShape } from './types';
 
 /** Every tool this server offers, in the order design §5 lists them. */
@@ -53,7 +57,9 @@ export const TOOLS: readonly AnyMcpTool[] = [
 	listTasksTool,
 	claimTaskTool,
 	completeTaskTool,
-	getMessagesTool
+	getMessagesTool,
+	requestInputTool,
+	awaitRequestTool
 ];
 
 /** Just the names, for tests and for a README that cannot drift. */
@@ -96,5 +102,11 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
 	);
 	server.registerTool(getMessagesTool.name, getMessagesTool.config, (args) =>
 		getMessagesTool.run(deps, args)
+	);
+	server.registerTool(requestInputTool.name, requestInputTool.config, (args) =>
+		requestInputTool.run(deps, args)
+	);
+	server.registerTool(awaitRequestTool.name, awaitRequestTool.config, (args) =>
+		awaitRequestTool.run(deps, args)
 	);
 }

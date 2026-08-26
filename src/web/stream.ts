@@ -72,8 +72,8 @@ export const EVENT_TYPES = [
 	'task.created',
 	'task.updated',
 	'message.created',
-	'approval.created',
-	'approval.decided',
+	'request.created',
+	'request.answered',
 	'agent.presence',
 	'resync'
 ] as const;

@@ -80,6 +80,8 @@ publishes are all tested without a server. Public entry point:
 | `POST /api/messages`              | Reply as the owner — the literal `human`, decided from the cookie (§3).         |
 | `POST /api/tasks`                 | Put a task on a project, optionally targeted at one agent (§7).                 |
 | `PATCH /api/tasks/[id]`           | Reassign one task, or cancel it. Not claim, and not complete.                   |
+| `POST /api/requests/[id]/answer`  | Answer what an agent stopped to ask. Checked against the request in `$domain`.  |
+| `DELETE /api/requests/[id]`       | Dismiss it without answering: the agent hears `cancelled`.                      |
 
 All of them require the owner's session and answer `401 {"error":"unauthenticated"}`
 without it, checked in the handler as well as in the hook because these are the
@@ -100,6 +102,18 @@ that no agent did. `PATCH /api/tasks/[id]` therefore accepts an assignee or
 quietly. `GET /api/snapshot/tasks` reads the open tasks and the finished tail
 separately, so a project with a long history cannot answer with fifty done tasks
 and hide the one thing the panel is for.
+
+`owner/requests.ts` holds the two request routes, and the interesting thing about
+the answer endpoint is what it does **not** do: it pulls `value` off the body and
+hands it to the domain untouched, boolean or array included. The check that a
+`choice` answer is one of the options offered, and that a `multi_choice` respects
+its `min` and `max`, belongs to `src/domain/requests.ts` and runs inside
+`answerRequest` — because the agent is about to act on that value and this
+endpoint is exactly what a hostile client posts to. A second, weaker copy of the
+rule here would be a way around it. `GET /api/snapshot/requests` is the banner's
+read: every outstanding request, never a page and never scoped to a project,
+because a request belongs to the owner rather than to whatever they are looking
+at (§7).
 
 `owner/messages.ts` holds the two message routes and shares that wrapper rather
 than repeating it: a second copy of the auth check is a second chance to forget

@@ -137,15 +137,67 @@ export type ReadCursor = Keyed & {
 
 export type ApprovalState = 'pending' | 'approved' | 'rejected' | 'timeout' | 'cancelled';
 
+/** The five shapes an owner request can take (design §5). */
+export type RequestKind = 'text' | 'confirm' | 'buttons' | 'choice' | 'multi_choice';
+
+/** What an answer carries, by kind: text a string, confirm a boolean, lists strings. */
+export type RequestValue = string | boolean | string[];
+
+/**
+ * A settled request's answer.
+ *
+ * Stored as one JSON column rather than spread over typed columns, because the
+ * type of `value` is a function of `kind` and SQLite has no union column. Reading
+ * it back is `kind`-first, which is how an agent narrows it too.
+ */
+export type RequestAnswer = { kind: RequestKind; value: RequestValue };
+
+/**
+ * The kind-specific knobs, as stored in `approvals.config`.
+ *
+ * One JSON column because they travel together and nothing queries on them:
+ * `placeholder` and `multiline` shape a text box, `default` pre-fills a control,
+ * and `min`/`max` bound a multi-choice's selection count or a text answer's
+ * length.
+ */
+export type RequestConfig = {
+	placeholder?: string;
+	multiline?: boolean;
+	default?: string;
+	min?: number;
+	max?: number;
+};
+
 export type Approval = Keyed & {
 	agentId: string;
 	projectId: string | null;
 	updateId: string | null;
+	/**
+	 * Which of the five kinds this is (design §5).
+	 *
+	 * Typed here but not `CHECK`ed in the table: migration 002 appends the column
+	 * to a live table, and SQLite cannot add a constraint without rebuilding one.
+	 * `$domain` refuses an unknown kind at the write, which is where every row
+	 * comes from.
+	 */
+	kind: RequestKind;
 	question: string;
-	/** The buttons the owner is offered, if the agent supplied any. */
+	/** The longer explanation under the question, if the agent wrote one. */
+	detail: string | null;
+	/** The options the owner is offered, if this kind has any. */
 	options: string[] | null;
+	/** Kind-specific knobs; see {@link RequestConfig}. */
+	config: RequestConfig | null;
 	state: ApprovalState;
 	expiresAt: number;
 	decidedAt: number | null;
+	/**
+	 * The scalar a decision produced, for reading the table by hand.
+	 *
+	 * Never the authority: a `multi_choice` answer does not fit in it, so
+	 * {@link Approval.answer} is what any code reads.
+	 */
 	decidedValue: string | null;
+	/** The structured answer, and the only complete record of one. */
+	answer: RequestAnswer | null;
 };

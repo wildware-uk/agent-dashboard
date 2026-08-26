@@ -77,6 +77,12 @@ export type {
 	ProjectView,
 	MessageView,
 	MessagesSnapshot,
+	RequestAnswer,
+	RequestConfig,
+	RequestKind,
+	RequestState,
+	RequestView,
+	RequestsSnapshot,
 	SnapshotResponse,
 	TaskState,
 	TaskView,
@@ -97,6 +103,12 @@ export type { ThreadSource, ThreadsOptions, ThreadsStatus } from './threads.svel
  */
 export { Tasks } from './tasks.svelte';
 export type { TasksOptions, TasksStatus } from './tasks.svelte';
+/**
+ * What agents are waiting on the owner for (design §5, §7). One store per page,
+ * rendered in the sticky top banner above everything else.
+ */
+export { Requests, browserNotifier } from './requests.svelte';
+export type { Notifier, RequestsOptions, RequestsStatus } from './requests.svelte';
 export { PRESENCE_WINDOW_MS, Presence, heartbeatLabel } from './presence.svelte';
 export type {
 	AgentsSnapshot,

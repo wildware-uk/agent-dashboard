@@ -31,7 +31,9 @@ describe('the $mcp surface', () => {
 			'list_tasks',
 			'claim_task',
 			'complete_task',
-			'get_messages'
+			'get_messages',
+			'request_input',
+			'await_request'
 		]);
 	});
 

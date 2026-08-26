@@ -67,6 +67,9 @@ const DESIGN_COLUMNS: Record<string, string[]> = {
 	],
 	messages: ['project_id', 'update_id', 'task_id', 'author', 'body', 'created_at'],
 	read_cursors: ['agent_id', 'last_seen_message_seq'],
+	// The four columns migration 002 appends carry the other four request kinds
+	// (design §5). They are listed after the 001 columns because `ALTER TABLE ADD
+	// COLUMN` appends, and appending is exactly what keeps 001 unedited.
 	approvals: [
 		'agent_id',
 		'project_id',
@@ -76,7 +79,11 @@ const DESIGN_COLUMNS: Record<string, string[]> = {
 		'state',
 		'expires_at',
 		'decided_at',
-		'decided_value'
+		'decided_value',
+		'kind',
+		'detail',
+		'config',
+		'answer'
 	]
 };
 

@@ -31,7 +31,7 @@ export interface WaitOptions<K extends EventName> {
 	timeoutMs: number;
 	/** Event types to watch. Omit to watch every type. */
 	types?: readonly K[];
-	/** Extra condition, e.g. "this approval id". */
+	/** Extra condition, e.g. "this request id". */
 	where?: (event: EventOf<K>) => boolean;
 	/**
 	 * A seq the caller has already accounted for. The replay buffer is scanned for
@@ -50,7 +50,7 @@ export interface WaitOptions<K extends EventName> {
  * Typed in-process publish/subscribe with a replay window.
  *
  * The single fan-out point (design §2): the domain publishes, the SSE route
- * subscribes, and parked approval gates wait on a predicate. It knows nothing
+ * subscribes, and parked owner-request waiters hold on a predicate. It knows nothing
  * about HTTP or MCP, and holds no state that matters beyond the process.
  */
 export class EventBus {
@@ -133,7 +133,7 @@ export class EventBus {
 	 * Park until a matching event arrives, the timeout elapses, or the caller
 	 * aborts.
 	 *
-	 * This is what the approval gate holds on (design §5): a bounded wait that
+	 * This is what an owner request holds on (design §5): a bounded wait that
 	 * always resolves and always unsubscribes, so a client that walks away leaves
 	 * nothing behind.
 	 *

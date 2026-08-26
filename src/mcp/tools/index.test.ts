@@ -35,7 +35,9 @@ describe('the tool set', () => {
 			'list_tasks',
 			'claim_task',
 			'complete_task',
-			'get_messages'
+			'get_messages',
+			'request_input',
+			'await_request'
 		]);
 	});
 
@@ -130,7 +132,9 @@ describe('tool argument schemas', () => {
 			list_tasks: [],
 			claim_task: ['task_id'],
 			complete_task: ['task_id', 'result'],
-			get_messages: []
+			get_messages: [],
+			request_input: ['kind', 'question'],
+			await_request: ['request_id']
 		});
 	});
 });

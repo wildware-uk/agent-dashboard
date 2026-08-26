@@ -54,6 +54,7 @@ import {
 } from '$db';
 import { context, type DomainContext } from './context';
 import { conflict, invalid, notFound } from './errors';
+import { countPendingRequests } from './requests';
 import { countUnreadMessages } from './messages';
 import { countOpenTasks } from './tasks';
 import { optionalText } from './text';
@@ -374,17 +375,25 @@ export type WorkCounter = (ctx: DomainContext, agentId: string) => number;
 /**
  * The seam the control-plane slices fill in.
  *
- * Each slice replaces **one function here** as it lands — nothing about the
- * heartbeat response moves, and no agent's parsing of it changes. Tasks (#11)
- * and messages (#14) have done exactly that; approvals still answer zero.
+ * Each slice replaced **one function here** as it landed — nothing about the
+ * heartbeat response moved, and no agent's parsing of it changed. Tasks (#11),
+ * messages (#14) and owner requests (#15) have each done exactly that, and the
+ * seam is now fully filled in.
  */
 export const WORK_COUNTERS: Record<keyof WorkCounts, WorkCounter> = {
 	/** Messages after this agent's cursor, its own excluded (`./messages.ts`). */
 	unreadMessages: (ctx, agentId) => countUnreadMessages(ctx, agentId),
 	/** This agent's `todo` and `claimed` rows (`./tasks.ts`). */
 	openTasks: (ctx, agentId) => countOpenTasks(ctx, agentId),
-	/** #15, approvals: this agent's `pending` rows. */
-	pendingApprovals: () => 0
+	/**
+	 * This agent's requests still waiting on the owner (`./requests.ts`).
+	 *
+	 * The name stays `pendingApprovals` because it is the field agents already
+	 * parse out of a heartbeat (design §5) — an approval is one kind of owner
+	 * request, and renaming the wire format to say so would break every client
+	 * for a word.
+	 */
+	pendingApprovals: (ctx, agentId) => countPendingRequests(ctx, agentId)
 };
 
 /** Answer every count for one agent. */

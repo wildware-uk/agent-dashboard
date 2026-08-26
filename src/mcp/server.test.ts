@@ -32,7 +32,7 @@ function post(
 function handlerOptions(rateLimiter = createTokenRateLimiter()) {
 	return {
 		context: () => mcp.h,
-		config: () => ({ tokenSecret: mcp.secret }),
+		config: () => ({ tokenSecret: mcp.secret, holdMs: 50 }),
 		rateLimiter
 	};
 }

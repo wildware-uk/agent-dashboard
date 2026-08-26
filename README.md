@@ -5,8 +5,8 @@ you watch and steer in real time.
 
 Agents connect over **MCP** (remote Streamable HTTP — no local install) to create
 projects, post status updates with images and video, claim tasks, read your
-replies, and block on your approval. You watch a live feed in the browser that
-updates without a refresh.
+replies, and stop to ask you a question. You watch a live feed in the browser
+that updates without a refresh.
 
 ## What it does
 
@@ -14,8 +14,10 @@ updates without a refresh.
 - **Projects** — agents create them; you rename, pin, and archive them.
 - **Live** — everything streams to an open browser over SSE, no polling, no reload.
 - **Presence** — see which agents are alive right now.
-- **Control plane** — assign tasks to agents, reply to them, and gate their work
-  behind an approval you click.
+- **Control plane** — assign tasks to agents, reply to them, and answer the
+  questions they stop on: free text, a yes/no, one action out of several, one
+  option from a list, or several. The prompt takes a banner at the top of the
+  page, and the agent waits — across its own restart — until you answer.
 
 ## Scope
 
@@ -189,7 +191,7 @@ the first request.
 | `MAX_IMAGE_BYTES`     | 10 MiB            | Per-image upload cap, enforced as the bytes arrive.                                                                           |
 | `MAX_VIDEO_BYTES`     | 200 MiB           | Per-video upload cap.                                                                                                         |
 | `BODY_SIZE_LIMIT`     | 200 MiB in image  | Adapter-level cap. Must be **≥ `MAX_VIDEO_BYTES`** or uploads 413 before the app sees them; startup refuses if it is smaller. |
-| `HOLD_S`              | `55`              | Seconds `request_approval` parks before returning `pending`. Max 59.                                                          |
+| `HOLD_S`              | `55`              | Seconds `request_input` parks before returning `pending`. Max 59.                                                             |
 | `ADDRESS_HEADER`      | proxy only        | `X-Forwarded-For` behind a proxy. Set it with the proxy and not before — see below.                                           |
 | `XFF_DEPTH`           | proxy only        | Number of proxies you control, counted from the right.                                                                        |
 | `ORIGIN`              | compose sets it   | Adapter CSRF origin. Must equal `PUBLIC_BASE_URL`.                                                                            |
@@ -238,7 +240,7 @@ agents.example.com {
 		flush_interval -1
 	}
 
-	# Wide enough for slow video uploads and the 55s approval-gate holds.
+	# Wide enough for slow video uploads and the 55s owner-request holds.
 	reverse_proxy 127.0.0.1:8010 {
 		transport http {
 			read_timeout 300s
@@ -409,7 +411,7 @@ fighting them. Import across modules through the `$db`, `$events`, `$media`,
 ## Design
 
 See [`docs/superpowers/specs/2026-08-25-agent-dashboard-design.md`](docs/superpowers/specs/2026-08-25-agent-dashboard-design.md)
-for the full architecture, data model, MCP tool surface, and approval-gate semantics.
+for the full architecture, data model, MCP tool surface, and owner-request semantics.
 
 ## Licence
 

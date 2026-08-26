@@ -16,6 +16,8 @@ import type {
 	MessageView,
 	MessagesSnapshot,
 	ProjectView,
+	RequestView,
+	RequestsSnapshot,
 	SnapshotResponse,
 	TaskView,
 	TasksSnapshot,
@@ -271,7 +273,91 @@ export function fakeActions(): {
 					'postMessage',
 					[input],
 					aMessage({ id: 'new', body: input.body, updateId: input.update ?? null })
-				)
+				),
+			answerRequest: (id, value) =>
+				record(
+					'answerRequest',
+					[id, value],
+					aRequest({ id, state: 'answered', answer: { kind: 'confirm', value } })
+				),
+			dismissRequest: (id) => record('dismissRequest', [id], aRequest({ id, state: 'cancelled' }))
+		}
+	};
+}
+
+/** A pending owner request with sensible defaults: a confirm, nobody waiting on it yet. */
+export function aRequest(overrides: Partial<RequestView> = {}): RequestView {
+	return {
+		id: 'r1',
+		seq: 1,
+		agentId: 'a1',
+		projectId: 'p1',
+		updateId: null,
+		kind: 'confirm',
+		question: 'Push to main?',
+		detail: null,
+		options: null,
+		config: null,
+		state: 'pending',
+		expiresAt: Date.UTC(2026, 7, 25, 12),
+		answeredAt: null,
+		answer: null,
+		...overrides
+	};
+}
+
+/**
+ * A fake `GET /api/snapshot/requests` plus the scheduling hook the banner's
+ * store coalesces through.
+ *
+ * Wholesale, like the task and presence doubles: the endpoint answers with what
+ * is outstanding right now, so a test says what the server holds rather than
+ * publishing a delta.
+ */
+export function fakeRequestsApi(initial: { seq?: number; requests?: RequestView[] } = {}) {
+	let seq = initial.seq ?? 1;
+	let requests = initial.requests ?? [];
+	const calls: string[] = [];
+	const queue: (() => void)[] = [];
+	let status = 200;
+
+	return {
+		calls,
+		queue,
+
+		snapshot(): RequestsSnapshot {
+			return { seq, at: new Date().toISOString(), requests };
+		},
+
+		/** The server's answer is now this, at this stream cursor. */
+		replace(next: RequestView[], nextSeq = seq + 1): void {
+			requests = next;
+			seq = nextSeq;
+		},
+
+		/** Make the next reads fail the way a dropped session or a restart would. */
+		breaks(nextStatus = 500): void {
+			status = nextStatus;
+		},
+
+		fetch(url: string): Promise<Response> {
+			calls.push(url);
+			if (status !== 200) return Promise.resolve(new Response('no', { status }));
+			return Promise.resolve(
+				new Response(JSON.stringify({ seq, at: new Date().toISOString(), requests }), {
+					status: 200,
+					headers: { 'content-type': 'application/json' }
+				})
+			);
+		},
+
+		/** Run every coalesced refetch and let its promises settle. */
+		async settle(): Promise<void> {
+			for (let pass = 0; pass < 5; pass += 1) {
+				while (queue.length > 0) queue.shift()!();
+				await Promise.resolve();
+				await new Promise((resolve) => setTimeout(resolve, 0));
+			}
 		}
 	};
 }

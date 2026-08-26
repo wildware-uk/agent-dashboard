@@ -9,7 +9,12 @@ const VALID = {
 
 describe('mcpConfig', () => {
 	it('reads TOKEN_SECRET out of the environment', () => {
-		expect(mcpConfig(VALID)).toEqual({ tokenSecret: 't'.repeat(32) });
+		expect(mcpConfig(VALID)).toMatchObject({ tokenSecret: 't'.repeat(32) });
+	});
+
+	it('carries the hold an owner request parks for, in milliseconds (design §5)', () => {
+		expect(mcpConfig(VALID)?.holdMs).toBe(55_000);
+		expect(mcpConfig({ ...VALID, HOLD_S: '20' })?.holdMs).toBe(20_000);
 	});
 
 	it('fails closed rather than throwing on a broken environment', () => {

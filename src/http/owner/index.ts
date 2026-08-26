@@ -20,6 +20,8 @@
  * | `PATCH /api/tasks/[id]`          | Reassign one task, or cancel it.            |
  * | `GET /api/messages`              | One thread, or every thread in a project.   |
  * | `POST /api/messages`             | Reply as the owner: the literal `human`.    |
+ * | `POST /api/requests/[id]/answer` | Answer an agent's request. Checked in `$domain`. |
+ * | `DELETE /api/requests/[id]`      | Dismiss it: the agent is told `cancelled`.  |
  *
  * All of them require the owner's session and answer `401 {"error":"unauthenticated"}`
  * without it. Every success publishes exactly one event, so a second open tab
@@ -39,6 +41,7 @@ export {
 	readUpdatePatch
 } from './actions';
 export type { OwnerActionEvent, OwnerHandler, OwnerHandlerOptions, TaskPatch } from './actions';
+export { answerRequestHandler, dismissRequestHandler } from './requests';
 export {
 	listMessagesHandler,
 	postMessageHandler,

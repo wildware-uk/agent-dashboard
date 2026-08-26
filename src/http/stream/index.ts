@@ -26,6 +26,8 @@ export { readAgentsSnapshot } from './agents';
 export type { AgentsSnapshot, SnapshotAgents } from './agents';
 export { TASKS_DONE_LIMIT, readTasksSnapshot } from './tasks';
 export type { SnapshotTasks, TasksSnapshot } from './tasks';
+export { readRequestsSnapshot } from './requests';
+export type { RequestsSnapshot, SnapshotRequests } from './requests';
 export {
 	SNAPSHOT_DEFAULT_LIMIT,
 	createSnapshotHandler,
