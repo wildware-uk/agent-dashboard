@@ -11,6 +11,30 @@
  */
 export { Timeline } from './timeline.svelte';
 export type { Fetcher, StreamLike, TimelineOptions, TimelineStatus } from './timeline.svelte';
+/**
+ * The tab's one connection to `GET /api/stream` (#19).
+ *
+ * Anything live on the page subscribes to this rather than opening a connection
+ * of its own: browsers allow six per origin on HTTP/1.1, and an SSE connection
+ * holds one for as long as the page is open.
+ */
+export {
+	EVENT_TYPES,
+	SharedStream,
+	sharedStream,
+	browserLink,
+	DirectLink,
+	LeaderLink
+} from './stream';
+export type {
+	EventType,
+	Link,
+	OpenStream,
+	StreamConsumer,
+	StreamFrame,
+	StreamMessage,
+	Subscription
+} from './stream';
 export {
 	ActionError,
 	actionMessage,

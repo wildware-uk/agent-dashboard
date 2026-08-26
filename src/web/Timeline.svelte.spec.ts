@@ -10,9 +10,16 @@ import { FakeStream, anUpdate, fakeActions, fakeApi } from './testing';
  * from the top the viewport must not move under them (design §7).
  */
 
-/** A day's worth of cards, newest first, all on the same local day. */
-const day = new Date(2026, 7, 25, 12).getTime();
-const older = new Date(2026, 7, 24, 12).getTime();
+/**
+ * A day's worth of cards, newest first, all on the same local day.
+ *
+ * Relative to the clock the run happens on, never a fixed date: the headings
+ * under test are "Today" and "Yesterday", so a pinned calendar day turns the
+ * suite red the morning after it is written. Midday keeps both days clear of a
+ * DST shift.
+ */
+const day = new Date(new Date().setHours(12, 0, 0, 0)).getTime();
+const older = day - 24 * 60 * 60 * 1000;
 
 function updates(count: number) {
 	return Array.from({ length: count }, (_, index) =>

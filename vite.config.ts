@@ -3,9 +3,14 @@ import { defineConfig } from 'vitest/config';
 import { playwright } from '@vitest/browser-playwright';
 import adapter from '@sveltejs/adapter-node';
 import { sveltekit } from '@sveltejs/kit/vite';
+import { stubAppRoutes } from './vite-test-plugins.ts';
 
 export default defineConfig({
 	plugins: [
+		// Before `sveltekit()` on purpose: it has to claim the app's own URLs
+		// during a test run before SvelteKit's dev handler tries to serve them
+		// from a server that a browser test does not have (issue #21).
+		stubAppRoutes(),
 		tailwindcss(),
 		sveltekit({
 			compilerOptions: {

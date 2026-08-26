@@ -21,13 +21,22 @@
  * viewport cannot move, because nothing above the reader has changed.
  */
 import type { ProjectView, SnapshotResponse, UpdateView } from './types';
+import {
+	DirectLink,
+	SharedStream,
+	sharedStream,
+	type OpenStream,
+	type StreamMessage,
+	type Subscription
+} from './stream';
 
-/** The slice of `EventSource` this store uses. Injected, so tests need no server. */
-export type StreamLike = {
-	addEventListener(type: string, listener: (event: MessageEvent) => void): void;
-	removeEventListener(type: string, listener: (event: MessageEvent) => void): void;
-	close(): void;
-};
+/**
+ * The slice of `EventSource` the transport uses.
+ *
+ * Re-exported from where it now lives: the connection is the tab's rather than
+ * this store's (#19), and `$web`'s public names should not move because of it.
+ */
+export type { StreamLike } from './stream';
 
 /** Just enough of `fetch`. The browser's own satisfies it. */
 export type Fetcher = (url: string) => Promise<Response>;
@@ -47,7 +56,16 @@ export type TimelineOptions = {
 	/** Timeline page size. */
 	limit?: number;
 	fetch?: Fetcher;
-	openStream?: (url: string) => StreamLike;
+	/**
+	 * The tab's one stream (design §4, #19).
+	 *
+	 * Defaults to the shared one, which is the whole point: the rail, this store
+	 * and whatever else the page grows are consumers of a single connection
+	 * rather than owners of one each.
+	 */
+	stream?: SharedStream;
+	/** Test seam: a stream of this store's own, over this opener. */
+	openStream?: OpenStream;
 	/**
 	 * Coalescing hook: runs a queued refetch. Defaults to a macrotask, so a burst
 	 * of events in one tick becomes one request. Tests run it by hand.
@@ -109,7 +127,10 @@ export class Timeline {
 
 	private cursor: string | null = null;
 	private holding = false;
-	private stream: StreamLike | null = null;
+	/** The tab's stream. Resolved on `start`, so a server render never asks for one. */
+	private hub: SharedStream | null;
+	/** This store's hold on it, or `null` while it is not connected. */
+	private held: Subscription | null = null;
 	/** The mode of the coalesced refetch waiting to run, or `null` if none is. */
 	private queued: 'merge' | 'replace' | null = null;
 	private inFlight: Promise<void> | null = null;
@@ -119,23 +140,24 @@ export class Timeline {
 	private readonly project: string | null;
 	private readonly limit: number;
 	private readonly fetcher: Fetcher;
-	private readonly open: (url: string) => StreamLike;
 	private readonly schedule: (run: () => void) => void;
-	private readonly listener = (event: MessageEvent) => this.receive(event);
+	private readonly listener = (event: StreamMessage) => this.receive(event);
 	private readonly onOpen = () => {
 		this.status = 'live';
 	};
 	private readonly onError = () => {
 		// `EventSource` reconnects on its own; this only stops the shell from
 		// implying the data is current while it is not.
-		if (this.stream) this.status = 'offline';
+		if (this.held) this.status = 'offline';
 	};
 
 	constructor(options: TimelineOptions = {}) {
 		this.project = options.project ?? null;
 		this.limit = options.limit ?? DEFAULT_LIMIT;
 		this.fetcher = options.fetch ?? defaultFetch;
-		this.open = options.openStream ?? ((url) => new EventSource(url) as StreamLike);
+		this.hub =
+			options.stream ??
+			(options.openStream ? new SharedStream(new DirectLink(options.openStream)) : null);
 		this.schedule = options.schedule ?? ((run) => setTimeout(run, 0));
 	}
 
@@ -160,34 +182,43 @@ export class Timeline {
 	}
 
 	/**
-	 * Connect.
+	 * Take a hold on the tab's stream.
 	 *
-	 * The cursor goes in the query string because `EventSource` cannot set
-	 * headers: the server accepts `last_event_id` there for exactly this case, so
-	 * a page that hydrated at seq 41 resumes at 41 rather than replaying the
-	 * whole ring buffer or missing what happened while the HTML was in flight.
+	 * The hydrated seq is offered as the resume cursor, and it goes in the query
+	 * string because `EventSource` cannot set headers: the server accepts
+	 * `last_event_id` there for exactly this case, so a page that hydrated at seq
+	 * 41 resumes at 41 rather than replaying the whole ring buffer or missing
+	 * what happened while the HTML was in flight.
+	 *
+	 * Whether that opens a connection is not this store's business. If the rail
+	 * is already reading the stream, this joins it.
 	 */
 	start(): void {
-		if (this.stream) return;
-		const url = this.seq > 0 ? `/api/stream?last_event_id=${this.seq}` : '/api/stream';
-		this.stream = this.open(url);
-		this.stream.addEventListener('open', this.onOpen);
-		this.stream.addEventListener('error', this.onError);
-		for (const type of WATCHED) this.stream.addEventListener(type, this.listener);
-		this.status = 'live';
+		if (this.held) return;
+		const hub = (this.hub ??= sharedStream());
+		this.held = hub.subscribe({
+			types: WATCHED,
+			listener: this.listener,
+			onOpen: this.onOpen,
+			onError: this.onError,
+			cursor: this.seq
+		});
+		this.status = hub.connected ? 'live' : 'offline';
 
 		// Nothing was server-rendered, so there is state to go and get.
 		if (this.seq === 0 && this.items.length === 0) this.scheduleRefresh('replace');
+		// Or the stream was already ahead of the snapshot this page was rendered
+		// with, so the frames in between were delivered before there was anybody
+		// here to hear them. One refetch closes the gap, for the same reason an
+		// event does: it reconciles by id.
+		else if (this.held.missed) this.scheduleRefresh('merge');
 	}
 
-	/** Disconnect. Safe to call twice; the shell calls it on unmount. */
+	/** Let go of it. Safe to call twice; the shell calls it on unmount. */
 	stop(): void {
-		if (!this.stream) return;
-		for (const type of WATCHED) this.stream.removeEventListener(type, this.listener);
-		this.stream.removeEventListener('open', this.onOpen);
-		this.stream.removeEventListener('error', this.onError);
-		this.stream.close();
-		this.stream = null;
+		if (!this.held) return;
+		this.held.close();
+		this.held = null;
 		this.status = 'idle';
 	}
 
@@ -348,7 +379,7 @@ export class Timeline {
 		this.items = merged.sort((left, right) => right.seq - left.seq);
 	}
 
-	private receive(event: MessageEvent): void {
+	private receive(event: StreamMessage): void {
 		this.status = 'live';
 		const frame = parse(event.data);
 		if (!frame) return;

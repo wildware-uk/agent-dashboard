@@ -78,24 +78,25 @@ throttled, while a request with no credentials costs nothing to refuse.
 
 Eight of the fourteen in design §5 are built (§11 steps 5, 9 and 12):
 
-| Tool               | Takes                                                            | Does                                               |
-| ------------------ | ---------------------------------------------------------------- | -------------------------------------------------- |
-| `create_project`   | `name`, `slug?`, `description?`                                  | Idempotent on slug; returns `created`.             |
-| `list_projects`    | `status?`                                                        | Sidebar order: pinned first, then newest.          |
-| `post_update`      | `project` (slug or id), `body`, `title?`, `level?`, `media_ids?` | Posts to the timeline; publishes `update.created`. |
-| `create_upload`    | `filename`, `mime`, `bytes`                                      | Mints a single-use upload URL, 15 minute TTL.      |
-| `attach_media`     | `update_id`, `media_ids`                                         | For bytes that land after the post. Retry-safe.    |
-| `register_session` | `meta?` (`{host, cwd, model}`)                                   | Opens a session; returns `heartbeat_interval_s`.   |
-| `heartbeat`        | `session_id`                                                     | Stays online; piggybacks the three work counts.    |
-| `end_session`      | `session_id`                                                     | Closes the run. Idempotent.                        |
+| Tool               | Takes                                                                           | Does                                               |
+| ------------------ | ------------------------------------------------------------------------------- | -------------------------------------------------- |
+| `create_project`   | `name`, `slug?`, `description?`                                                 | Idempotent on slug; returns `created`.             |
+| `list_projects`    | `status?`                                                                       | Sidebar order: pinned first, then newest.          |
+| `post_update`      | `project` (slug or id), `body`, `title?`, `level?`, `media_ids?`, `session_id?` | Posts to the timeline; publishes `update.created`. |
+| `create_upload`    | `filename`, `mime`, `bytes`                                                     | Mints a single-use upload URL, 15 minute TTL.      |
+| `attach_media`     | `update_id`, `media_ids`                                                        | For bytes that land after the post. Retry-safe.    |
+| `register_session` | `meta?` (`{host, cwd, model}`)                                                  | Opens a session; returns `heartbeat_interval_s`.   |
+| `heartbeat`        | `session_id`                                                                    | Stays online; piggybacks the three work counts.    |
+| `end_session`      | `session_id`                                                                    | Closes the run. Idempotent.                        |
 
 `post_update` takes `media_ids` and refuses the whole post if any id is not the
 caller's to attach — an image an agent believes it published must not be silently
 dropped. `attach_media` takes the opposite line and _skips_ such ids, because the
 likeliest reason to call it twice is that the first call worked and the answer was
-lost. It still does **not** take `session_id`: sessions ship their own slice, and
-an argument that is accepted and then ignored is worse documentation than one that
-is not there.
+lost. It also takes an optional `session_id` (issue #21), which is what fills in
+`updates.session_id` from §3 and lets a card be traced back to the run that posted
+it; optional, because an agent that never registered a session still has updates
+worth posting.
 
 `create_upload` returns an **absolute** `upload_url` built from
 `PUBLIC_BASE_URL`. An agent runs on another machine, so a URL built from the bind
@@ -104,11 +105,15 @@ address would be one it can never use (§12). The bytes then go to
 for a spent or expired token, 413 for a body past the declared size, 415 for bytes
 that are not the declared type.
 
-`heartbeat` and `end_session` take a `session_id`, which is the one identifier a
-tool accepts. It is a handle on a run, not a claim about who is calling: the
-domain refuses a session belonging to another agent, so a stolen id buys nothing.
-`tools/index.test.ts` asserts that for every tool that takes one, which is a
-stronger guarantee than keeping the argument out of the schema would be.
+`post_update`, `heartbeat` and `end_session` take a `session_id`, which is the one
+identifier a tool accepts. It is a handle on a run, not a claim about who is
+calling: the domain refuses a session belonging to another agent with
+`invalid_argument`, so a stolen id buys nothing. `tools/index.test.ts` asserts
+that for every tool that takes one, which is a stronger guarantee than keeping the
+argument out of the schema would be. Each of those tools names every code it can
+refuse with in its own description — `not_found`, `invalid_argument`, and for
+`heartbeat` `conflict` — because an agent cannot handle an error it was never told
+about.
 
 Still to come, in build order (§11):
 `list_tasks` / `claim_task` / `complete_task` (13), `get_messages` (14),

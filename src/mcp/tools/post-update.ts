@@ -59,6 +59,14 @@ const inputSchema = {
 				`already PUT, at most ${MEDIA_PER_UPDATE_MAX}. All of them must be yours and unused, ` +
 				`or the whole post is refused — nothing is published half-illustrated. If an upload ` +
 				`finishes after you post, use attach_media instead.`
+		),
+	session_id: z
+		.string()
+		.optional()
+		.describe(
+			'Optional: the session_id register_session gave you, recorded on the update so this ' +
+				'post can be traced back to the run that made it. Must be one of your own sessions. ' +
+				'Omit it if you never registered one.'
 		)
 };
 
@@ -81,15 +89,22 @@ export const postUpdateTool: McpTool<typeof inputSchema> = {
 			'  the card by level, so use "error" only for something you want looked at.',
 			`- media_ids (optional): up to ${MEDIA_PER_UPDATE_MAX} ids from create_upload whose bytes`,
 			'  you have already uploaded. They appear as images or video on the card.',
+			'- session_id (optional): the id register_session returned, if you have one. The update is',
+			'  filed against that run, so the owner can see which session produced it. It must be one',
+			'  of your own sessions.',
 			'',
 			'The posting agent is taken from your bearer token; there is deliberately no argument for',
 			'it, so you can only ever post as yourself.',
 			'',
 			'Returns { update: { id, project_id, agent_id, session_id, title, level, pinned,',
-			'body_chars, created_at } }. On failure: error "not_found" means the project reference',
-			'matched nothing — call list_projects, and for a media id it means nothing was uploaded',
-			'under it — and "invalid_argument" means an argument was empty, too long, or named media',
-			'that is not yours to attach.'
+			'body_chars, created_at } }. `session_id` is what you passed, or null if you passed',
+			'nothing.',
+			'',
+			'On failure: error "not_found" means a reference matched nothing — the project (call',
+			'list_projects), a media id (nothing was uploaded under it), or the session (it was never',
+			'registered, so register_session again). "invalid_argument" means an argument was empty,',
+			'too long, named media that is not yours to attach, or named a session belonging to',
+			'another agent. Nothing is posted when either happens.'
 		].join('\n'),
 		inputSchema,
 		annotations: { idempotentHint: false, destructiveHint: false, openWorldHint: false }
@@ -104,6 +119,7 @@ export const postUpdateTool: McpTool<typeof inputSchema> = {
 				body: args.body,
 				title: args.title,
 				level: args.level,
+				sessionId: args.session_id,
 				mediaIds: args.media_ids
 			});
 
