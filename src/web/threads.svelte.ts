@@ -47,6 +47,13 @@ import {
  */
 export type ThreadSource = {
 	for(updateId: string): MessageView[];
+	/**
+	 * The conversation on a task rather than an update.
+	 *
+	 * A task is the other thing an agent and its owner talk about, and the panel
+	 * that shows tasks reads its threads through the same store the cards use.
+	 */
+	forTask(taskId: string): MessageView[];
 };
 
 /** The events that change a thread. */

@@ -107,6 +107,13 @@
 	// changes, so there is no case where a later `snapshot` prop needs adopting.
 	// svelte-ignore state_referenced_locally
 	feed.hydrate(snapshot);
+	// Threads come with the server render too, so a card's replies are on screen
+	// at first paint rather than appearing a beat later once a fetch on mount
+	// returns — which reads as the conversation having been empty and then filling
+	// in. The store still refetches on `message.created` exactly as before.
+	// svelte-ignore state_referenced_locally
+	if (snapshot.messages)
+		threads.hydrate({ seq: snapshot.seq, at: snapshot.at, messages: snapshot.messages });
 
 	let drawer = $state(false);
 	/** The right rail as a drawer, which is how a phone reaches it (design §7). */
@@ -255,7 +262,14 @@
 		<aside class="hidden min-h-0 overflow-y-auto border-l border-border-subtle xl:block">
 			<RightRail {presence} />
 			<div class="border-t border-border-subtle p-3">
-				<TasksPanel {tasks} {project} projects={feed.projects} agentNames={posters} {actions} />
+				<TasksPanel
+					{tasks}
+					{project}
+					projects={feed.projects}
+					agentNames={posters}
+					{actions}
+					{threads}
+				/>
 			</div>
 		</aside>
 	</div>
@@ -282,7 +296,14 @@
 		>
 			<RightRail {presence} />
 			<div class="border-t border-border-subtle p-3">
-				<TasksPanel {tasks} {project} projects={feed.projects} agentNames={posters} {actions} />
+				<TasksPanel
+					{tasks}
+					{project}
+					projects={feed.projects}
+					agentNames={posters}
+					{actions}
+					{threads}
+				/>
 			</div>
 		</div>
 	</div>

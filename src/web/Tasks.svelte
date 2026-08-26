@@ -27,6 +27,8 @@
 	import { onMount } from 'svelte';
 	import { actionMessage, type OwnerActions } from './actions';
 	import { Tasks } from './tasks.svelte';
+	import Thread from './Thread.svelte';
+	import type { ThreadSource } from './threads.svelte';
 	import type { ProjectView, TaskView } from './types';
 
 	let {
@@ -38,13 +40,24 @@
 		projects = [],
 		/** Agent id to display name, from the shell. */
 		agentNames = {},
-		actions
+		actions,
+		/**
+		 * The live message store, so a task carries its conversation.
+		 *
+		 * A task is the other thing an agent and its owner talk about — "why is
+		 * this blocked", "use the other branch" — and #14 built the plumbing for it
+		 * (`postMessage` takes a task, the store exposes `forTask`) while the panel
+		 * that needed it belonged to #11. Optional so a spec can mount the panel
+		 * without one.
+		 */
+		threads = undefined
 	}: {
 		tasks?: Tasks;
 		project?: string | null;
 		projects?: ProjectView[];
 		agentNames?: Record<string, string>;
 		actions: OwnerActions;
+		threads?: ThreadSource;
 	} = $props();
 
 	onMount(() => {
@@ -357,6 +370,21 @@
 								{#if rowError?.id === task.id}
 									<p role="alert" class="text-xs text-rose-400">{rowError.message}</p>
 								{/if}
+
+								<!--
+									The conversation about this task. Same component as the one on
+									an update card, so a reply here behaves identically: the write
+									publishes `message.created`, the tab hears it and refetches,
+									and the message appears the same way it does in a tab that was
+									only watching.
+								-->
+								<Thread
+									messages={threads?.forTask(task.id) ?? []}
+									{agentNames}
+									onreply={async (body) => {
+										await actions.postMessage({ task: task.id, body });
+									}}
+								/>
 							</li>
 						{/each}
 					</ul>

@@ -178,6 +178,12 @@ export type SnapshotResponse = {
 	 * was posted by.
 	 */
 	agentNames?: Record<string, string>;
+	/**
+	 * Every thread the page can show, so a card's replies are on screen at first
+	 * paint rather than after a fetch on mount. Optional: the paging and scoped
+	 * refetch responses carry the timeline alone.
+	 */
+	messages?: MessageView[];
 };
 
 /** Where a task is in its life (design §3). */
