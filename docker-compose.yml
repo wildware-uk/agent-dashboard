@@ -1,0 +1,45 @@
+# Agent Dashboard — one service, one volume (design §10).
+#
+#   cp .env.example .env      # then fill in the three secrets
+#   docker compose up -d --build
+#   docker compose exec dashboard mint-token claude-code@laptop
+#
+# Configuration comes from `.env`, which is also where compose reads
+# ${PUBLIC_BASE_URL} below. Nothing is hard-coded here that a deployment would
+# want to change, and no secret has a default anywhere: a missing one aborts
+# startup with the variable named.
+
+services:
+  dashboard:
+    build: .
+    image: ghcr.io/wildware-uk/agent-dashboard:latest
+    restart: unless-stopped
+
+    # Every variable in .env.example. The app validates them at boot.
+    env_file:
+      - .env
+
+    environment:
+      # Inside the container the data directory is always the mount point, so a
+      # DATA_DIR in .env aimed at a host path cannot quietly write outside the
+      # volume and vanish on the next recreate.
+      DATA_DIR: /data
+      PORT: 8010
+      # adapter-node's CSRF check compares the browser's Origin header against
+      # this. Unset, a login POST from the real hostname is refused with a 403
+      # that looks like a wrong password.
+      ORIGIN: ${PUBLIC_BASE_URL:?set PUBLIC_BASE_URL in .env}
+
+    ports:
+      # Bound to loopback: the reverse proxy in front terminates TLS and is the
+      # only thing that should reach this. Drop the 127.0.0.1 prefix only if this
+      # box is not on a network you care about.
+      - '127.0.0.1:8010:8010'
+
+    volumes:
+      # The whole of the state: the SQLite database and media/. Survives
+      # `docker compose down` and any image rebuild; `down -v` deletes it.
+      - agent-dashboard-data:/data
+
+volumes:
+  agent-dashboard-data:

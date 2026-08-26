@@ -40,9 +40,12 @@ export const heartbeatTool: McpTool<typeof inputSchema> = {
 			'piggybacked so you never have to poll for work: while they are zero there is nothing',
 			'for you, and when one is not, call the tool for that kind of work.',
 			'',
-			'On failure: error "not_found" means no such session — call register_session again;',
-			'"conflict" means your session has ended (you ended it, or it was idle too long), so',
-			'register a new one and use its id from then on.'
+			'On failure there are three codes, and each has a different answer. "not_found" means no',
+			'such session: call register_session and use the id it returns. "invalid_argument" means',
+			'that session belongs to another agent, so you sent an id that is not yours — beat on your',
+			'own. "conflict" means your session has ended (you ended it, or it was idle too long), so',
+			'register a new one and use its id from then on. Any other failure is a bug in the',
+			'dashboard rather than in your call.'
 		].join('\n'),
 		inputSchema,
 		annotations: { idempotentHint: true, destructiveHint: false, openWorldHint: false }

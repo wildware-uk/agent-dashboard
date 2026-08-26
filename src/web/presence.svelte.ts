@@ -22,11 +22,21 @@
  * timestamps fresh; the stream is what makes an arrival or a departure show up
  * at once.
  *
- * It opens its own `EventSource`. One connection per store is a real cost, and a
- * later slice that consolidates the client stores should hand both of them the
- * same stream — which is why `openStream` is injectable rather than assumed.
+ * It does **not** open its own `EventSource` any more. It used to, and one
+ * connection per store was not a tidiness problem but an outage: two per tab
+ * meant three tabs exhausted Chromium's six-per-origin limit on HTTP/1.1 and
+ * the whole origin stopped answering (#19). The rail now takes a hold on the
+ * tab's one stream like every other consumer, and lets go of it on unmount.
  */
-import type { Fetcher, StreamLike } from './timeline.svelte';
+import type { Fetcher } from './timeline.svelte';
+import {
+	DirectLink,
+	SharedStream,
+	sharedStream,
+	type OpenStream,
+	type StreamMessage,
+	type Subscription
+} from './stream';
 
 /**
  * One live agent, as `GET /api/snapshot/agents` sends it.
@@ -81,7 +91,10 @@ export type PresenceStatus = 'idle' | 'live' | 'offline';
 
 export type PresenceOptions = {
 	fetch?: Fetcher;
-	openStream?: (url: string) => StreamLike;
+	/** The tab's one stream (design §4, #19). Defaults to the shared one. */
+	stream?: SharedStream;
+	/** Test seam: a stream of this store's own, over this opener. */
+	openStream?: OpenStream;
 	/** Coalescing hook: a burst of events becomes one request. Tests run it by hand. */
 	schedule?: (run: () => void) => void;
 	/** The clock presence is derived against. Tests drive it. */
@@ -109,7 +122,10 @@ export class Presence {
 	 */
 	names = $state<Record<string, string>>({});
 
-	private stream: StreamLike | null = null;
+	/** The tab's stream. Resolved on `start`, so a server render never asks for one. */
+	private hub: SharedStream | null;
+	/** This store's hold on it, or `null` while the rail is not connected. */
+	private held: Subscription | null = null;
 	/** Whether the rail is mounted. A queued refetch after `stop` is dropped. */
 	private live = false;
 	private queued = false;
@@ -118,24 +134,25 @@ export class Presence {
 	private poller: ReturnType<typeof setInterval> | undefined;
 
 	private readonly fetcher: Fetcher;
-	private readonly open: (url: string) => StreamLike;
 	private readonly schedule: (run: () => void) => void;
 	private readonly clock: () => number;
 	private readonly pollMs: number;
 	private readonly tickMs: number;
-	private readonly listener = (event: MessageEvent) => this.receive(event);
+	private readonly listener = (event: StreamMessage) => this.receive(event);
 	private readonly onOpen = () => {
 		this.status = 'live';
 	};
 	private readonly onError = () => {
 		// `EventSource` reconnects by itself; this only stops the rail from
 		// implying it is current while it is not.
-		if (this.stream) this.status = 'offline';
+		if (this.held) this.status = 'offline';
 	};
 
 	constructor(options: PresenceOptions = {}) {
 		this.fetcher = options.fetch ?? ((url) => fetch(url));
-		this.open = options.openStream ?? ((url) => new EventSource(url) as StreamLike);
+		this.hub =
+			options.stream ??
+			(options.openStream ? new SharedStream(new DirectLink(options.openStream)) : null);
 		this.schedule = options.schedule ?? ((run) => setTimeout(run, 0));
 		this.clock = options.clock ?? Date.now;
 		this.pollMs = options.pollMs ?? POLL_MS;
@@ -160,25 +177,23 @@ export class Presence {
 		this.apply(snapshot);
 	}
 
-	/** Connect, start the clock, and read who is online. */
+	/** Take a hold on the tab's stream, start the clock, and read who is online. */
 	start(): void {
 		if (this.live) return;
 		this.live = true;
 		this.now = this.clock();
 
-		const url = this.seq > 0 ? `/api/stream?last_event_id=${this.seq}` : '/api/stream';
-		try {
-			this.stream = this.open(url);
-			this.stream.addEventListener('open', this.onOpen);
-			this.stream.addEventListener('error', this.onError);
-			for (const type of WATCHED) this.stream.addEventListener(type, this.listener);
-			this.status = 'live';
-		} catch {
-			// No stream is survivable — the poll below still keeps the rail fresh —
-			// so it must not take the rail down with it.
-			this.stream = null;
-			this.status = 'offline';
-		}
+		const hub = (this.hub ??= sharedStream());
+		this.held = hub.subscribe({
+			types: WATCHED,
+			listener: this.listener,
+			onOpen: this.onOpen,
+			onError: this.onError,
+			cursor: this.seq
+		});
+		// No stream at all is survivable — the poll below still keeps the rail
+		// fresh — so it is said out loud rather than allowed to take the rail down.
+		this.status = hub.connected ? 'live' : 'offline';
 
 		this.ticker = setInterval(() => {
 			this.now = this.clock();
@@ -188,19 +203,16 @@ export class Presence {
 		this.scheduleRefresh();
 	}
 
-	/** Disconnect and stop the clock. Safe to call twice. */
+	/** Let go of the stream and stop the clock. Safe to call twice. */
 	stop(): void {
 		this.live = false;
 		// A refetch queued a moment ago must not fire after the rail has gone: an
 		// unmounted store making requests is how a navigation turns into a leak.
 		this.queued = false;
-		if (this.stream) {
-			for (const type of WATCHED) this.stream.removeEventListener(type, this.listener);
-			this.stream.removeEventListener('open', this.onOpen);
-			this.stream.removeEventListener('error', this.onError);
-			this.stream.close();
-			this.stream = null;
-		}
+		// Only this store's hold. The connection itself outlives the rail if the
+		// timeline is still reading it, and is closed by the hub if it is not.
+		this.held?.close();
+		this.held = null;
 
 		clearInterval(this.ticker);
 		clearInterval(this.poller);
@@ -261,7 +273,7 @@ export class Presence {
 		this.now = this.clock();
 	}
 
-	private receive(event: MessageEvent): void {
+	private receive(event: StreamMessage): void {
 		this.status = 'live';
 		const frame = parse(event.data);
 		if (!frame) return;

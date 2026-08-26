@@ -1,0 +1,23 @@
+# Everything the image must not carry. `.local` is first for a reason: it holds a
+# real deployment's owner password hash and live agent tokens.
+.local
+.env
+.env.*
+!.env.example
+
+node_modules
+build
+.svelte-kit
+coverage
+data
+test-results
+playwright-report
+blob-report
+
+.git
+.github
+.vscode
+docs
+*.db
+*.db-shm
+*.db-wal

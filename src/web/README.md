@@ -37,6 +37,7 @@ Notes carried from the design (§7):
 | `media.ts`                          | Pure media decisions: addresses, cell shapes, sources, labels.                               |
 | `Markdown.svelte`                   | The only `{@html}` in the client.                                                            |
 | `RightRail.svelte`                  | Live agents with their session metadata; open tasks still a placeholder (§7).                |
+| `stream.ts`                         | The tab's one connection to `/api/stream`, shared by every consumer (§4).                    |
 | `timeline.svelte.ts`                | The client store: snapshot, stream, pending arrivals, paging.                                |
 | `presence.svelte.ts`                | The live-agents store: who is online, derived against a ticking clock (§4).                  |
 | `actions.ts`                        | The owner's write calls: create, rename, pin, archive, delete (§7).                          |
@@ -113,9 +114,51 @@ slow poll alongside it is not redundant: a heartbeat inside the window
 deliberately publishes nothing, so without it the rail would sit on a heartbeat
 timestamp that ages until it looked offline.
 
-It opens its own `EventSource` today, which is one more connection than the page
-needs. `openStream` is injectable for exactly that reason: a later slice that
-consolidates the client stores should hand both of them the same stream.
+It does not open a connection of its own. It takes a hold on the tab's one
+stream, like the timeline store and like anything the page grows next — see
+below.
+
+## One connection, however many things are watching
+
+`stream.ts` is the whole of the browser's connection management, and it exists
+because two connections per tab was not untidiness but an outage (#19).
+
+Browsers allow **six sockets per origin on HTTP/1.1**, an SSE connection holds
+one for as long as the page is open, and nothing else on the origin can jump
+that queue. The timeline store used to open one and the rail's store another, so
+three tabs reached the limit and the origin went dead: snapshots never resolved,
+media never loaded, navigation timed out. It reads as "the dashboard is broken"
+rather than "too many tabs". HTTP/2 hides it, which the reference Caddy
+deployment provides — and the README quickstart is plain HTTP on localhost,
+which does not.
+
+Two layers, answering two different arithmetics:
+
+**`SharedStream` — one connection per tab.** A ref-counted hub. A consumer
+subscribes with the event types it cares about and is handed a `Subscription`;
+the first subscriber opens the connection, the last one to leave closes it. So a
+region that unmounts cannot take the stream away from the regions still on the
+page, and cannot leave a listener on it either. `Timeline` and `Presence` both
+default to `sharedStream()`, which is why the shell mounting both of them costs
+one request.
+
+**`LeaderLink` — one connection per browser.** Six tabs holding one socket each
+is _exactly_ the limit, so per-tab sharing on its own still hangs the origin at
+six tabs. The Web Locks API elects one tab across the whole origin; that tab is
+the only one with an `EventSource`, and it rebroadcasts every frame on a
+`BroadcastChannel`. Twenty tabs then cost one socket. The lock is released by the
+browser when the leading tab closes or crashes, so a queued tab is granted it and
+takes over with no protocol of ours; the ping and the steal in that class cover
+the one case the lock cannot see, which is a tab that still holds it but has
+stopped running. Where Web Locks is missing — a page served to a hostname over
+plain HTTP is not a secure context — the tab keeps its own connection, which is
+still one rather than one per store.
+
+None of this changes what a store is written against. The resume cursor is still
+`last_event_id` in the query string (`EventSource` cannot set headers), a
+reconnect the browser performs itself still carries `Last-Event-ID`, `resync` is
+forwarded like any other event, and each consumer still sees only the types it
+subscribed to.
 
 ## The owner's actions
 

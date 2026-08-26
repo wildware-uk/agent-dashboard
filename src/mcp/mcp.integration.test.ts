@@ -157,6 +157,7 @@ describe('the transport', () => {
 			'level',
 			'media_ids',
 			'project',
+			'session_id',
 			'title'
 		]);
 		for (const [name, schema] of Object.entries(properties)) {

@@ -49,7 +49,7 @@ jobs:
         run: npm test
 
       - name: Build
-        run: npm run build
+        run: npm run build:all
 
   browser:
     name: component / e2e
@@ -87,3 +87,92 @@ jobs:
           name: playwright-report
           path: playwright-report/
           retention-days: 7
+
+  image:
+    name: docker image
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      # Pushing to GHCR on main. Pull requests build without pushing.
+      packages: write
+
+    env:
+      IMAGE: ghcr.io/${{ github.repository }}
+
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: docker/setup-buildx-action@v3
+
+      - name: Build the image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          load: true
+          tags: ${{ env.IMAGE }}:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # The acceptance criteria from issue #17, as a smoke test: a missing secret
+      # must abort startup, `mint-token` must print a token that authenticates
+      # against /mcp, and the data must be on the volume rather than in the
+      # container. Building an image nobody ever ran is how packaging rots.
+      - name: A missing secret aborts startup
+        run: |
+          set +e
+          output=$(docker run --rm -e PUBLIC_BASE_URL=http://localhost:8010 \
+            -e SESSION_SECRET=0123456789012345678901234567890123456789 \
+            -e TOKEN_SECRET=0123456789012345678901234567890123456789 \
+            ${{ env.IMAGE }}:ci node build/cli.js list-tokens 2>&1)
+          status=$?
+          set -e
+          echo "$output"
+          test $status -ne 0
+          echo "$output" | grep -q ADMIN_PASSWORD_HASH
+
+      - name: Boot it, mint a token, call /mcp with it
+        run: |
+          set -euxo pipefail
+          docker volume create ci-data
+          hash=$(docker run --rm ${{ env.IMAGE }}:ci node build/cli.js hash-password 'ci password' | head -1)
+          cat > ci.env <<EOF
+          ADMIN_PASSWORD_HASH=$hash
+          SESSION_SECRET=0123456789012345678901234567890123456789
+          TOKEN_SECRET=0123456789012345678901234567890123456789
+          PUBLIC_BASE_URL=http://localhost:8010
+          ORIGIN=http://localhost:8010
+          EOF
+          docker run -d --name dash --env-file ci.env -v ci-data:/data -p 8010:8010 ${{ env.IMAGE }}:ci
+          for i in $(seq 1 30); do curl -fsS http://localhost:8010/login >/dev/null && break || sleep 1; done
+          curl -fsS http://localhost:8010/login >/dev/null
+          token=$(docker exec dash mint-token 'ci-agent' | sed -n '2p')
+          curl -fsS http://localhost:8010/mcp \
+            -H "Authorization: Bearer $token" \
+            -H 'Content-Type: application/json' \
+            -H 'Accept: application/json, text/event-stream' \
+            -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | grep -q post_update
+          # Data survives a container recreate: the agent is on the volume.
+          docker rm -f dash
+          docker run --rm --env-file ci.env -v ci-data:/data ${{ env.IMAGE }}:ci \
+            node build/cli.js list-tokens | grep -q ci-agent
+
+      - name: Log in to GHCR
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Publish
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: |
+            ${{ env.IMAGE }}:latest
+            ${{ env.IMAGE }}:${{ github.sha }}
+          cache-from: type=gha

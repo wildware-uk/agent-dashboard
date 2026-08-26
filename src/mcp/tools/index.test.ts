@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import { z } from 'zod';
-import { listAgents, registerSession } from '$domain';
+import { createProject, listAgents, registerSession } from '$domain';
 import { mcpHarness } from '../testing';
 import { TOOLS, TOOL_NAMES } from './index';
 import type { AnyMcpTool, McpTool } from './types';
@@ -128,25 +128,40 @@ describe('tool argument schemas', () => {
 });
 
 describe('a session id is a handle, not an identity', () => {
-	/** Tools that take somebody's session id as an argument. */
-	const sessionTools = ['heartbeat', 'end_session'] as const;
+	/**
+	 * Every tool that takes somebody's session id, and whatever else it needs to
+	 * get as far as looking at that id. `post_update` joined them in issue #21,
+	 * which is exactly why the coverage check below exists.
+	 */
+	const sessionTools = {
+		post_update: { project: 'agent-dashboard', body: 'not my run' },
+		heartbeat: {},
+		end_session: {}
+	} as const;
 
 	it('refuses a session that belongs to another agent', () => {
 		const mcp = mcpHarness({ name: 'scout' });
+		createProject(mcp.h, { name: 'Agent Dashboard' });
 		const { session } = registerSession(mcp.h, { agentId: mcp.deps.agent.id });
 		const intruderId = mcp.mint('intruder').agentId;
 		const intruder = listAgents(mcp.h).find((agent) => agent.id === intruderId)!;
 
-		for (const name of sessionTools) {
+		for (const [name, rest] of Object.entries(sessionTools)) {
 			const tool = TOOLS.find((candidate) => candidate.name === name) as unknown as McpTool<{
 				session_id: z.ZodType;
 			}>;
 
-			const result = tool.run({ ctx: mcp.h, agent: intruder }, { session_id: session.id } as {
-				session_id: string;
-			});
+			const result = tool.run({ ctx: mcp.h, agent: intruder }, {
+				...rest,
+				session_id: session.id
+			} as unknown as { session_id: string });
 
-			expect(result.isError, name).toBe(true);
+			// The code matters as much as the refusal: an agent is told the session
+			// is not its own, not that something vague went wrong.
+			expect(result, name).toMatchObject({
+				isError: true,
+				structuredContent: { error: 'invalid_argument' }
+			});
 		}
 	});
 
@@ -155,6 +170,6 @@ describe('a session id is a handle, not an identity', () => {
 			(tool) => tool.name
 		);
 
-		expect(taking).toEqual([...sessionTools]);
+		expect(taking).toEqual(Object.keys(sessionTools));
 	});
 });

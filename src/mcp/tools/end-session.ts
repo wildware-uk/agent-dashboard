@@ -34,7 +34,11 @@ export const endSessionTool: McpTool<typeof inputSchema> = {
 			'Returns { session_id, ended }. `ended` is false if the session was already closed, which',
 			'is not an error: calling this twice is safe.',
 			'',
-			'On failure: error "not_found" means no such session, so there is nothing to close.',
+			'On failure: "not_found" means no such session, so there is nothing to close, and',
+			'"invalid_argument" means that session belongs to another agent — you can only end your',
+			'own runs. Those are the only two codes this tool refuses with; ending a session that is',
+			'already ended is not one of them.',
+			'',
 			'After this, heartbeat on the same session_id is refused with "conflict": register a new',
 			'session if you carry on working.'
 		].join('\n'),

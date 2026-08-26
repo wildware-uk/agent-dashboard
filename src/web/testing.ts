@@ -76,16 +76,29 @@ export function aMedia(overrides: Partial<MediaView> = {}): MediaView {
 export class FakeStream implements StreamLike {
 	url = '';
 	closed = false;
-	private listeners = new Map<string, Set<(event: MessageEvent) => void>>();
+	private readonly handlers = new Map<string, Set<(event: MessageEvent) => void>>();
+
+	/**
+	 * How many listeners are attached, across every type.
+	 *
+	 * A connection is only released when nothing is still listening to it, so
+	 * this is what a leak looks like from the outside: a closed stream with
+	 * handlers still on it.
+	 */
+	get listeners(): number {
+		let count = 0;
+		for (const set of this.handlers.values()) count += set.size;
+		return count;
+	}
 
 	addEventListener(type: string, listener: (event: MessageEvent) => void): void {
-		const set = this.listeners.get(type) ?? new Set();
+		const set = this.handlers.get(type) ?? new Set();
 		set.add(listener);
-		this.listeners.set(type, set);
+		this.handlers.set(type, set);
 	}
 
 	removeEventListener(type: string, listener: (event: MessageEvent) => void): void {
-		this.listeners.get(type)?.delete(listener);
+		this.handlers.get(type)?.delete(listener);
 	}
 
 	close(): void {
@@ -95,8 +108,15 @@ export class FakeStream implements StreamLike {
 	/** Deliver one frame, serialised the way the server serialises it. */
 	emit(type: string, envelope: { seq: number; payload?: unknown } & Record<string, unknown>): void {
 		const data = JSON.stringify({ type, at: new Date().toISOString(), ...envelope });
-		for (const listener of this.listeners.get(type) ?? []) {
-			listener({ data } as MessageEvent);
+		for (const listener of [...(this.handlers.get(type) ?? [])]) {
+			listener({ data, lastEventId: String(envelope.seq) } as MessageEvent);
+		}
+	}
+
+	/** Deliver a bare event with no body: what `open` and `error` are. */
+	fire(type: 'open' | 'error'): void {
+		for (const listener of [...(this.handlers.get(type) ?? [])]) {
+			listener({} as MessageEvent);
 		}
 	}
 }

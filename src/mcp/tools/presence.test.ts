@@ -153,6 +153,46 @@ describe('end_session', () => {
 		expect(result.isError).toBe(true);
 		expect(toolText(result)).toContain('not_found');
 	});
+
+	it("will not let one agent end another's run", () => {
+		const session_id = sessionId();
+		const minted = mcp.mint('intruder');
+		const intruder = listAgents(mcp.h).find((agent) => agent.id === minted.agentId)!;
+
+		const result = endSessionTool.run({ ctx: mcp.h, agent: intruder }, { session_id });
+
+		expect(result.isError).toBe(true);
+		expect(toolText(result)).toContain('invalid_argument');
+		// And the run really is still open, rather than merely reported as such.
+		expect(listLiveAgents(mcp.h)).toHaveLength(1);
+	});
+});
+
+/**
+ * Issue #21: an agent cannot handle an error it was never told about, so every
+ * code a session tool can hand back has to appear in the description the agent
+ * reads. The lists below are the codes exercised by the tests above.
+ */
+describe('the session tools document every code they can fail with', () => {
+	const documented: ReadonlyArray<[string, string, readonly string[]]> = [
+		['heartbeat', heartbeatTool.config.description, ['not_found', 'invalid_argument', 'conflict']],
+		['end_session', endSessionTool.config.description, ['not_found', 'invalid_argument']]
+	];
+
+	it.each(documented)('%s names each one', (name, description, codes) => {
+		for (const code of codes) expect(description, `${name}: ${code}`).toContain(code);
+	});
+
+	it("says what to do about another agent's session where the code is named", () => {
+		for (const [name, description] of documented) {
+			// Read as one paragraph: the wrapping is an artefact of the source, and
+			// what matters is that the explanation sits next to the code itself.
+			const prose = description.replace(/\s+/g, ' ');
+			const at = prose.indexOf('"invalid_argument"');
+			expect(at, name).toBeGreaterThan(-1);
+			expect(prose.slice(at, at + 200), name).toContain('another agent');
+		}
+	});
 });
 
 describe('the presence tools as a set', () => {

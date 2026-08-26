@@ -288,8 +288,33 @@ create and assign tasks; post messages to an agent; approve or reject.
 Live behaviour: new items animate in. If the timeline is scrolled away from the
 top, a "N new" pill appears rather than the view jumping.
 
-Mobile is a single column with the sidebar as a drawer, because a meaningful share
-of glancing at this happens on a phone.
+### Mobile is not a fallback
+
+**The phone is a primary target, used as much as the desktop.** A layout that
+merely does not break on a small screen has not met this bar. Every slice owns its
+own mobile behaviour; none may defer it.
+
+- **Single column** below the breakpoint, with the project sidebar as a drawer and
+  the right rail reachable rather than dropped. Information that only exists in the
+  rail on desktop must be reachable on a phone.
+- **No hover-only affordances anywhere.** A touch screen cannot hover, so anything
+  revealed by hover is invisible on a phone. Worse, a control that *changes size*
+  on hover moves its neighbours out from under a pointer mid-click — this has
+  already cost one bug here, where an expanding volume slider pushed the fullscreen
+  button away as it was aimed at.
+- **Touch targets of at least 44px**, including the controls layered over media.
+  Icon buttons sized for a mouse are not usable with a thumb.
+- **Nothing may depend on a viewport wider than 360px.** Wide content — tables in
+  markdown, code blocks, media grids — scrolls inside its own container; the page
+  itself never scrolls horizontally.
+- **A pending owner request must be answerable on a phone**, including the kinds
+  with real controls: a text field with a usable keyboard, a checkbox list, a row of
+  action buttons that wraps rather than overflows.
+- **Components adapt to their own width, not the viewport's.** The same media tile
+  appears full-width on a card and small inside a grid, so container queries are the
+  right tool and viewport breakpoints alone are not.
+- Every UI slice is verified at **375px** as well as at desktop width, in its own
+  tests. "It works on desktop" is half of done.
 
 ## 8. Security
 

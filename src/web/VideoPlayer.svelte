@@ -31,12 +31,31 @@
 	const { src, poster, label, frame = 1 / 30 }: Props = $props();
 
 	let video = $state<HTMLVideoElement | null>(null);
+	let controller = $state<HTMLElement | null>(null);
 	let enhanced = $state(false);
 
 	onMount(async () => {
 		await import('media-chrome');
 		enhanced = true;
 	});
+
+	/**
+	 * Toggle fullscreen on the whole player, not the bare <video>.
+	 *
+	 * Fullscreening the controller keeps the controls in fullscreen; fullscreening
+	 * the video element hands the browser's own chrome back, which is the thing
+	 * this player exists to replace.
+	 */
+	async function toggleFullscreen() {
+		if (!controller) return;
+		try {
+			if (document.fullscreenElement) await document.exitFullscreen();
+			else await controller.requestFullscreen();
+		} catch {
+			// Denied (no user activation, or a browser that refuses): leave the
+			// player as it was rather than throwing inside an event handler.
+		}
+	}
 
 	/**
 	 * Nudge by exactly one frame.
@@ -52,7 +71,19 @@
 	}
 </script>
 
-<media-controller class="player" style:--media-object-fit="contain">
+<!--
+	Double click toggles fullscreen, which is what every video player on the web
+	does and what its absence here was immediately noticed for. `ondblclick` on the
+	controller catches it anywhere over the frame; media-chrome's gesture receiver
+	keeps handling single click for play/pause.
+-->
+<!-- svelte-ignore a11y_no_static_element_interactions -->
+<media-controller
+	bind:this={controller}
+	class="player"
+	style:--media-object-fit="contain"
+	ondblclick={toggleFullscreen}
+>
 	<!--
 		No caption track exists to point at: the pipeline produces a poster and an
 		h264 transcode (design §6), and nothing generates subtitles for an agent's
@@ -140,6 +171,9 @@
 		width: 100%;
 		height: 100%;
 		background: #000;
+		/* Controls adapt to the PLAYER's width, not the viewport's: the same player
+		   appears full-width on a card and as a small tile inside a media grid. */
+		container-type: inline-size;
 	}
 
 	.player video {
@@ -183,16 +217,27 @@
 		min-width: 2.5rem;
 	}
 
-	/* The volume slider is noise at card size; it appears on hover or focus. */
+	/*
+		A FIXED width, never animated.
+		This slider used to expand from 0 on hover, which pushed the playback-rate
+		and fullscreen buttons to the right — so aiming at fullscreen moved it out
+		from under the pointer before the click landed. Controls must never resize
+		in response to the pointer approaching them.
+	*/
 	media-volume-range {
-		width: 0;
-		overflow: hidden;
-		transition: width 120ms ease;
+		width: 4.5rem;
 	}
 
-	media-control-bar:hover media-volume-range,
-	media-volume-range:focus-within {
-		width: 4.5rem;
+	.step {
+			display: none;
+		}
+	}
+
+	@container (max-width: 260px) {
+		media-time-display,
+		media-mute-button {
+			display: none;
+		}
 	}
 
 	.step {
@@ -215,4 +260,19 @@
 		outline: 2px solid rgb(244 244 245);
 		outline-offset: -2px;
 	}
+
+	/*
+		Below these widths the bar cannot hold everything without the scrub bar
+		collapsing to nothing, so controls drop in order of how easily they are
+		lived without. Playback rate and frame stepping are power tools; volume has
+		the mute button as a fallback; play, position and fullscreen always stay.
+	*/
+	@container (max-width: 480px) {
+		media-playback-rate-button,
+		media-volume-range {
+			display: none;
+		}
+	}
+
+	@container (max-width: 360px) {
 </style>

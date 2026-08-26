@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { createProject, listUpdates } from '$domain';
+import { createProject, listUpdates, registerSession } from '$domain';
 import { mcpHarness, toolText, type McpHarness } from '../testing';
 import { postUpdateTool } from './post-update';
 
@@ -87,5 +87,56 @@ describe('post_update', () => {
 		const { updates } = listUpdates(mcp.h, { project: 'agent-dashboard' });
 		expect(updates[0].agentId).toBe(mcp.deps.agent.id);
 		expect(updates[0].agentId).not.toBe(other.agentId);
+	});
+});
+
+/**
+ * Sessions (issue #21). `updates.session_id` is the column that lets a card be
+ * traced back to the run that produced it, so the tool has to accept the id
+ * `register_session` handed out — and refuse anybody else's.
+ */
+describe('post_update with a session', () => {
+	it('records the session the agent is running in', () => {
+		const { session } = registerSession(mcp.h, { agentId: mcp.deps.agent.id });
+
+		const result = run({ project: 'agent-dashboard', body: 'in a run', session_id: session.id });
+
+		expect(result.structuredContent).toMatchObject({ update: { session_id: session.id } });
+
+		const { updates } = listUpdates(mcp.h, { project: 'agent-dashboard' });
+		expect(updates[0].sessionId).toBe(session.id);
+	});
+
+	it('leaves session_id null when the agent does not pass one', () => {
+		const result = run({ project: 'agent-dashboard', body: 'no session' });
+
+		expect(result.structuredContent).toMatchObject({ update: { session_id: null } });
+	});
+
+	it("refuses another agent's session as invalid_argument, and posts nothing", () => {
+		const other = mcp.mint('imposter');
+		const { session } = registerSession(mcp.h, { agentId: other.agentId });
+
+		const result = run({ project: 'agent-dashboard', body: 'not mine', session_id: session.id });
+
+		expect(result).toMatchObject({
+			isError: true,
+			structuredContent: { error: 'invalid_argument' }
+		});
+		expect(listUpdates(mcp.h, { project: 'agent-dashboard' }).updates).toHaveLength(0);
+	});
+
+	it('reports an unknown session as not_found', () => {
+		const result = run({ project: 'agent-dashboard', body: 'ghost run', session_id: 'no-such' });
+
+		expect(result).toMatchObject({ isError: true, structuredContent: { error: 'not_found' } });
+		expect(toolText(result)).toContain('no-such');
+	});
+
+	it('documents session_id, and both codes it can fail with', () => {
+		const description = postUpdateTool.config.description;
+
+		expect(description).toContain('session_id');
+		expect(description).toContain('register_session');
 	});
 });

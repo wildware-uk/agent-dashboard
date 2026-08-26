@@ -6,6 +6,8 @@
 	"scripts": {
 		"dev": "vite dev",
 		"build": "vite build",
+		"build:cli": "vite build --config vite.cli.config.ts",
+		"build:all": "npm run build && npm run build:cli",
 		"preview": "vite preview",
 		"start": "node build",
 		"prepare": "svelte-kit sync || echo \"\"",
@@ -19,7 +21,8 @@
 		"test:component": "vitest run --project=component",
 		"test:e2e": "playwright test --pass-with-no-tests",
 		"test:all": "npm run test && npm run test:component && npm run test:e2e",
-		"coverage": "vitest run --project=unit --coverage"
+		"coverage": "vitest run --project=unit --coverage",
+		"cli": "node build/cli.js"
 	},
 	"devDependencies": {
 		"@eslint/js": "^10.0.1",
