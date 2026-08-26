@@ -17,9 +17,10 @@ import { expect, test, type Page, type Route } from '@playwright/test';
  * render, the client store, the stylesheet, and the browser. What is faked is
  * the *server side of the stream*: `page.route` answers `/api/stream` and
  * `/api/snapshot` so a test can decide exactly when an event arrives. Proving
- * that an agent posting over MCP reaches this browser is #18's job, and needs
- * the MCP surface; proving that an event on the stream reaches the DOM with no
- * reload is this file's job, and does not.
+ * that an agent posting over MCP reaches this browser is `src/smoke.e2e.ts`'s
+ * job (#18), where nothing is stubbed at all; proving that an event on the
+ * stream reaches the DOM with no reload is this file's job, and does not need
+ * the MCP surface to do it.
  */
 
 /** A fixed port, so `test.use({ baseURL })` can name it. Not 4173: that is the shared server. */
