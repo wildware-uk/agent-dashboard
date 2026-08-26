@@ -14,8 +14,17 @@ export type MediaKind = 'image' | 'video';
 /** Lifecycle of a task (design §3). */
 export type TaskState = 'todo' | 'claimed' | 'done' | 'cancelled';
 
-/** How a pending approval ended. `pending` is not a decision, so it is absent. */
-export type ApprovalOutcome = 'approved' | 'rejected' | 'timeout' | 'cancelled';
+/** The five shapes an owner request takes (design §5). */
+export type RequestKind = 'text' | 'confirm' | 'buttons' | 'choice' | 'multi_choice';
+
+/**
+ * How a pending request ended. `pending` is not an outcome, so it is absent.
+ *
+ * `answered` covers all five kinds: what the owner actually said is a string, a
+ * boolean or a list depending on the kind, and none of that belongs on the wire
+ * here — a waiter re-reads the row, which is the durable copy either way.
+ */
+export type RequestOutcome = 'answered' | 'timeout' | 'cancelled';
 
 /**
  * Every event type, mapped to its payload.
@@ -59,17 +68,32 @@ export interface EventPayloads {
 	};
 	/** `author` is the literal `human` or `agent:<agent_id>` (design §3). */
 	'message.created': { messageId: string; projectId: string | null; author: string };
-	'approval.created': { approvalId: string; agentId: string; projectId: string | null };
 	/**
-	 * Carries the decision itself, not just the id: every parked waiter unblocks
-	 * on this one event (design §5) and can answer its agent without a second read.
+	 * An agent has stopped and is waiting on its owner (design §5).
+	 *
+	 * `kind` rides along because it decides which control the sticky banner
+	 * renders, and a browser that already knows can show the prompt from the
+	 * frame before its refetch lands.
 	 */
-	'approval.decided': {
-		approvalId: string;
+	'request.created': {
+		requestId: string;
 		agentId: string;
-		state: ApprovalOutcome;
-		value: string | null;
-		decidedAt: string;
+		projectId: string | null;
+		kind: RequestKind;
+	};
+	/**
+	 * A request is settled, however it ended: answered, timed out, or dismissed.
+	 *
+	 * One name for all three because every parked waiter unblocks on this one
+	 * event (design §5), and a waiter that had to subscribe to three names to
+	 * learn its wait was over would miss the one it forgot. The answer itself is
+	 * deliberately not here — the row is the authority, and a waiter re-reads it.
+	 */
+	'request.answered': {
+		requestId: string;
+		agentId: string;
+		state: RequestOutcome;
+		settledAt: string;
 	};
 	/** Presence is derived from heartbeats, never stored as a flag (design §4). */
 	'agent.presence': { agentId: string; sessionId: string | null; online: boolean };

@@ -17,6 +17,7 @@
 	 */
 	import { onMount, type Snippet } from 'svelte';
 	import { resolve } from '$app/paths';
+	import RequestBanner from './RequestBanner.svelte';
 	import RightRail from './RightRail.svelte';
 	import Sidebar from './Sidebar.svelte';
 	import TasksPanel from './Tasks.svelte';
@@ -24,6 +25,7 @@
 	import TimelineView from './Timeline.svelte';
 	import { ownerActions, type OwnerActions } from './actions';
 	import { Presence } from './presence.svelte';
+	import { Requests } from './requests.svelte';
 	import { Tasks } from './tasks.svelte';
 	import { Threads } from './threads.svelte';
 	import { Timeline } from './timeline.svelte';
@@ -70,6 +72,15 @@
 		 * timeline instead of one per card (`threads.svelte.ts`).
 		 */
 		threads = new Threads({ project }),
+		/**
+		 * What agents are waiting on the owner for (design §5, §7).
+		 *
+		 * Owned here rather than by the banner because it is the one region that
+		 * must not be scoped to the project on screen: a request is aimed at the
+		 * owner, and an agent stopped dead in another project still has to be
+		 * impossible to miss.
+		 */
+		requests = new Requests(),
 		media,
 		/**
 		 * The owner's write calls (design §7), handed down to the sidebar and to
@@ -85,6 +96,7 @@
 		presence?: Presence;
 		tasks?: Tasks;
 		threads?: Threads;
+		requests?: Requests;
 		media?: Snippet<[UpdateView]>;
 		actions?: OwnerActions;
 	} = $props();
@@ -107,6 +119,9 @@
 		// the rail being on screen: the rail is a `hidden xl:block` region, and a
 		// narrower viewport must still name its agents.
 		presence.start();
+		// The banner's queue. Started here for the same reason presence is: it is
+		// read by a region that is always mounted, and it is not the timeline's.
+		requests.start();
 		// The threads on the cards this page is showing. Started here rather than in
 		// a card, because a card is mounted and unmounted as the feed moves and the
 		// conversation must not be refetched every time one scrolls past.
@@ -114,6 +129,7 @@
 		return () => {
 			feed.stop();
 			presence.stop();
+			requests.stop();
 			threads.stop();
 		};
 	});
@@ -142,71 +158,81 @@
 />
 
 <div class="grid h-dvh grid-rows-[auto_1fr] bg-surface text-content">
-	<!--
+	<div class="min-w-0">
+		<!--
+			Above the header, not in the rail (design §7). A pending request is the
+			one case where an agent is stopped dead waiting on its owner, so it takes
+			the top of the page and pushes everything else down rather than competing
+			for a corner of it.
+		-->
+		<RequestBanner {requests} agentNames={posters} {actions} />
+
+		<!--
 		`min-w-0` for the same reason `<main>` below carries it: this header is a
 		grid item, so it defaults to `min-width: auto` and refuses to shrink below
 		the intrinsic width of its controls. With two drawer toggles rather than
 		one it no longer fits a 375px phone, and without this it widens the layout
 		viewport and zooms the whole dashboard out (design §7).
 	-->
-	<header
-		class="flex min-w-0 items-center gap-2 border-b border-border-subtle px-3 py-2 sm:gap-3 sm:px-4"
-	>
-		<button
-			type="button"
-			onclick={() => (drawer = true)}
-			aria-label="Open projects"
-			aria-expanded={drawer}
-			class="rounded border border-border-subtle p-1.5 text-content-muted hover:text-content lg:hidden"
+		<header
+			class="flex min-w-0 items-center gap-2 border-b border-border-subtle px-3 py-2 sm:gap-3 sm:px-4"
 		>
-			<svg class="size-4" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-				<path d="M1 3h14v2H1zM1 7h14v2H1zM1 11h14v2H1z" />
-			</svg>
-		</button>
+			<button
+				type="button"
+				onclick={() => (drawer = true)}
+				aria-label="Open projects"
+				aria-expanded={drawer}
+				class="rounded border border-border-subtle p-1.5 text-content-muted hover:text-content lg:hidden"
+			>
+				<svg class="size-4" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+					<path d="M1 3h14v2H1zM1 7h14v2H1zM1 11h14v2H1z" />
+				</svg>
+			</button>
 
-		<button
-			type="button"
-			onclick={() => (rail = true)}
-			aria-label="Open agents and tasks"
-			aria-expanded={rail}
-			class="rounded border border-border-subtle p-1.5 text-content-muted hover:text-content xl:hidden"
-		>
-			<svg class="size-4" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-				<path d="M2 2h5v5H2zM9 2h5v2H9zM9 6h5v2H9zM2 9h5v5H2zM9 10h5v2H9zM9 13h5v1H9z" />
-			</svg>
-		</button>
+			<button
+				type="button"
+				onclick={() => (rail = true)}
+				aria-label="Open agents and tasks"
+				aria-expanded={rail}
+				class="rounded border border-border-subtle p-1.5 text-content-muted hover:text-content xl:hidden"
+			>
+				<svg class="size-4" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+					<path d="M2 2h5v5H2zM9 2h5v2H9zM9 6h5v2H9zM2 9h5v5H2zM9 10h5v2H9zM9 13h5v1H9z" />
+				</svg>
+			</button>
 
-		<h1 class="truncate text-base font-semibold tracking-tight sm:text-lg">
-			{activeProject ? activeProject.name : 'Agent Dashboard'}
-		</h1>
+			<h1 class="truncate text-base font-semibold tracking-tight sm:text-lg">
+				{activeProject ? activeProject.name : 'Agent Dashboard'}
+			</h1>
 
-		<span
-			class="ml-auto flex items-center gap-1.5 text-xs text-content-muted"
-			role="status"
-			aria-label={feed.status === 'live' ? 'Live' : 'Reconnecting'}
-		>
 			<span
-				class="size-2 rounded-full {feed.status === 'live' ? 'bg-emerald-500' : 'bg-amber-500'}"
-				aria-hidden="true"
-			></span>
-			<span class="hidden sm:inline">{feed.status === 'live' ? 'Live' : 'Reconnecting'}</span>
-		</span>
+				class="ml-auto flex items-center gap-1.5 text-xs text-content-muted"
+				role="status"
+				aria-label={feed.status === 'live' ? 'Live' : 'Reconnecting'}
+			>
+				<span
+					class="size-2 rounded-full {feed.status === 'live' ? 'bg-emerald-500' : 'bg-amber-500'}"
+					aria-hidden="true"
+				></span>
+				<span class="hidden sm:inline">{feed.status === 'live' ? 'Live' : 'Reconnecting'}</span>
+			</span>
 
-		<Theme />
+			<Theme />
 
-		<!--
+			<!--
 			`whitespace-nowrap` keeps this the one control that cannot be shrunk into
 			two lines. It is the only multi-word label in the header, so without it
 			the shrink a 375px phone needs lands here and breaks "Sign out" over two
 			rows; with it the shrink lands on the title, which already truncates.
 		-->
-		<a
-			href={resolve('/logout')}
-			class="rounded border border-border-subtle px-2 py-1 text-sm whitespace-nowrap text-content-muted hover:text-content"
-		>
-			Sign out
-		</a>
-	</header>
+			<a
+				href={resolve('/logout')}
+				class="rounded border border-border-subtle px-2 py-1 text-sm whitespace-nowrap text-content-muted hover:text-content"
+			>
+				Sign out
+			</a>
+		</header>
+	</div>
 
 	<div
 		class="grid min-h-0 min-w-0 lg:grid-cols-[15rem_minmax(0,1fr)] xl:grid-cols-[15rem_minmax(0,1fr)_17rem]"

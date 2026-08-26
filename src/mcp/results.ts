@@ -18,7 +18,15 @@
  *   between an agent that retries with a corrected argument and one that gives
  *   up on the transport.
  */
-import { isDomainError, type Message, type Project, type Task, type Update } from '$domain';
+import {
+	isDomainError,
+	type Message,
+	type OwnerRequest,
+	type Project,
+	type RequestResult,
+	type Task,
+	type Update
+} from '$domain';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 
 /** Milliseconds since the epoch, as agents should read it. */
@@ -66,6 +74,104 @@ export function guard(run: () => CallToolResult): CallToolResult {
 		console.error('mcp tool failed', error);
 		return failed('internal_error', 'the dashboard failed to handle this call; see server logs');
 	}
+}
+
+/**
+ * `guard`, for the one tool that waits.
+ *
+ * `request_input` parks on the event bus (design §5), so its body is a promise
+ * and the try/catch has to be able to await it. Same conversion, same codes —
+ * duplicated as an async twin rather than making every synchronous tool return
+ * a promise it does not need.
+ */
+export async function guarded(run: () => Promise<CallToolResult>): Promise<CallToolResult> {
+	try {
+		return await run();
+	} catch (error) {
+		if (isDomainError(error)) return failed(error.code, error.message);
+		console.error('mcp tool failed', error);
+		return failed('internal_error', 'the dashboard failed to handle this call; see server logs');
+	}
+}
+
+export type RequestView = {
+	id: string;
+	kind: string;
+	question: string;
+	detail: string | null;
+	options: string[] | null;
+	project_id: string | null;
+	update_id: string | null;
+	expires_at: string;
+};
+
+/** An owner request as a tool reports it back: what was asked, and about what. */
+export function requestView(request: OwnerRequest): RequestView {
+	return {
+		id: request.id,
+		kind: request.kind,
+		question: request.question,
+		detail: request.detail,
+		options: request.options,
+		project_id: request.projectId,
+		update_id: request.updateId,
+		expires_at: iso(request.expiresAt)
+	};
+}
+
+/**
+ * The four answers a wait can end with, in the shape design §5 specifies.
+ *
+ * The summary line is doing real work here: `pending` is the *common* outcome
+ * and the one an agent most easily misreads as "no answer, carry on", so the
+ * sentence says what to call next, in words, ahead of the JSON. `timeout` and
+ * `cancelled` say the opposite of permission for the same reason.
+ */
+export function requestResult(result: RequestResult): CallToolResult {
+	const request = requestView(result.request);
+
+	if (result.state === 'answered') {
+		return ok(`Your owner answered: ${describe(result.response.value)}`, {
+			state: 'answered',
+			request_id: request.id,
+			request,
+			response: result.response,
+			answered_at: iso(result.answeredAt)
+		});
+	}
+
+	if (result.state === 'pending') {
+		return ok(
+			`Nobody has answered yet. This is not a refusal — call await_request({request_id: ` +
+				`"${request.id}"}) and keep calling it while state is "pending".`,
+			{
+				state: 'pending',
+				request_id: request.id,
+				request,
+				poll_after_ms: result.pollAfterMs
+			}
+		);
+	}
+
+	const why =
+		result.state === 'timeout'
+			? 'Nobody answered before this request timed out.'
+			: 'Your owner dismissed this request without answering.';
+
+	return ok(`${why} That is not permission: do not proceed as though you had an answer.`, {
+		state: result.state,
+		request_id: request.id,
+		request
+	});
+}
+
+/** The answer as a sentence, so the model reads it before it parses anything. */
+function describe(value: string | boolean | string[]): string {
+	if (typeof value === 'boolean') return value ? 'yes.' : 'no.';
+	if (Array.isArray(value)) {
+		return value.length === 0 ? 'nothing.' : value.map((item) => JSON.stringify(item)).join(', ');
+	}
+	return JSON.stringify(value);
 }
 
 export type ProjectView = {

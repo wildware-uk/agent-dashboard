@@ -55,7 +55,7 @@ const project = insertProject(db, { slug: 'dashboard', name: 'Dashboard' });
 - Deletes are soft (`deleted_at`) so a connected browser can be told to remove a
   row it has already rendered. `media` is the exception: its bytes are gone, so
   the row goes with them.
-- State transitions that can race — claiming a task, deciding an approval,
+- State transitions that can race — claiming a task, answering a request,
   spending an upload token — are a **single conditional `UPDATE ... RETURNING`**.
   The loser gets `undefined`, never a half-written row.
 - Migrations are **append-only**. The runner records a checksum and refuses to

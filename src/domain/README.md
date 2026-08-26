@@ -1,7 +1,7 @@
 # `src/domain` — business rules
 
 **One job:** every rule in the product. Projects, updates, agents, sessions,
-tasks, messages, approvals. Plain arguments in, plain objects out.
+tasks, messages, owner requests. Plain arguments in, plain objects out.
 
 **May import:** `$db`, `$events`, `$media`, `$config`.
 
@@ -108,8 +108,10 @@ Decisions worth knowing before changing them:
   did not ask for and reporting success is worse than a 400.
 - **`heartbeat` piggybacks `{unreadMessages, openTasks, pendingApprovals}`** so an
   agent never polls three tools to find work (§5). Each count is one function in
-  `WORK_COUNTERS`; the slices that own tasks, messages and approvals replace one
-  entry each and the response shape never moves.
+  `WORK_COUNTERS`; the slices that own tasks, messages and owner requests replaced
+  one entry each and the response shape never moved. `pendingApprovals` keeps its
+  name because it is the field agents already parse: an approval is one kind of
+  owner request, and renaming the wire format for a word would break clients.
 - **The sweeper closes sessions idle beyond `SESSION_IDLE_MS`** (10 minutes), so
   a gate aimed at a dead agent fails loudly rather than hanging (§4).
   `startPresenceSweeper()` runs it on a timer and is started by
@@ -137,8 +139,21 @@ Decisions worth knowing before changing them:
   retrying blind.
 - `claim_task` is a single atomic `UPDATE ... WHERE state='todo'`; the loser gets
   a clean "already claimed" error (§5).
-- The approval gate is a bounded long-poll with durable resume: park on the event
-  bus for at most `HOLD_S`, otherwise return `pending` for the agent to poll
-  (§5).
+- **An owner request is a bounded long-poll with durable resume** (§5). `text`,
+  `confirm`, `buttons`, `choice` and `multi_choice` are one mechanism:
+  `requestInput` writes a row, publishes `request.created`, and parks on the event
+  bus for at most `HOLD_S`; if nobody answered it returns `pending` and the agent
+  resumes with `awaitRequest`. The wait lives in the database rather than in a
+  socket, so a _fresh process_ can resume a request it never made, and every
+  waiter on one request unblocks on the same `request.answered`.
+- **Every answer is validated against the request that asked for it**
+  (`validateAnswer`, inside `answerRequest`). A `choice` must be one of the
+  options offered, a `multi_choice` must respect `min`/`max`, a `text` answer its
+  length bounds. This is the security boundary of that slice: the agent acts on
+  the value, and the browser posting it is not trustworthy.
+- **`expires_at` and a dismissal are the two ways a request ends without an
+  answer.** Both settle the row and publish the same `request.answered`, so a
+  parked agent hears `timeout` or `cancelled` rather than hanging.
+  `startRequestSweeper()` clears the ones nobody is holding.
 
 Public entry point: `src/domain/index.ts`.

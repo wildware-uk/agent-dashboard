@@ -59,7 +59,7 @@ export default defineConfig({
 	// The one smoke test in the design (§9) proves the SSE path, so it needs the
 	// real Node-adapter server rather than the dev server.
 	webServer: {
-		command: 'npm run build && npm run preview',
+		command: 'npm run build:all && npm run preview',
 		port: 4173,
 		env: previewEnv,
 		reuseExistingServer: !process.env.CI

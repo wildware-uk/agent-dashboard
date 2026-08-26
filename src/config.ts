@@ -63,8 +63,8 @@ const schema = z.object({
 	MAX_VIDEO_BYTES: bytes(200 * 1024 * 1024),
 
 	/**
-	 * How long `request_approval` parks on the event bus before handing the agent
-	 * a `pending` result to poll on. Must stay under the 60 second tool timeout
+	 * How long `request_input` parks on the event bus before handing the agent a
+	 * `pending` result to resume on. Must stay under the 60 second tool timeout
 	 * common to MCP clients (design §5).
 	 */
 	HOLD_S: z.coerce.number().int().min(1).max(59).default(55)

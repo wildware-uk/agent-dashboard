@@ -79,20 +79,22 @@ throttled, while a request with no credentials costs nothing to refuse.
 The tools built so far, of the fourteen in design §5 (§11 steps 5, 9, 12, 13 and 14).
 `TOOL_NAMES` is the list that cannot drift:
 
-| Tool               | Takes                                                                           | Does                                               |
-| ------------------ | ------------------------------------------------------------------------------- | -------------------------------------------------- |
-| `create_project`   | `name`, `slug?`, `description?`                                                 | Idempotent on slug; returns `created`.             |
-| `list_projects`    | `status?`                                                                       | Sidebar order: pinned first, then newest.          |
-| `post_update`      | `project` (slug or id), `body`, `title?`, `level?`, `media_ids?`, `session_id?` | Posts to the timeline; publishes `update.created`. |
-| `create_upload`    | `filename`, `mime`, `bytes`                                                     | Mints a single-use upload URL, 15 minute TTL.      |
-| `attach_media`     | `update_id`, `media_ids`                                                        | For bytes that land after the post. Retry-safe.    |
-| `register_session` | `meta?` (`{host, cwd, model}`)                                                  | Opens a session; returns `heartbeat_interval_s`.   |
-| `heartbeat`        | `session_id`                                                                    | Stays online; piggybacks the three work counts.    |
-| `end_session`      | `session_id`                                                                    | Closes the run. Idempotent.                        |
-| `get_messages`     | `since?`, `project?`, `mark_read?`                                              | Reads what the owner said. Advances your cursor.   |
-| `list_tasks`       | `project?`, `state?`, `mine?`                                                   | The work queue. `mine` is your token, not an id.   |
-| `claim_task`       | `task_id`                                                                       | One atomic claim; the loser gets `conflict`.       |
-| `complete_task`    | `task_id`, `result`, `post_update?`                                             | Closes your claim, optionally posting a card.      |
+| Tool               | Takes                                                                                                                                    | Does                                                     |
+| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------- |
+| `create_project`   | `name`, `slug?`, `description?`                                                                                                          | Idempotent on slug; returns `created`.                   |
+| `list_projects`    | `status?`                                                                                                                                | Sidebar order: pinned first, then newest.                |
+| `post_update`      | `project` (slug or id), `body`, `title?`, `level?`, `media_ids?`, `session_id?`                                                          | Posts to the timeline; publishes `update.created`.       |
+| `create_upload`    | `filename`, `mime`, `bytes`                                                                                                              | Mints a single-use upload URL, 15 minute TTL.            |
+| `attach_media`     | `update_id`, `media_ids`                                                                                                                 | For bytes that land after the post. Retry-safe.          |
+| `register_session` | `meta?` (`{host, cwd, model}`)                                                                                                           | Opens a session; returns `heartbeat_interval_s`.         |
+| `heartbeat`        | `session_id`                                                                                                                             | Stays online; piggybacks the three work counts.          |
+| `end_session`      | `session_id`                                                                                                                             | Closes the run. Idempotent.                              |
+| `get_messages`     | `since?`, `project?`, `mark_read?`                                                                                                       | Reads what the owner said. Advances your cursor.         |
+| `list_tasks`       | `project?`, `state?`, `mine?`                                                                                                            | The work queue. `mine` is your token, not an id.         |
+| `claim_task`       | `task_id`                                                                                                                                | One atomic claim; the loser gets `conflict`.             |
+| `complete_task`    | `task_id`, `result`, `post_update?`                                                                                                      | Closes your claim, optionally posting a card.            |
+| `request_input`    | `kind`, `question`, `detail?`, `options?`, `placeholder?`, `multiline?`, `default?`, `min?`, `max?`, `project?`, `update?`, `timeout_s?` | Asks the owner for something, then parks up to `HOLD_S`. |
+| `await_request`    | `request_id`                                                                                                                             | Resumes that wait, with identical semantics.             |
 
 `post_update` takes `media_ids` and refuses the whole post if any id is not the
 caller's to attach — an image an agent believes it published must not be silently
@@ -138,8 +140,25 @@ move the cursor past a message it did not hand over, so delivery is at-least-onc
 rather than at-most-once: an agent may be given the same message twice, and can
 never silently lose one. The reasoning is in `src/domain/messages.ts`.
 
-Still to come, in build order (§11):
-`request_approval` / `await_approval` (15).
+`request_input` and `await_request` are the two tools whose **description is the
+mechanism**. A stateless MCP server has no push channel (see above), and a human
+is slower than a client's tool timeout, so a wait cannot be an open socket:
+`request_input` parks on the event bus for at most `HOLD_S` (55 seconds, under the
+common 60 second tool timeout) and then answers `{state: "pending", request_id}`.
+Nothing makes that a _wait_ except the agent looping on `await_request` — which is
+why both descriptions say so in capitals, twice, and spell out the four result
+shapes. The request itself lives in the `approvals` table, so the loop survives a
+dropped connection, a client timeout and the agent's own restart; a process that
+never made the request can resume it from the id alone.
+
+The five kinds — `text`, `confirm`, `buttons`, `choice`, `multi_choice` — answer
+with a string, a boolean or a list of strings, and **the server validates every
+answer against the request that asked for it** (`src/domain/requests.ts`). An
+agent acts on these values and a browser is not a trustworthy client, so a
+`choice` answer is always one of the options that were offered and a
+`multi_choice` always respects the `min` and `max` that were asked for. `timeout`
+and `cancelled` are results, not errors, and both descriptions say plainly that
+neither is permission.
 
 ## Testing
 

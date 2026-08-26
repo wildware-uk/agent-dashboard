@@ -17,6 +17,7 @@ import {
 	sweepSessions
 } from './sessions';
 import { isDomainError, type DomainErrorCode } from './errors';
+import { answerRequest, createRequest } from './requests';
 
 let h: Harness;
 let now: number;
@@ -157,8 +158,8 @@ describe('heartbeat', () => {
 	it('piggybacks the counts an agent would otherwise poll three tools for', () => {
 		const { session } = registerSession(h, { agentId });
 
-		// Tasks, messages and approvals are later slices, so the honest answer
-		// today is zero — but the shape an agent reads is already the final one.
+		// Nothing is waiting for this agent, so every count is honestly zero —
+		// and the shape an agent reads is the same one it reads when they are not.
 		expect(heartbeat(h, { sessionId: session.id, agentId })).toEqual({
 			ok: true,
 			unreadMessages: 0,
@@ -462,7 +463,7 @@ describe('startPresenceSweeper', () => {
 });
 
 describe('the piggybacked counts', () => {
-	it('answers zero for every slice that does not exist yet', () => {
+	it('answers zero when nothing at all is waiting for the agent', () => {
 		expect(countWork(h, agentId)).toEqual({
 			unreadMessages: 0,
 			openTasks: 0,
@@ -486,5 +487,26 @@ describe('the piggybacked counts', () => {
 		});
 
 		expect(counted).toEqual({ unreadMessages: 3, openTasks: 2, pendingApprovals: 1 });
+	});
+});
+
+describe('the heartbeat counts what is waiting on the owner (#15)', () => {
+	it('reports this agent’s pending requests, and nobody else’s', () => {
+		const { session } = registerSession(h, { agentId });
+		const other = h.agent('scout-15');
+		createRequest(h, { agentId, kind: 'confirm', question: 'push?' });
+		createRequest(h, { agentId, kind: 'text', question: 'commit message?' });
+		createRequest(h, { agentId: other, kind: 'confirm', question: 'mine?' });
+
+		expect(heartbeat(h, { sessionId: session.id, agentId }).pendingApprovals).toBe(2);
+		expect(countWork(h, other).pendingApprovals).toBe(1);
+	});
+
+	it('stops counting a request the owner has answered', () => {
+		const { request } = createRequest(h, { agentId, kind: 'confirm', question: 'push?' });
+
+		answerRequest(h, { requestId: request.id, value: true });
+
+		expect(countWork(h, agentId).pendingApprovals).toBe(0);
 	});
 });

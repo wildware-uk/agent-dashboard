@@ -10,6 +10,7 @@
  */
 import { mintAgentToken } from '$domain';
 import { harness, type Harness } from '$domain/testing';
+import type { Clock } from '$domain';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import type { ToolDeps } from './tools/types';
 
@@ -28,14 +29,19 @@ export type McpHarness = {
 	mint(name: string): { agentId: string; token: string };
 };
 
-export function mcpHarness(options: { name?: string; secret?: string } = {}): McpHarness {
-	const h = harness();
+export function mcpHarness(
+	options: { name?: string; secret?: string; now?: Clock; holdMs?: number } = {}
+): McpHarness {
+	const h = harness({ now: options.now });
 	const secret = options.secret ?? TEST_TOKEN_SECRET;
 	const { agent, token } = mintAgentToken(h, { name: options.name ?? 'test-agent', secret });
 
 	return {
 		h,
-		deps: { ctx: h, agent },
+		// `holdMs` is only read by `request_input` and `await_request`; a test that
+		// exercises the wait passes a hold measured in milliseconds so it does not
+		// sit out the real 55 seconds (design §5).
+		deps: { ctx: h, agent, holdMs: options.holdMs },
 		token,
 		secret,
 		mint(name) {

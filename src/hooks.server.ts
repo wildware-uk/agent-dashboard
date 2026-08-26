@@ -17,7 +17,7 @@
  */
 import { building } from '$app/environment';
 import { assertBodyLimitAllowsUploads, assertClientAddressTrustworthy, loadConfig } from '$config';
-import { startMediaSweeper, startPresenceSweeper } from '$domain';
+import { startMediaSweeper, startPresenceSweeper, startRequestSweeper } from '$domain';
 import { startDerivativeWorker } from '$media';
 
 assertClientAddressTrustworthy(process.env);
@@ -37,6 +37,13 @@ if (!building) assertBodyLimitAllowsUploads(process.env, loadConfig(process.env)
 // handle per tick, so starting it here costs nothing until it first runs, and it
 // is skipped while building, when there is no deployment to sweep.
 if (!building) startPresenceSweeper();
+
+// A request whose deadline has passed is a prompt the owner can no longer
+// answer and an agent that has stopped waiting for one. A parked agent times
+// itself out at its own deadline (design §5), so this is what clears the ones
+// nobody is holding out of the banner. Same shape as above: its own database
+// handle per tick, failures logged rather than thrown.
+if (!building) startRequestSweeper();
 
 // Uploads happen before the update that references them, so an agent that
 // crashes in between leaves bytes on disk that nothing will ever point at. This

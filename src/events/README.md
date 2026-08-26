@@ -12,12 +12,12 @@ Notes carried from the design (§4):
 
 - Event types: `project.created`, `project.updated`, `update.created`,
   `update.updated`, `update.deleted`, `media.ready`, `task.created`, `task.updated`,
-  `message.created`, `approval.created`, `approval.decided`, `agent.presence`.
+  `message.created`, `request.created`, `request.answered`, `agent.presence`.
 - Every event carries the global sequence number used as the SSE `id:`.
 - The last 500 events stay in a ring buffer so a reconnect with `Last-Event-ID`
   can be replayed; a miss emits a single `resync` instead.
-- Parked approval waiters unblock off `approval.decided` published here, which is
-  what makes the approval gate resumable rather than socket-bound.
+- Parked owner-request waiters unblock off `request.answered` published here, which is
+  what makes an owner request resumable rather than socket-bound.
 
 ## Public surface
 
@@ -38,7 +38,7 @@ Notes carried from the design (§4):
 - `bus.waitFor({ types, where, since, timeoutMs, signal })` — parks until a
   matching event, the timeout, or an abort; resolves `undefined` when no match
   arrived, and always unsubscribes. `since` scans the replay buffer first, which
-  closes the race between writing an approval row and waiting on its decision.
+  closes the race between writing a request row and waiting on its answer.
 - `AppEvent`, `EventOf<K>`, `EventPayloads`, `EventName` and the small literal
   unions the payloads use.
 

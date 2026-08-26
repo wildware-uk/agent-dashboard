@@ -11,9 +11,9 @@
  *
  * const stop = bus.subscribe((event) => write(event.seq, event));
  * bus.publish('update.created', { updateId, projectId, agentId });
- * const decided = await bus.waitFor({
- * 	types: ['approval.decided'],
- * 	where: (event) => event.payload.approvalId === id,
+ * const settled = await bus.waitFor({
+ * 	types: ['request.answered'],
+ * 	where: (event) => event.payload.requestId === id,
  * 	since: createdSeq,
  * 	timeoutMs: config.HOLD_S * 1000
  * });
@@ -30,10 +30,11 @@ export type {
 export type { ReplayMiss, ReplayResult } from './ring';
 export type {
 	AppEvent,
-	ApprovalOutcome,
 	EventName,
 	EventOf,
 	EventPayloads,
 	MediaKind,
+	RequestKind,
+	RequestOutcome,
 	TaskState
 } from './types';

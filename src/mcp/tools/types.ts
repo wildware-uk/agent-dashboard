@@ -20,6 +20,14 @@ export type ToolDeps = {
 	ctx: DomainContext;
 	/** Who is calling, resolved from the bearer token — never from an argument. */
 	agent: Agent;
+	/**
+	 * How long an owner request may park before answering `pending` (design §5).
+	 *
+	 * Resolved from `HOLD_S` once, where the rest of the environment is read, so
+	 * no tool reaches for `process.env` on the request path — and a test can hand
+	 * over a hold measured in milliseconds instead of waiting out a real one.
+	 */
+	holdMs?: number;
 };
 
 /** The zod shape a tool's arguments are described by. */
@@ -31,7 +39,18 @@ export type ToolShape = Record<string, z.ZodType>;
  * `config` is exactly the SDK's tool config, so nothing is translated on the way
  * in: what the tests read is what the agent is told.
  */
-export type McpTool<Shape extends ToolShape> = {
+export type McpTool<
+	Shape extends ToolShape,
+	/**
+	 * What `run` hands back.
+	 *
+	 * A tool answers synchronously unless it genuinely waits: `request_input` and
+	 * `await_request` park on the event bus until the owner answers or the hold
+	 * elapses (design §5), so they declare `Promise<CallToolResult>` and every
+	 * other tool stays exactly as immediate as it reads.
+	 */
+	Result extends CallToolResult | Promise<CallToolResult> = CallToolResult
+> = {
 	name: string;
 	config: {
 		title: string;
@@ -48,7 +67,7 @@ export type McpTool<Shape extends ToolShape> = {
 			openWorldHint?: boolean;
 		};
 	};
-	run: (deps: ToolDeps, args: z.output<z.ZodObject<Shape>>) => CallToolResult;
+	run: (deps: ToolDeps, args: z.output<z.ZodObject<Shape>>) => Result;
 };
 
 /** A tool with its argument type erased, for code that only reads the schema. */

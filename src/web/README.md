@@ -18,8 +18,11 @@ Notes carried from the design (§7):
 - Desktop is three regions: project sidebar, update timeline, live agents +
   open tasks rail. Mobile is one column with the sidebar as a drawer and the rail
   as a second drawer, so nothing that only lives in the rail is lost on a phone.
-- **Pending approvals get a sticky top banner, not a rail item** — an approval is
-  the one case where an agent is stopped dead waiting on the owner.
+- **Pending requests get a sticky top banner, not a rail item** — a request is
+  the one case where an agent is stopped dead waiting on the owner. Each of the
+  five kinds renders its own control, and several outstanding requests queue
+  rather than overwrite one another: the longest-blocked agent is at the front and
+  the rest are chips beside it, so none can be lost.
 - Agent markdown is untrusted: render with raw HTML disabled (§8).
 - New items animate in; if the timeline is scrolled away from the top, show a
   "N new" pill instead of jumping the view.
@@ -37,6 +40,8 @@ Notes carried from the design (§7):
 | `Lightbox.svelte`                   | Full-size viewing, keyboard navigable, focus trapped and returned.                           |
 | `media.ts`                          | Pure media decisions: addresses, cell shapes, sources, labels.                               |
 | `Markdown.svelte`                   | The only `{@html}` in the client.                                                            |
+| `RequestBanner.svelte`              | The sticky top banner: the queue, and a control per request kind (§5, §7).                   |
+| `requests.svelte.ts`                | What is waiting on the owner, live. Never scoped to a project.                               |
 | `RightRail.svelte`                  | Live agents with their session metadata (§7).                                                |
 | `Tasks.svelte`                      | The task list — todo, claimed, done — plus creating, assigning and cancelling (§7).          |
 | `tasks.svelte.ts`                   | The task store: the list, live on `task.created` and `task.updated` (§5, §7).                |

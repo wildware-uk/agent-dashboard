@@ -67,6 +67,13 @@ export const MCP_INSTRUCTIONS = [
 	'that is what shows you as online, and each heartbeat tells you whether any messages, tasks or',
 	'approvals are waiting, so you never have to poll for work. Call end_session when you finish.',
 	'',
+	'When you need something only your owner can give you — a value you are missing, permission,',
+	'a decision between options — call request_input rather than guessing or stopping. It shows a',
+	'prompt at the top of their dashboard and waits. It answers within about a minute either way:',
+	'if it answers { state: "pending" }, nobody has decided yet, so call await_request with the',
+	'request_id and keep looping while the state is "pending". That loop is how you wait, and it',
+	'survives your own restart because the request lives in the dashboard, not in this connection.',
+	'',
 	'You are identified by your bearer token. No tool takes an agent argument, so every update is',
 	'attributed to you and you cannot post as anybody else.',
 	'',
@@ -122,7 +129,7 @@ export function createMcpHandler(options: McpHandlerOptions = {}): McpHandler {
 		});
 		if (!auth.ok) return refusalResponse(auth);
 
-		return serve(request, { ctx, agent: auth.agent });
+		return serve(request, { ctx, agent: auth.agent, holdMs: secrets.holdMs });
 	};
 }
 
@@ -133,9 +140,9 @@ async function serve(request: Request, deps: ToolDeps): Promise<Response> {
 		// Stateless: no session id, so nothing has to be remembered between
 		// requests and no session map can leak.
 		sessionIdGenerator: undefined,
-		// One complete JSON response per request rather than an SSE stream. Every
-		// tool here answers immediately, and a stream would only add a frame the
-		// client has to reassemble.
+		// One complete JSON response per request rather than an SSE stream. A tool
+		// answers with one result — `request_input` after a bounded park, the rest
+		// immediately — and a stream would only add a frame to reassemble.
 		enableJsonResponse: true
 	});
 

@@ -3,12 +3,14 @@ import { freshDatabase, type Db } from './testing';
 import { insertAgent } from './agents';
 import { insertProject } from './projects';
 import {
+	countPendingApprovals,
 	decideApproval,
 	expireApprovals,
 	findApprovalById,
 	insertApproval,
 	listApprovals
 } from './approvals';
+import type { RequestAnswer } from './types';
 
 let db: Db;
 let agentId: string;
@@ -123,5 +125,64 @@ describe('listApprovals', () => {
 		expect(listApprovals(db, { state: 'pending' }).map((a) => a.id)).toEqual([second.id, first.id]);
 		expect(listApprovals(db, { agentId: other }).map((a) => a.id)).toEqual([second.id]);
 		expect(listApprovals(db, { state: 'pending', agentId }).map((a) => a.id)).toEqual([first.id]);
+	});
+});
+
+describe('the five request kinds (design §5)', () => {
+	it('stores a kind, a detail, options and the kind-specific config', () => {
+		const request = ask({
+			kind: 'multi_choice',
+			question: 'which files should I delete?',
+			detail: 'They are all untracked.',
+			options: ['a.ts', 'b.ts', 'c.ts'],
+			config: { min: 1, max: 2 }
+		});
+
+		expect(findApprovalById(db, request.id)).toMatchObject({
+			kind: 'multi_choice',
+			question: 'which files should I delete?',
+			detail: 'They are all untracked.',
+			options: ['a.ts', 'b.ts', 'c.ts'],
+			config: { min: 1, max: 2 },
+			answer: null
+		});
+	});
+
+	it('defaults to confirm, so a row written before migration 002 keeps its meaning', () => {
+		expect(ask()).toMatchObject({ kind: 'confirm', detail: null, config: null, answer: null });
+	});
+
+	it('round-trips an answer of each shape: a string, a boolean, and a list', () => {
+		const answers: RequestAnswer[] = [
+			{ kind: 'text', value: 'ship it' },
+			{ kind: 'confirm', value: true },
+			{ kind: 'multi_choice', value: ['a.ts', 'c.ts'] }
+		];
+
+		for (const answer of answers) {
+			const request = ask({ kind: answer.kind });
+
+			const decided = decideApproval(db, request.id, { state: 'approved', answer });
+
+			expect(decided?.answer, answer.kind).toEqual(answer);
+			expect(findApprovalById(db, request.id)?.answer, answer.kind).toEqual(answer);
+		}
+	});
+});
+
+describe('countPendingApprovals', () => {
+	it('counts this agent’s pending rows and nobody else’s', () => {
+		const other = insertAgent(db, { name: 'scout', tokenHash: 'h2' }).id;
+		ask();
+		const answered = ask();
+		decideApproval(db, answered.id, { state: 'approved' });
+		insertApproval(db, { agentId: other, question: 'mine?', expiresAt: 10_000 });
+
+		expect(countPendingApprovals(db, agentId)).toBe(1);
+		expect(countPendingApprovals(db, other)).toBe(1);
+	});
+
+	it('is zero for an agent that has never asked for anything', () => {
+		expect(countPendingApprovals(db, 'nobody')).toBe(0);
 	});
 });

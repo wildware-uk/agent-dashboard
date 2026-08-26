@@ -124,10 +124,11 @@ describe('EventBus subscribe', () => {
 		const seen: AppEvent[] = [];
 		bus.subscribe((event) => seen.push(event));
 
-		const published = bus.publish('approval.created', {
-			approvalId: 'a1',
+		const published = bus.publish('request.created', {
+			requestId: 'a1',
 			agentId: 'ag1',
-			projectId: 'p1'
+			projectId: 'p1',
+			kind: 'confirm'
 		});
 
 		expect(seen).toEqual([published]);
@@ -186,19 +187,18 @@ describe('EventBus waitFor', () => {
 		vi.useRealTimers();
 	});
 
-	const decided = {
-		approvalId: 'a1',
+	const settled = {
+		requestId: 'a1',
 		agentId: 'ag1',
-		state: 'approved',
-		value: 'ship it',
-		decidedAt: '2026-08-25T09:30:00.000Z'
+		state: 'answered',
+		settledAt: '2026-08-25T09:30:00.000Z'
 	} as const;
 
 	it('resolves with the first matching event', async () => {
 		const bus = new EventBus();
-		const parked = bus.waitFor({ types: ['approval.decided'], timeoutMs: 55_000 });
+		const parked = bus.waitFor({ types: ['request.answered'], timeoutMs: 55_000 });
 
-		const published = bus.publish('approval.decided', decided);
+		const published = bus.publish('request.answered', settled);
 
 		await expect(parked).resolves.toEqual(published);
 	});
@@ -206,21 +206,26 @@ describe('EventBus waitFor', () => {
 	it('ignores events of another type and a non-matching predicate', async () => {
 		const bus = new EventBus();
 		const parked = bus.waitFor({
-			types: ['approval.decided'],
-			where: (event) => event.payload.approvalId === 'a2',
+			types: ['request.answered'],
+			where: (event) => event.payload.requestId === 'a2',
 			timeoutMs: 55_000
 		});
 
-		bus.publish('approval.created', { approvalId: 'a2', agentId: 'ag1', projectId: null });
-		bus.publish('approval.decided', decided);
-		const other = bus.publish('approval.decided', { ...decided, approvalId: 'a2' });
+		bus.publish('request.created', {
+			requestId: 'a2',
+			agentId: 'ag1',
+			projectId: null,
+			kind: 'confirm'
+		});
+		bus.publish('request.answered', settled);
+		const other = bus.publish('request.answered', { ...settled, requestId: 'a2' });
 
 		await expect(parked).resolves.toEqual(other);
 	});
 
 	it('resolves undefined when the hold elapses, and unparks itself', async () => {
 		const bus = new EventBus();
-		const parked = bus.waitFor({ types: ['approval.decided'], timeoutMs: 55_000 });
+		const parked = bus.waitFor({ types: ['request.answered'], timeoutMs: 55_000 });
 
 		expect(bus.listenerCount).toBe(1);
 		await vi.advanceTimersByTimeAsync(54_999);
@@ -233,9 +238,9 @@ describe('EventBus waitFor', () => {
 
 	it('clears its timer once a match arrives, leaving nothing pending', async () => {
 		const bus = new EventBus();
-		const parked = bus.waitFor({ types: ['approval.decided'], timeoutMs: 55_000 });
+		const parked = bus.waitFor({ types: ['request.answered'], timeoutMs: 55_000 });
 
-		bus.publish('approval.decided', decided);
+		bus.publish('request.answered', settled);
 		await parked;
 
 		expect(bus.listenerCount).toBe(0);
@@ -244,16 +249,17 @@ describe('EventBus waitFor', () => {
 
 	it('catches a match that was published before the caller parked', async () => {
 		const bus = new EventBus();
-		const created = bus.publish('approval.created', {
-			approvalId: 'a1',
+		const created = bus.publish('request.created', {
+			requestId: 'a1',
 			agentId: 'ag1',
-			projectId: null
+			projectId: null,
+			kind: 'confirm'
 		});
-		// The human decided in the window between the DB write and the park.
-		const published = bus.publish('approval.decided', decided);
+		// The human answered in the window between the DB write and the park.
+		const published = bus.publish('request.answered', settled);
 
 		const parked = bus.waitFor({
-			types: ['approval.decided'],
+			types: ['request.answered'],
 			since: created.seq,
 			timeoutMs: 55_000
 		});
@@ -264,10 +270,10 @@ describe('EventBus waitFor', () => {
 
 	it('does not re-deliver a match at or before the `since` seq', async () => {
 		const bus = new EventBus();
-		const stale = bus.publish('approval.decided', decided);
+		const stale = bus.publish('request.answered', settled);
 
 		const parked = bus.waitFor({
-			types: ['approval.decided'],
+			types: ['request.answered'],
 			since: stale.seq,
 			timeoutMs: 55_000
 		});
@@ -282,8 +288,8 @@ describe('EventBus waitFor', () => {
 		bus.publish('agent.presence', { agentId: 'a1', sessionId: 's1', online: false });
 		bus.publish('agent.presence', { agentId: 'a1', sessionId: 's1', online: true });
 
-		const parked = bus.waitFor({ types: ['approval.decided'], since: 1, timeoutMs: 55_000 });
-		const published = bus.publish('approval.decided', decided);
+		const parked = bus.waitFor({ types: ['request.answered'], since: 1, timeoutMs: 55_000 });
+		const published = bus.publish('request.answered', settled);
 
 		await expect(parked).resolves.toEqual(published);
 	});
@@ -306,7 +312,7 @@ describe('EventBus waitFor', () => {
 		const bus = new EventBus();
 		const controller = new AbortController();
 		const parked = bus.waitFor({
-			types: ['approval.decided'],
+			types: ['request.answered'],
 			timeoutMs: 55_000,
 			signal: controller.signal
 		});

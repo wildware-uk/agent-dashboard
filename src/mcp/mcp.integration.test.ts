@@ -16,7 +16,14 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { getRequest, setResponse } from '@sveltejs/kit/node';
 import type { Handle, RequestEvent } from '@sveltejs/kit';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { createTask, listLiveAgents, listTasks, listUpdates, postMessage } from '$domain';
+import {
+	answerRequest,
+	createTask,
+	listLiveAgents,
+	listTasks,
+	listUpdates,
+	postMessage
+} from '$domain';
 import { createAuthHandle } from '$http/auth';
 import { createTokenRateLimiter, type TokenRateLimiter } from './rate-limit';
 import { createMcpHandler, MCP_SERVER_NAME } from './server';
@@ -43,7 +50,7 @@ const guard: Handle = createAuthHandle({
 beforeAll(async () => {
 	const mcpHandler = createMcpHandler({
 		context: () => mcp.h,
-		config: () => ({ tokenSecret: mcp.secret }),
+		config: () => ({ tokenSecret: mcp.secret, holdMs: 50 }),
 		// One limiter for the lifetime of the server, replaced per test.
 		rateLimiter: { take: (key) => rateLimiter.take(key), reset: () => {}, size: () => 0 }
 	});
@@ -137,6 +144,7 @@ describe('the transport', () => {
 
 		expect(tools.map((tool) => tool.name).sort()).toEqual([
 			'attach_media',
+			'await_request',
 			'claim_task',
 			'complete_task',
 			'create_project',
@@ -147,7 +155,8 @@ describe('the transport', () => {
 			'list_projects',
 			'list_tasks',
 			'post_update',
-			'register_session'
+			'register_session',
+			'request_input'
 		]);
 
 		const post = tools.find((tool) => tool.name === 'post_update')!;
@@ -546,6 +555,107 @@ describe('messages over the wire', () => {
 
 		await client.close();
 		await other.close();
+	});
+});
+
+describe('owner requests over the wire (design §5)', () => {
+	/**
+	 * The hold is 50ms here (see `config` above), so the `pending` branch is what
+	 * a first call takes — which is exactly the case the resume contract exists
+	 * for, and the one a synchronous-looking test would never reach.
+	 */
+	it('parks, answers pending, and resumes on await_request with the typed value', async () => {
+		const client = await connect();
+
+		const asked = (await call(client, 'request_input', {
+			kind: 'choice',
+			question: 'Which branch?',
+			options: ['main', 'next']
+		})) as { structuredContent: { state: string; request_id: string } };
+
+		expect(asked.structuredContent).toMatchObject({ state: 'pending' });
+
+		// The owner answers, in the browser's half of the product.
+		answerRequest(mcp.h, { requestId: asked.structuredContent.request_id, value: 'next' });
+
+		const resumed = await call(client, 'await_request', {
+			request_id: asked.structuredContent.request_id
+		});
+		expect(resumed.structuredContent).toMatchObject({
+			state: 'answered',
+			response: { kind: 'choice', value: 'next' }
+		});
+
+		await client.close();
+	});
+
+	it('carries each kind’s value through JSON-RPC as its own type', async () => {
+		const client = await connect();
+		const kinds: [Record<string, unknown>, unknown, unknown][] = [
+			[{ kind: 'text', question: 'message?' }, 'fix: parser', 'fix: parser'],
+			[{ kind: 'confirm', question: 'push?' }, false, false],
+			[
+				{ kind: 'multi_choice', question: 'delete?', options: ['a', 'b', 'c'] },
+				['a', 'c'],
+				['a', 'c']
+			]
+		];
+
+		for (const [args, value, expected] of kinds) {
+			const asked = (await call(client, 'request_input', args)) as {
+				structuredContent: { request_id: string };
+			};
+			answerRequest(mcp.h, { requestId: asked.structuredContent.request_id, value });
+
+			const resumed = await call(client, 'await_request', {
+				request_id: asked.structuredContent.request_id
+			});
+			expect(resumed.structuredContent, String(args.kind)).toMatchObject({
+				state: 'answered',
+				response: { kind: args.kind, value: expected }
+			});
+		}
+
+		await client.close();
+	});
+
+	it('refuses to resume another agent’s request, over the wire as anywhere else', async () => {
+		const client = await connect();
+		const other = await connect(mcp.mint('other-agent').token);
+		const asked = (await call(client, 'request_input', {
+			kind: 'confirm',
+			question: 'push?'
+		})) as { structuredContent: { request_id: string } };
+
+		const stolen = await call(other, 'await_request', {
+			request_id: asked.structuredContent.request_id
+		});
+
+		expect(stolen).toMatchObject({
+			isError: true,
+			structuredContent: { error: 'invalid_argument' }
+		});
+
+		await client.close();
+		await other.close();
+	});
+
+	it('publishes both tools through JSON Schema with the resume loop in the description', async () => {
+		const client = await connect();
+
+		const { tools } = await client.listTools();
+		const ask = tools.find((tool) => tool.name === 'request_input')!;
+		const wait = tools.find((tool) => tool.name === 'await_request')!;
+
+		expect(ask.inputSchema).toMatchObject({
+			type: 'object',
+			required: ['kind', 'question'],
+			properties: { kind: { enum: ['text', 'confirm', 'buttons', 'choice', 'multi_choice'] } }
+		});
+		expect(ask.description).toContain('await_request');
+		expect(wait.description).toContain('pending');
+
+		await client.close();
 	});
 });
 

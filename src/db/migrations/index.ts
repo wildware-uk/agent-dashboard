@@ -6,6 +6,7 @@
  * the database in front of it no longer matches the code's idea of it.
  */
 import { sql as initialSchema } from './001-initial-schema';
+import { sql as ownerRequests } from './002-owner-requests';
 
 export type Migration = {
 	/** 1-based, contiguous, and permanent once shipped. */
@@ -17,5 +18,6 @@ export type Migration = {
 };
 
 export const MIGRATIONS: readonly Migration[] = [
-	{ version: 1, name: 'initial-schema', sql: initialSchema }
+	{ version: 1, name: 'initial-schema', sql: initialSchema },
+	{ version: 2, name: 'owner-requests', sql: ownerRequests }
 ];
