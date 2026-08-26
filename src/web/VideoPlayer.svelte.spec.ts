@@ -50,7 +50,7 @@ describe('the control bar at card width', () => {
 		// playback-rate and fullscreen buttons right — so aiming at fullscreen moved
 		// it out from under the pointer before the click landed. Nothing in this bar
 		// may change width in response to hover.
-		const { host, find } = playerAt(640);
+		const { find } = playerAt(640);
 		await settled();
 
 		const fullscreen = find('media-fullscreen-button');
@@ -88,7 +88,7 @@ describe('the control bar when the player is small', () => {
 		// A tile inside a media grid is a few hundred pixels wide. Everything cannot
 		// fit, and what must survive is the ability to play, to see where you are,
 		// and to make it bigger.
-		const { host, find } = playerAt(300);
+		const { find } = playerAt(300);
 		await settled();
 
 		for (const tag of ['media-play-button', 'media-time-range', 'media-fullscreen-button']) {
@@ -101,7 +101,7 @@ describe('the control bar when the player is small', () => {
 	});
 
 	it('still shows play and fullscreen at its very narrowest', async () => {
-		const { host, find } = playerAt(220);
+		const { find } = playerAt(220);
 		await settled();
 
 		expect(getComputedStyle(find('media-play-button')).display).not.toBe('none');
@@ -115,7 +115,7 @@ describe('double click', () => {
 		// Fullscreening the <video> hands back the browser's own chrome, which is
 		// exactly what this player replaces. Fullscreen itself needs a user gesture
 		// the test runner cannot fake, so what is asserted is the request target.
-		const { host, find } = playerAt(640);
+		const { host } = playerAt(640);
 		await settled();
 
 		const controller = host.querySelector('media-controller')! as HTMLElement;

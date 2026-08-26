@@ -27,7 +27,11 @@ describe('the $mcp surface', () => {
 			'attach_media',
 			'register_session',
 			'heartbeat',
-			'end_session'
+			'end_session',
+			'list_tasks',
+			'claim_task',
+			'complete_task',
+			'get_messages'
 		]);
 	});
 

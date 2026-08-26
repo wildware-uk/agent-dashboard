@@ -13,21 +13,29 @@
  */
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { attachMediaTool } from './attach-media';
+import { claimTaskTool } from './claim-task';
+import { completeTaskTool } from './complete-task';
 import { createProjectTool } from './create-project';
 import { createUploadTool } from './create-upload';
 import { endSessionTool } from './end-session';
+import { getMessagesTool } from './get-messages';
 import { heartbeatTool } from './heartbeat';
 import { listProjectsTool } from './list-projects';
+import { listTasksTool } from './list-tasks';
 import { postUpdateTool } from './post-update';
 import { registerSessionTool } from './register-session';
 import type { AnyMcpTool, ToolDeps } from './types';
 
 export { attachMediaTool } from './attach-media';
+export { claimTaskTool } from './claim-task';
+export { completeTaskTool } from './complete-task';
 export { createProjectTool } from './create-project';
 export { createUploadTool } from './create-upload';
 export { endSessionTool } from './end-session';
+export { getMessagesTool } from './get-messages';
 export { heartbeatTool } from './heartbeat';
 export { listProjectsTool } from './list-projects';
+export { listTasksTool } from './list-tasks';
 export { postUpdateTool } from './post-update';
 export { registerSessionTool } from './register-session';
 export type { AnyMcpTool, McpTool, ToolDeps, ToolShape } from './types';
@@ -41,7 +49,11 @@ export const TOOLS: readonly AnyMcpTool[] = [
 	attachMediaTool,
 	registerSessionTool,
 	heartbeatTool,
-	endSessionTool
+	endSessionTool,
+	listTasksTool,
+	claimTaskTool,
+	completeTaskTool,
+	getMessagesTool
 ];
 
 /** Just the names, for tests and for a README that cannot drift. */
@@ -72,5 +84,17 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
 	);
 	server.registerTool(endSessionTool.name, endSessionTool.config, (args) =>
 		endSessionTool.run(deps, args)
+	);
+	server.registerTool(listTasksTool.name, listTasksTool.config, (args) =>
+		listTasksTool.run(deps, args)
+	);
+	server.registerTool(claimTaskTool.name, claimTaskTool.config, (args) =>
+		claimTaskTool.run(deps, args)
+	);
+	server.registerTool(completeTaskTool.name, completeTaskTool.config, (args) =>
+		completeTaskTool.run(deps, args)
+	);
+	server.registerTool(getMessagesTool.name, getMessagesTool.config, (args) =>
+		getMessagesTool.run(deps, args)
 	);
 }

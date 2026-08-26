@@ -29,7 +29,18 @@ export { context, type Clock, type DomainContext } from './context';
  * types only: the arrow still points one way, and nothing here lets an adapter
  * reach a repository.
  */
-export type { Agent, Project, ProjectStatus, Session, SessionMeta, Update, UpdateLevel } from '$db';
+export type {
+	Agent,
+	Message,
+	Project,
+	ProjectStatus,
+	Session,
+	SessionMeta,
+	Task,
+	TaskState,
+	Update,
+	UpdateLevel
+} from '$db';
 export {
 	DomainError,
 	conflict,
@@ -137,3 +148,41 @@ export {
 	type WorkCounter,
 	type WorkCounts
 } from './sessions';
+export {
+	AGENT_AUTHOR_PREFIX,
+	DEFAULT_MESSAGE_LIMIT,
+	HUMAN_AUTHOR,
+	MAX_MESSAGE_LIMIT,
+	MESSAGE_BODY_MAX_LENGTH,
+	authorText,
+	countUnreadMessages,
+	listThread,
+	parseAuthor,
+	postMessage,
+	readMessages,
+	type MessageAuthor,
+	type MessagePage,
+	type PostMessageInput,
+	type ReadMessagesInput,
+	type ThreadQuery
+} from './messages';
+export {
+	OPEN_TASK_STATES,
+	TASK_BODY_MAX_LENGTH,
+	TASK_DEFAULT_LIMIT,
+	TASK_MAX_LIMIT,
+	TASK_RESULT_MAX_LENGTH,
+	TASK_TITLE_MAX_LENGTH,
+	assignTask,
+	cancelTask,
+	claimTask,
+	completeTask,
+	countOpenTasks,
+	createTask,
+	listTasks,
+	type ClaimTaskInput,
+	type CompleteTaskInput,
+	type CompletedTask,
+	type CreateTaskInput,
+	type ListTasksInput
+} from './tasks';

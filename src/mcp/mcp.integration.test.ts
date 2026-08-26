@@ -16,7 +16,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { getRequest, setResponse } from '@sveltejs/kit/node';
 import type { Handle, RequestEvent } from '@sveltejs/kit';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { listLiveAgents, listUpdates } from '$domain';
+import { createTask, listLiveAgents, listTasks, listUpdates, postMessage } from '$domain';
 import { createAuthHandle } from '$http/auth';
 import { createTokenRateLimiter, type TokenRateLimiter } from './rate-limit';
 import { createMcpHandler, MCP_SERVER_NAME } from './server';
@@ -137,11 +137,15 @@ describe('the transport', () => {
 
 		expect(tools.map((tool) => tool.name).sort()).toEqual([
 			'attach_media',
+			'claim_task',
+			'complete_task',
 			'create_project',
 			'create_upload',
 			'end_session',
+			'get_messages',
 			'heartbeat',
 			'list_projects',
+			'list_tasks',
 			'post_update',
 			'register_session'
 		]);
@@ -376,6 +380,172 @@ describe('presence over the wire', () => {
 
 		await owner.close();
 		await impostor.close();
+	});
+});
+
+describe('tasks over the wire', () => {
+	it('gives exactly one winner when two agents race for one task', async () => {
+		const client = await connect();
+		const rival = mcp.mint('rival');
+		const other = await connect(rival.token);
+		await call(client, 'create_project', { name: 'Agent Dashboard' });
+		const task = createTask(mcp.h, { project: 'agent-dashboard', title: 'The only task' });
+
+		// Both calls are in flight before either is answered: two sockets, two
+		// requests, one row.
+		const [mine, theirs] = await Promise.all([
+			call(client, 'claim_task', { task_id: task.id }),
+			call(other, 'claim_task', { task_id: task.id })
+		]);
+
+		const results = [mine, theirs];
+		const won = results.filter((result) => result.isError === undefined);
+		const lost = results.filter((result) => result.isError === true);
+		expect(won).toHaveLength(1);
+		expect(lost).toHaveLength(1);
+		expect(lost[0].structuredContent).toMatchObject({ error: 'conflict' });
+		expect(JSON.stringify(lost[0].structuredContent)).toContain('already claimed');
+		// One claimant in the database, and one `task.updated` on the bus.
+		expect(listTasks(mcp.h, { state: 'claimed' })).toHaveLength(1);
+		expect(mcp.h.eventNames().filter((name) => name === 'task.updated')).toEqual(['task.updated']);
+
+		await client.close();
+		await other.close();
+	});
+
+	it('lists, claims and completes with an update, and the counts follow', async () => {
+		const client = await connect();
+		await call(client, 'create_project', { name: 'Agent Dashboard' });
+		const task = createTask(mcp.h, {
+			project: 'agent-dashboard',
+			title: 'Ship tasks',
+			body: 'the brief',
+			agentId: mcp.deps.agent.id
+		});
+
+		const listed = await call(client, 'list_tasks', { mine: true, state: 'todo' });
+		expect(listed.structuredContent).toMatchObject({
+			count: 1,
+			tasks: [{ id: task.id, body: 'the brief', state: 'todo' }]
+		});
+
+		const { session_id } = (await call(client, 'register_session', {})).structuredContent as {
+			session_id: string;
+		};
+		// The heartbeat's `open_tasks` is the real count now (#10's seam, #11's fill).
+		expect(await call(client, 'heartbeat', { session_id })).toMatchObject({
+			structuredContent: { open_tasks: 1 }
+		});
+
+		await call(client, 'claim_task', { task_id: task.id });
+		const done = await call(client, 'complete_task', {
+			task_id: task.id,
+			result: 'shipped in 4 commits',
+			post_update: true
+		});
+
+		expect(done.structuredContent).toMatchObject({
+			task: { state: 'done', result: 'shipped in 4 commits' },
+			update: { level: 'success', agent_id: mcp.deps.agent.id }
+		});
+		const { updates } = listUpdates(mcp.h, { project: 'agent-dashboard' });
+		expect(updates).toHaveLength(1);
+		expect(updates[0].body).toBe('shipped in 4 commits');
+		// Nothing is open for this agent any more, so the next beat says so.
+		expect(await call(client, 'heartbeat', { session_id })).toMatchObject({
+			structuredContent: { open_tasks: 0 }
+		});
+
+		await client.close();
+	});
+
+	it('publishes the task tools through JSON Schema with every field described', async () => {
+		const client = await connect();
+		const { tools } = await client.listTools();
+
+		const list = tools.find((tool) => tool.name === 'list_tasks')!;
+		const properties = list.inputSchema.properties as Record<string, { description?: string }>;
+		expect(Object.keys(properties).sort()).toEqual(['mine', 'project', 'state']);
+		for (const [name, schema] of Object.entries(properties)) {
+			expect(schema.description, name).toBeTruthy();
+		}
+		expect(list.inputSchema.required).toBeUndefined();
+
+		const complete = tools.find((tool) => tool.name === 'complete_task')!;
+		expect(complete.inputSchema.required).toEqual(['task_id', 'result']);
+		expect(complete.description).toContain('post_update');
+
+		await client.close();
+	});
+});
+
+describe('messages over the wire', () => {
+	it('hands over what the owner said, once, and the heartbeat agrees', async () => {
+		const client = await connect();
+		await call(client, 'create_project', { name: 'Agent Dashboard' });
+		postMessage(mcp.h, {
+			author: { kind: 'human' },
+			body: 'try the other branch',
+			project: 'agent-dashboard'
+		});
+		const { session_id } = (await call(client, 'register_session', {})).structuredContent as {
+			session_id: string;
+		};
+
+		// The count an agent actually notices, before it asks for anything.
+		expect((await call(client, 'heartbeat', { session_id })).structuredContent).toMatchObject({
+			unread_messages: 1
+		});
+
+		const read = await call(client, 'get_messages', {});
+		expect(read.structuredContent).toMatchObject({ count: 1, unread: 0, marked_read: true });
+		expect(JSON.stringify(read.structuredContent)).toContain('try the other branch');
+
+		// Read once: the cursor moved, so the beat that follows says so too.
+		expect((await call(client, 'get_messages', {})).structuredContent).toMatchObject({ count: 0 });
+		expect((await call(client, 'heartbeat', { session_id })).structuredContent).toMatchObject({
+			unread_messages: 0
+		});
+
+		await client.close();
+	});
+
+	it('leaves the cursor alone for mark_read: false, so the same message returns', async () => {
+		const client = await connect();
+		await call(client, 'create_project', { name: 'Agent Dashboard' });
+		postMessage(mcp.h, {
+			author: { kind: 'human' },
+			body: 'peek at me',
+			project: 'agent-dashboard'
+		});
+
+		const first = await call(client, 'get_messages', { mark_read: false });
+		const again = await call(client, 'get_messages', { mark_read: false });
+
+		expect(first.structuredContent).toMatchObject({ count: 1, marked_read: false, unread: 1 });
+		expect(again.structuredContent).toMatchObject({ count: 1, unread: 1 });
+
+		await client.close();
+	});
+
+	it('never hands one agent another agent’s cursor', async () => {
+		const client = await connect();
+		await call(client, 'create_project', { name: 'Agent Dashboard' });
+		postMessage(mcp.h, {
+			author: { kind: 'human' },
+			body: 'for everyone',
+			project: 'agent-dashboard'
+		});
+		const other = await connect(mcp.mint('other').token);
+
+		await call(client, 'get_messages', {});
+
+		// The second agent has read nothing, and the first agent's read did not
+		// read for it: identity comes from the token (design §5).
+		expect((await call(other, 'get_messages', {})).structuredContent).toMatchObject({ count: 1 });
+
+		await client.close();
+		await other.close();
 	});
 });
 

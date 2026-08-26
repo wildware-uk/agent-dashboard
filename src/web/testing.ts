@@ -11,7 +11,16 @@
  * (design §4) — because a double that is more generous than the server would
  * hide exactly the bugs these tests exist to catch.
  */
-import type { MediaView, ProjectView, SnapshotResponse, UpdateView } from './types';
+import type {
+	MediaView,
+	MessageView,
+	MessagesSnapshot,
+	ProjectView,
+	SnapshotResponse,
+	TaskView,
+	TasksSnapshot,
+	UpdateView
+} from './types';
 import type { OwnerActions } from './actions';
 import type { AgentsSnapshot, LiveAgentView } from './presence.svelte';
 import type { StreamLike } from './timeline.svelte';
@@ -249,7 +258,20 @@ export function fakeActions(): {
 				record('patchProject', [reference, patch], aProject({ slug: reference, ...patch })),
 			setUpdatePinned: (id, pinned) =>
 				record('setUpdatePinned', [id, pinned], anUpdate({ id, pinned })),
-			deleteUpdate: (id) => record('deleteUpdate', [id], anUpdate({ id, deletedAt: 1 }))
+			deleteUpdate: (id) => record('deleteUpdate', [id], anUpdate({ id, deletedAt: 1 })),
+			createTask: (input) =>
+				record(
+					'createTask',
+					[input],
+					aTask({ id: 'new', title: input.title, agentId: input.agentId ?? null })
+				),
+			patchTask: (id, patch) => record('patchTask', [id, patch], aTask({ id, ...patch })),
+			postMessage: (input) =>
+				record(
+					'postMessage',
+					[input],
+					aMessage({ id: 'new', body: input.body, updateId: input.update ?? null })
+				)
 		}
 	};
 }
@@ -309,6 +331,152 @@ export function fakeAgentsApi(initial: { seq?: number; agents?: LiveAgentView[] 
 			if (status !== 200) return Promise.resolve(new Response('no', { status }));
 			return Promise.resolve(
 				new Response(JSON.stringify({ seq, at: new Date().toISOString(), agents }), {
+					status: 200,
+					headers: { 'content-type': 'application/json' }
+				})
+			);
+		},
+
+		/** Run every coalesced refetch and let its promises settle. */
+		async settle(): Promise<void> {
+			for (let pass = 0; pass < 5; pass += 1) {
+				while (queue.length > 0) queue.shift()!();
+				await Promise.resolve();
+				await new Promise((resolve) => setTimeout(resolve, 0));
+			}
+		}
+	};
+}
+
+/** A task row with sensible defaults: on the queue, unassigned. */
+export function aTask(overrides: Partial<TaskView> = {}): TaskView {
+	return {
+		id: 't1',
+		seq: 1,
+		projectId: 'p1',
+		agentId: null,
+		title: 'Ship the task list',
+		body: 'todo, claimed, done. No drag and drop.',
+		state: 'todo',
+		createdAt: Date.UTC(2026, 7, 25, 9, 30),
+		claimedAt: null,
+		doneAt: null,
+		result: null,
+		...overrides
+	};
+}
+
+/**
+ * A fake `GET /api/snapshot/tasks` plus the scheduling hook the task store
+ * coalesces through.
+ *
+ * Like the presence double and unlike the timeline's, the answer is wholesale:
+ * the endpoint sends the list as it stands, so a test says what the server now
+ * holds rather than publishing a delta.
+ */
+export function fakeTasksApi(initial: { seq?: number; tasks?: TaskView[] } = {}) {
+	let seq = initial.seq ?? 1;
+	let tasks = initial.tasks ?? [];
+	const calls: string[] = [];
+	const queue: (() => void)[] = [];
+	let status = 200;
+
+	return {
+		calls,
+		queue,
+
+		snapshot(): TasksSnapshot {
+			return { seq, at: new Date().toISOString(), tasks };
+		},
+
+		/** The server's answer is now this, at this stream cursor. */
+		replace(next: TaskView[], nextSeq = seq + 1): void {
+			tasks = next;
+			seq = nextSeq;
+		},
+
+		/** Make the next reads fail the way a dropped session or a restart would. */
+		breaks(nextStatus = 500): void {
+			status = nextStatus;
+		},
+
+		fetch(url: string): Promise<Response> {
+			calls.push(url);
+			if (status !== 200) return Promise.resolve(new Response('no', { status }));
+			return Promise.resolve(
+				new Response(JSON.stringify({ seq, at: new Date().toISOString(), tasks }), {
+					status: 200,
+					headers: { 'content-type': 'application/json' }
+				})
+			);
+		},
+
+		/** Run every coalesced refetch and let its promises settle. */
+		async settle(): Promise<void> {
+			for (let pass = 0; pass < 5; pass += 1) {
+				while (queue.length > 0) queue.shift()!();
+				await Promise.resolve();
+				await new Promise((resolve) => setTimeout(resolve, 0));
+			}
+		}
+	};
+}
+
+/** A message with sensible defaults: the owner's reply on the default card. */
+export function aMessage(overrides: Partial<MessageView> = {}): MessageView {
+	return {
+		id: 'msg1',
+		seq: 1,
+		projectId: 'p1',
+		updateId: 'u1',
+		taskId: null,
+		author: 'human',
+		body: 'nice one',
+		createdAt: Date.UTC(2026, 7, 25, 11),
+		...overrides
+	};
+}
+
+/**
+ * A fake `GET /api/messages` plus the scheduling hook the thread store
+ * coalesces through.
+ *
+ * Like the real endpoint it answers with every message in scope, oldest first,
+ * stamped with the stream cursor it is good to — so a store that assumed one
+ * request per card, or newest-first, would be wrong here as well as in
+ * production.
+ */
+export function fakeMessagesApi(initial: { seq?: number; messages?: MessageView[] } = {}) {
+	let seq = initial.seq ?? 1;
+	let messages = initial.messages ?? [];
+	const calls: string[] = [];
+	const queue: (() => void)[] = [];
+	let status = 200;
+
+	return {
+		calls,
+		queue,
+
+		snapshot(): MessagesSnapshot {
+			return { seq, at: new Date().toISOString(), messages };
+		},
+
+		/** Somebody posted, on the server, bumping the stream cursor. */
+		publish(message: MessageView): void {
+			messages = [...messages, message];
+			seq = message.seq;
+		},
+
+		/** Make the next reads fail the way a dropped session or a restart would. */
+		breaks(nextStatus = 500): void {
+			status = nextStatus;
+		},
+
+		fetch(url: string): Promise<Response> {
+			calls.push(url);
+			if (status !== 200) return Promise.resolve(new Response('no', { status }));
+			return Promise.resolve(
+				new Response(JSON.stringify({ seq, at: new Date().toISOString(), messages }), {
 					status: 200,
 					headers: { 'content-type': 'application/json' }
 				})

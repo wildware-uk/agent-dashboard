@@ -13,6 +13,7 @@
 	import UpdateCard from './UpdateCard.svelte';
 	import { groupByDay } from './days';
 	import type { OwnerActions } from './actions';
+	import type { ThreadSource } from './threads.svelte';
 	import type { Timeline } from './timeline.svelte';
 	import type { UpdateView } from './types';
 
@@ -27,12 +28,20 @@
 		/** Passed through to each card's media region. */
 		media,
 		/** The owner's write calls, passed to every card (design §7). */
-		actions
+		actions,
+		/**
+		 * The page's message threads, if the shell is holding them.
+		 *
+		 * Read here rather than in each card so the whole page costs one request:
+		 * the store holds every thread and hands each card its own by id.
+		 */
+		threads
 	}: {
 		feed: Timeline;
 		agentNames?: Record<string, string>;
 		media?: Snippet<[UpdateView]>;
 		actions?: OwnerActions;
+		threads?: ThreadSource;
 	} = $props();
 
 	/**
@@ -119,6 +128,8 @@
 						isNew={feed.isNew(update.id)}
 						{media}
 						{actions}
+						{agentNames}
+						messages={threads?.for(update.id)}
 					/>
 				{/each}
 			</section>
@@ -146,6 +157,8 @@
 							isNew={feed.isNew(update.id)}
 							{media}
 							{actions}
+							{agentNames}
+							messages={threads?.for(update.id)}
 						/>
 					{/each}
 				</section>

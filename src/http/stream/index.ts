@@ -24,6 +24,8 @@ export {
 export type { StreamHandler, StreamHandlerOptions, StreamRequestEvent } from './stream';
 export { readAgentsSnapshot } from './agents';
 export type { AgentsSnapshot, SnapshotAgents } from './agents';
+export { TASKS_DONE_LIMIT, readTasksSnapshot } from './tasks';
+export type { SnapshotTasks, TasksSnapshot } from './tasks';
 export {
 	SNAPSHOT_DEFAULT_LIMIT,
 	createSnapshotHandler,

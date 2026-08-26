@@ -104,11 +104,18 @@ describe('the live agents rail', () => {
 		expect(document.body.textContent).toContain('<img src=x onerror=alert(1)>');
 	});
 
-	it('leaves the tasks slot alone for the control-plane slice', async () => {
+	it('renders presence and nothing else: the task panel is its own component', async () => {
 		const { api, screen } = mount();
 		await api.settle();
 
-		await expect.element(screen.getByText('Open tasks')).toBeInTheDocument();
+		// Tasks used to be a placeholder heading in here. They are now a real panel
+		// the shell mounts beside this one (`Tasks.svelte`), because the panel
+		// writes as well as reads and the rail has nothing to write with.
+		const headings = screen
+			.getByRole('heading')
+			.elements()
+			.map((node) => node.textContent?.replace(/\s+/g, ' ').trim());
+		expect(headings).toEqual(['Live agents 1']);
 	});
 
 	it('opens the stream on mount and closes it on unmount', async () => {

@@ -135,7 +135,10 @@ jobs:
         run: |
           set -euxo pipefail
           docker volume create ci-data
-          hash=$(docker run --rm ${{ env.IMAGE }}:ci node build/cli.js hash-password 'ci password' | head -1)
+          # `sed -n 1p` rather than `head -1`: `head` closes the pipe after the
+          # first line, `docker run` dies of EPIPE, and `pipefail` turns that into
+          # a failed step. Every reader in this block therefore drains its input.
+          hash=$(docker run --rm ${{ env.IMAGE }}:ci node build/cli.js hash-password 'ci password' | sed -n '1p')
           cat > ci.env <<EOF
           ADMIN_PASSWORD_HASH=$hash
           SESSION_SECRET=0123456789012345678901234567890123456789
@@ -151,11 +154,11 @@ jobs:
             -H "Authorization: Bearer $token" \
             -H 'Content-Type: application/json' \
             -H 'Accept: application/json, text/event-stream' \
-            -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | grep -q post_update
+            -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}' | grep post_update >/dev/null
           # Data survives a container recreate: the agent is on the volume.
           docker rm -f dash
           docker run --rm --env-file ci.env -v ci-data:/data ${{ env.IMAGE }}:ci \
-            node build/cli.js list-tokens | grep -q ci-agent
+            node build/cli.js list-tokens | grep ci-agent >/dev/null
 
       - name: Log in to GHCR
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'

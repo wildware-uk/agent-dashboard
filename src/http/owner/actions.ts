@@ -2,9 +2,10 @@
  * The owner's write endpoints (design §7, §11 step 16).
  *
  * Everything the owner can do to what agents produced: create, rename,
- * re-describe, pin and archive a project; pin or delete an update. The handlers
- * live here rather than in the route files so the whole surface is testable
- * without a server, exactly as `../stream/` is.
+ * re-describe, pin and archive a project; pin or delete an update; put a task on
+ * a project, reassign it, or take it back off. The handlers live here rather
+ * than in the route files so the whole surface is testable without a server,
+ * exactly as `../stream/` is.
  *
  * Three rules hold for all of them:
  *
@@ -31,14 +32,18 @@
  * `id`, `createdAt` — that only the server gets to decide.
  */
 import {
+	assignTask,
+	cancelTask,
 	context,
 	createProject,
+	createTask,
 	deleteUpdate,
 	isDomainError,
 	invalid,
 	setUpdatePinned,
 	updateProject,
 	type CreateProjectInput,
+	type CreateTaskInput,
 	type DomainContext,
 	type ProjectStatus,
 	type UpdateProjectInput
@@ -110,6 +115,38 @@ export function deleteUpdateHandler(options: OwnerHandlerOptions = {}): OwnerHan
 	return handle(options, (event, ctx) =>
 		Promise.resolve({ status: 200, body: { update: deleteUpdate(ctx, event.params.id ?? '') } })
 	);
+}
+
+/**
+ * `POST /api/tasks` — the owner puts work on a project (design §7).
+ *
+ * `agentId` is an argument here and nowhere in `$mcp`, and the difference is the
+ * whole point: an agent's identity comes from its token so that one agent cannot
+ * act as another, while *assigning* work to an agent is something only the owner
+ * does — and the session cookie is what proves the caller is the owner.
+ */
+export function createTaskHandler(options: OwnerHandlerOptions = {}): OwnerHandler {
+	return handle(options, async (event, ctx) => {
+		const input = readCreateTask(await readJson(event.request));
+		return { status: 201, body: { task: createTask(ctx, input) } };
+	});
+}
+
+/**
+ * `PATCH /api/tasks/[id]` — reassign one task, or cancel it.
+ *
+ * Those are the only two, and the omissions are deliberate: `claimed` and `done`
+ * are the agent's to write over MCP (design §5), so a browser cannot mark work
+ * finished that nobody did. A patch naming any other state is refused rather
+ * than quietly ignored.
+ */
+export function patchTaskHandler(options: OwnerHandlerOptions = {}): OwnerHandler {
+	return handle(options, async (event, ctx) => {
+		const id = event.params.id ?? '';
+		const patch = readTaskPatch(await readJson(event.request));
+		const task = patch.cancel ? cancelTask(ctx, id) : assignTask(ctx, id, patch.agentId);
+		return { status: 200, body: { task } };
+	});
 }
 
 /**
@@ -197,6 +234,40 @@ export function readUpdatePatch(body: Body): boolean {
 	return flag(body.pinned, 'pinned');
 }
 
+/** The new-task form: a project, a title, and optionally a brief and an assignee. */
+export function readCreateTask(body: Body): CreateTaskInput {
+	const input: CreateTaskInput = {
+		project: text(body.project, 'project'),
+		title: text(body.title, 'title')
+	};
+	if ('body' in body) input.body = nullableText(body.body, 'body');
+	if ('agentId' in body) input.agentId = nullableText(body.agentId, 'agentId');
+	return input;
+}
+
+/** What a task patch resolved to: a cancel, or an assignee to write. */
+export type TaskPatch = { cancel: true } | { cancel: false; agentId: string | null };
+
+/**
+ * The two things the owner may do to an existing task.
+ *
+ * One at a time, and named explicitly. A patch carrying both would have to pick
+ * an order, and a patch carrying neither is a click that would publish an event
+ * telling every open tab to re-render for nothing.
+ */
+export function readTaskPatch(body: Body): TaskPatch {
+	if ('state' in body) {
+		if (body.state !== 'cancelled') {
+			throw invalid('the only state the owner may set is cancelled; agents claim and complete');
+		}
+		if ('agentId' in body) throw invalid('cancel a task or reassign it, not both');
+		return { cancel: true };
+	}
+
+	if ('agentId' in body) return { cancel: false, agentId: nullableText(body.agentId, 'agentId') };
+	throw invalid('a task patch either reassigns the task or cancels it');
+}
+
 function text(value: unknown, field: string): string {
 	if (typeof value !== 'string') throw invalid(`${field} must be a string`);
 	return value;
@@ -229,3 +300,12 @@ function json(status: number, body: unknown): Response {
 		}
 	});
 }
+
+/**
+ * The two pieces an owner endpoint that lives in its own file needs.
+ *
+ * `messages.ts` is such a file (the reply box's endpoints, #14): the wrapper
+ * above is the *only* lock on these routes, so it is shared rather than
+ * reimplemented — a second copy is a second chance to forget the auth check.
+ */
+export { handle as ownerAction, readJson as readOwnerJson };
