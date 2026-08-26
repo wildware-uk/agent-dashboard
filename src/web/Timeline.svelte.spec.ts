@@ -1,5 +1,5 @@
 import { render } from 'vitest-browser-svelte';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import TimelineView from './Timeline.svelte';
 import { Timeline } from './timeline.svelte';
 import { FakeStream, anUpdate, fakeActions, fakeApi } from './testing';
@@ -13,12 +13,31 @@ import { FakeStream, anUpdate, fakeActions, fakeApi } from './testing';
 /**
  * A day's worth of cards, newest first, all on the same local day.
  *
- * Relative to the clock the run happens on, never a fixed date: the headings
- * under test are "Today" and "Yesterday", so a pinned calendar day turns the
- * suite red the morning after it is written. Midday keeps both days clear of a
- * DST shift.
+ * The clock is PINNED for this suite rather than read from the run.
+ *
+ * Deriving the fixture from the real clock looks like the careful choice — a
+ * fixed calendar date would rot overnight — but it fails in a worse way: the
+ * fixture is computed when this module is imported and the component reads the
+ * clock when it renders, so a run that straddles midnight groups the cards
+ * against a different "today" than it built them for. CI hit exactly that,
+ * expecting ["Today", "Yesterday"] and getting ["Yesterday", "Monday 24 August"].
+ *
+ * Faking only `Date` keeps timers, rAF and the browser runner untouched, so
+ * nothing else in the render path changes behaviour. Midday, midweek, well clear
+ * of any DST shift.
  */
-const day = new Date(new Date().setHours(12, 0, 0, 0)).getTime();
+const NOW = new Date('2026-03-11T12:00:00');
+
+beforeAll(() => {
+	vi.useFakeTimers({ toFake: ['Date'] });
+	vi.setSystemTime(NOW);
+});
+
+afterAll(() => {
+	vi.useRealTimers();
+});
+
+const day = NOW.getTime();
 const older = day - 24 * 60 * 60 * 1000;
 
 function updates(count: number) {
