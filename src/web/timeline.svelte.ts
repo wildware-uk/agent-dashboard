@@ -88,6 +88,9 @@ const WATCHED = [
 	'media.ready',
 	'project.created',
 	'project.updated',
+	// A rename relabels every card that agent ever posted, and the names ride in
+	// the snapshot rather than on the cards — so this is a refetch like any other.
+	'agent.renamed',
 	'resync'
 ] as const;
 

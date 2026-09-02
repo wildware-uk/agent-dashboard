@@ -314,6 +314,7 @@ export function fakeActions(): {
 			markProjectSeen: (reference) =>
 				record('markProjectSeen', [reference], aProject({ slug: reference })),
 			markRepliesSeen: (id) => record('markRepliesSeen', [id], anUpdate({ id, repliesSeenAt: 1 })),
+			renameAgent: (id, name) => record('renameAgent', [id, name], { id, name }),
 			uploadMedia: (file) =>
 				record('uploadMedia', [file.name], aMedia({ id: `m-${file.name}`, status: 'ready' })),
 			postMessage: (input) =>

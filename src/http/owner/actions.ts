@@ -43,6 +43,7 @@ import {
 	invalid,
 	markProjectSeen,
 	markRepliesSeen,
+	renameAgent,
 	setUpdatePinned,
 	updateProject,
 	type CreateProjectInput,
@@ -191,6 +192,27 @@ export function markRepliesSeenHandler(options: OwnerHandlerOptions = {}): Owner
 }
 
 /**
+ * `PATCH /api/agents/[id]` — give an agent a name the owner will recognise.
+ *
+ * The token is untouched. A name was fixed at `mint-token` time, so correcting
+ * one meant minting a new token and rewriting the MCP config of whichever
+ * machine held it — a lot of ceremony for a label, and the reason so many
+ * deployments are full of agents called `claude-code@laptop`.
+ */
+export function renameAgentHandler(options: OwnerHandlerOptions = {}): OwnerHandler {
+	return handle(options, async (event, ctx) => {
+		const name = readAgentPatch(await readJson(event.request));
+		const agent = renameAgent(ctx, event.params.id ?? '', name);
+
+		// The id and the new name, and nothing else. The row carries `tokenHash`,
+		// and while an HMAC is not a token, this codebase's rule is that it never
+		// leaves the database (design §8) — a browser has no use for it, and a
+		// response is the easiest place for it to end up somewhere it should not.
+		return { status: 200, body: { agent: { id: agent.id, name: agent.name } } };
+	});
+}
+
+/**
  * Auth, then the action, then the error mapping. Written once because every
  * handler needs all three in the same order, and one that skipped the first
  * would be a hole in the only lock that matters here.
@@ -303,6 +325,22 @@ export function readUpdatePatch(body: Body): boolean {
 		throw invalid('an update patch changes pinned and nothing else');
 	}
 	return flag(body.pinned, 'pinned');
+}
+
+/**
+ * The one thing the owner may change about an agent.
+ *
+ * Deliberately not a patch object: an agent's identity is its token, and the
+ * only part of it the owner authors is what they call it. Anything else sent
+ * here is refused outright rather than dropped, so a hopeful `tokenHash` fails
+ * loudly instead of appearing to work.
+ */
+export function readAgentPatch(body: Body): string {
+	const keys = Object.keys(body);
+	if (keys.length !== 1 || keys[0] !== 'name') {
+		throw invalid('an agent patch changes name and nothing else');
+	}
+	return text(body.name, 'name');
 }
 
 /**

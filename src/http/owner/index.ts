@@ -42,6 +42,8 @@ export {
 	patchProjectHandler,
 	patchTaskHandler,
 	patchUpdateHandler,
+	readAgentPatch,
+	renameAgentHandler,
 	readCreateProject,
 	readCreateTask,
 	readProjectPatch,

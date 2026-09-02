@@ -186,6 +186,15 @@ export type OwnerActions = {
 	 * and `post_message`.
 	 */
 	uploadMedia(file: File): Promise<MediaView>;
+	/**
+	 * Rename an agent, leaving its token alone.
+	 *
+	 * A name was fixed when the token was minted, so correcting one meant
+	 * minting a new token and rewriting the config of whichever machine held
+	 * it. The identity does not move: every card that agent ever posted simply
+	 * starts reading the new name.
+	 */
+	renameAgent(id: string, name: string): Promise<{ id: string; name: string }>;
 	postMessage(input: NewMessage): Promise<MessageView>;
 	/**
 	 * Answer an agent's request (design §5).
@@ -220,7 +229,7 @@ export type OwnerActions = {
  * handlers.
  */
 export function ownerActions(request: Requester = defaultRequest): OwnerActions {
-	async function send<Key extends 'project' | 'update' | 'task' | 'message' | 'request'>(
+	async function send<Key extends 'project' | 'update' | 'task' | 'message' | 'request' | 'agent'>(
 		key: Key,
 		url: string,
 		method: string,
@@ -310,6 +319,8 @@ export function ownerActions(request: Requester = defaultRequest): OwnerActions 
 			send('update', `/api/updates/${encodeURIComponent(id)}/replies-seen`, 'POST'),
 		uploadMedia: (file) =>
 			sendBytes(`/api/media?filename=${encodeURIComponent(file.name || 'upload')}`, file),
+		renameAgent: (id, name) =>
+			send('agent', `/api/agents/${encodeURIComponent(id)}`, 'PATCH', { name }),
 		postMessage: (input) => send('message', '/api/messages', 'POST', input),
 		answerRequest: (id, value) =>
 			send('request', `/api/requests/${encodeURIComponent(id)}/answer`, 'POST', { value }),
@@ -323,15 +334,18 @@ export function ownerActions(request: Requester = defaultRequest): OwnerActions 
 }
 
 /** Which row an endpoint answers with, keyed by the field it arrives under. */
-type Sent<Key extends 'project' | 'update' | 'task' | 'message' | 'request'> = Key extends 'project'
-	? ProjectView
-	: Key extends 'update'
-		? UpdateView
-		: Key extends 'task'
-			? TaskView
-			: Key extends 'request'
-				? RequestView
-				: MessageView;
+type Sent<Key extends 'project' | 'update' | 'task' | 'message' | 'request' | 'agent'> =
+	Key extends 'project'
+		? ProjectView
+		: Key extends 'update'
+			? UpdateView
+			: Key extends 'task'
+				? TaskView
+				: Key extends 'request'
+					? RequestView
+					: Key extends 'agent'
+						? { id: string; name: string }
+						: MessageView;
 
 /**
  * What to show the owner when an action failed.

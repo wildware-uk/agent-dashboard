@@ -2,7 +2,7 @@ import { render } from 'vitest-browser-svelte';
 import { describe, expect, it, vi } from 'vitest';
 import RightRail from './RightRail.svelte';
 import { PRESENCE_WINDOW_MS, Presence } from './presence.svelte';
-import { FakeStream, aLiveAgent, fakeAgentsApi } from './testing';
+import { FakeStream, aLiveAgent, fakeActions, fakeAgentsApi } from './testing';
 
 const NOW = Date.UTC(2026, 7, 25, 10, 0, 0);
 
@@ -12,7 +12,7 @@ const NOW = Date.UTC(2026, 7, 25, 10, 0, 0);
  * Nothing here is a stand-in for presence itself: the store derives it exactly
  * as it does in production, so what the spec asserts is the real rule.
  */
-function mount(agents = [aLiveAgent()]) {
+function mount(agents = [aLiveAgent()], props: Record<string, unknown> = {}) {
 	const api = fakeAgentsApi({ seq: 4, agents });
 	const stream = new FakeStream();
 	let now = NOW;
@@ -31,7 +31,7 @@ function mount(agents = [aLiveAgent()]) {
 		stream,
 		presence,
 		advance: (ms: number) => (now += ms),
-		screen: render(RightRail, { presence })
+		screen: render(RightRail, { presence, ...props })
 	};
 }
 
@@ -126,5 +126,52 @@ describe('the live agents rail', () => {
 		screen.unmount();
 
 		expect(stream.closed).toBe(true);
+	});
+});
+
+/**
+ * Renaming an agent from the rail (#feedback: "I'd like to see the actual
+ * helpful names").
+ *
+ * The rail is where the names are read, so it is where they should be
+ * editable — and the token is untouched, which is the point: a name was fixed
+ * at mint time, so correcting one used to mean rewriting an MCP config.
+ */
+describe('naming an agent', () => {
+	it('offers a rename only when there is a server behind the rail', async () => {
+		const { api } = mount([aLiveAgent({ agentId: 'a1', name: 'claude-code@laptop' })]);
+		await api.settle();
+
+		expect(document.querySelector('[data-testid="rename-agent"]')).toBeNull();
+	});
+
+	it('sends the new name, and leaves the list to the stream', async () => {
+		const acts = fakeActions();
+		const { api, screen } = mount([aLiveAgent({ agentId: 'a1', name: 'claude-code@laptop' })], {
+			actions: acts.actions
+		});
+		await api.settle();
+
+		await screen.getByRole('button', { name: 'Rename claude-code@laptop' }).click();
+		await screen.getByRole('textbox', { name: 'Name for claude-code@laptop' }).fill('work-laptop');
+		await screen.getByRole('button', { name: 'Save' }).click();
+
+		expect(acts.calls).toEqual([{ name: 'renameAgent', args: ['a1', 'work-laptop'] }]);
+	});
+
+	it('says what went wrong and keeps the box open', async () => {
+		const acts = fakeActions();
+		const { api, screen } = mount([aLiveAgent({ agentId: 'a1', name: 'one' })], {
+			actions: acts.actions
+		});
+		await api.settle();
+		acts.fail(new Error('no such agent'));
+
+		await screen.getByRole('button', { name: 'Rename one' }).click();
+		await screen.getByRole('textbox', { name: 'Name for one' }).fill('two');
+		await screen.getByRole('button', { name: 'Save' }).click();
+
+		await expect.element(screen.getByText('no such agent')).toBeInTheDocument();
+		await expect.element(screen.getByRole('textbox', { name: 'Name for one' })).toBeInTheDocument();
 	});
 });

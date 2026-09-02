@@ -96,6 +96,22 @@ export function listAgents(db: Db, filter: { includeRevoked?: boolean } = {}): A
  * @returns whether this call was the one that revoked it, so a caller can tell a
  *   revocation from a repeat.
  */
+/**
+ * Give an agent a different display name.
+ *
+ * The token is untouched, which is the whole point: a name is what the owner
+ * reads on a card, and re-minting to fix one would mean rewriting the MCP config
+ * of whatever machine holds it.
+ *
+ * @returns false when there is no such agent.
+ */
+export function renameAgent(db: Db, id: string, name: string): boolean {
+	return (
+		db.prepare<[string, string]>(`UPDATE agents SET name = ? WHERE id = ?`).run(name, id)
+			.changes === 1
+	);
+}
+
 export function revokeAgent(db: Db, id: string, at: number = Date.now()): boolean {
 	const result = db
 		.prepare(`UPDATE agents SET revoked_at = ? WHERE id = ? AND revoked_at IS NULL`)
