@@ -28,6 +28,7 @@ type Row = {
 	agent_id: string;
 	project_id: string | null;
 	update_id: string | null;
+	message_id: string | null;
 	kind: RequestKind;
 	question: string;
 	detail: string | null;
@@ -40,7 +41,7 @@ type Row = {
 	answer: string | null;
 };
 
-const COLUMNS = `seq, id, agent_id, project_id, update_id, kind, question, detail, options, config,
+const COLUMNS = `seq, id, agent_id, project_id, update_id, message_id, kind, question, detail, options, config,
 	state, expires_at, decided_at, decided_value, answer`;
 
 function toApproval(row: Row): Approval {
@@ -50,6 +51,7 @@ function toApproval(row: Row): Approval {
 		agentId: row.agent_id,
 		projectId: row.project_id,
 		updateId: row.update_id,
+		messageId: row.message_id,
 		kind: row.kind,
 		question: row.question,
 		detail: row.detail,
@@ -68,6 +70,8 @@ export type NewApproval = {
 	agentId: string;
 	projectId?: string | null;
 	updateId?: string | null;
+	/** The thread this was asked in (migration 022). */
+	messageId?: string | null;
 	/** Which of the five kinds (design §5). Defaults to `confirm`, as the column does. */
 	kind?: RequestKind;
 	question: string;
@@ -88,6 +92,7 @@ export function insertApproval(db: Db, input: NewApproval): Approval {
 		agent_id: input.agentId,
 		project_id: orNull(input.projectId),
 		update_id: orNull(input.updateId),
+		message_id: orNull(input.messageId),
 		kind: input.kind ?? 'confirm',
 		question: input.question,
 		detail: orNull(input.detail),
@@ -100,10 +105,10 @@ export function insertApproval(db: Db, input: NewApproval): Approval {
 	const inserted = db
 		.prepare<typeof row, Row>(
 			`INSERT INTO approvals
-				(id, agent_id, project_id, update_id, kind, question, detail, options, config, state,
+				(id, agent_id, project_id, update_id, message_id, kind, question, detail, options, config, state,
 				 expires_at)
 			 VALUES
-				(:id, :agent_id, :project_id, :update_id, :kind, :question, :detail, :options, :config,
+				(:id, :agent_id, :project_id, :update_id, :message_id, :kind, :question, :detail, :options, :config,
 				 :state, :expires_at)
 			 RETURNING ${COLUMNS}`
 		)

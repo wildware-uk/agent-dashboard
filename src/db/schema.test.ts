@@ -134,7 +134,11 @@ const DESIGN_COLUMNS: Record<string, string[]> = {
 		'kind',
 		'detail',
 		'config',
-		'answer'
+		'answer',
+		// Appended by migration 022: the thread the question was asked in, so an
+		// agent that is already talking to its owner can ask where they are
+		// reading rather than somewhere else.
+		'message_id'
 	],
 	// Where a notification is delivered when the dashboard is not open (design §7).
 	// A public link to one card, the only unauthenticated read in the product (§8).

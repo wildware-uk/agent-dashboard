@@ -4,7 +4,7 @@ import '../http/routes/app.css';
 import { render } from 'vitest-browser-svelte';
 import { describe, expect, it, vi } from 'vitest';
 import Thread from './Thread.svelte';
-import { aMedia, aMessage, anAck, fakeActions } from './testing';
+import { aMedia, aMessage, aRequest, anAck, fakeActions } from './testing';
 
 /**
  * The conversation on a card (design §7): the thread, and the box the owner
@@ -551,5 +551,64 @@ describe('answering a comment', () => {
 		});
 
 		expect(document.querySelector('[data-answering]')).toBeNull();
+	});
+});
+
+/**
+ * A question asked in the thread (migration 022).
+ *
+ * The owner asked for agents to be able to ask in replies. What matters here is
+ * that the prompt lands under the message it followed and carries its own
+ * controls — a question rendered without a way to answer it is worse than one
+ * asked somewhere else.
+ */
+describe('a question in the thread', () => {
+	it('renders under the message it was asked about, with its controls', async () => {
+		const actions = fakeActions();
+		const screen = render(Thread, {
+			messages: [aMessage({ id: 'm1', author: 'human', body: 'does it handle empty input?' })],
+			onreply: replies().onreply,
+			actions: actions.actions,
+			requests: {
+				m1: [
+					aRequest({
+						id: 'r1',
+						agentId: 'a1',
+						kind: 'confirm',
+						question: 'Refuse empty input, or accept it?'
+					})
+				]
+			},
+			agentNames: { a1: 'scout' }
+		});
+
+		await expect.element(screen.getByText('Refuse empty input, or accept it?')).toBeVisible();
+		await expect.element(screen.getByRole('button', { name: 'Approve' })).toBeVisible();
+	});
+
+	it('answers where it was asked', async () => {
+		const actions = fakeActions();
+		const screen = render(Thread, {
+			messages: [aMessage({ id: 'm1', author: 'human', body: 'well?' })],
+			onreply: replies().onreply,
+			actions: actions.actions,
+			requests: { m1: [aRequest({ id: 'r1', kind: 'confirm', question: 'Ship it?' })] }
+		});
+
+		await screen.getByRole('button', { name: 'Approve' }).click();
+
+		expect(actions.calls).toContainEqual({ name: 'answerRequest', args: ['r1', true] });
+	});
+
+	it('shows nothing at all without somewhere to write to', async () => {
+		render(Thread, {
+			messages: [aMessage({ id: 'm1', author: 'human', body: 'well?' })],
+			onreply: replies().onreply,
+			requests: { m1: [aRequest({ id: 'r1', kind: 'confirm', question: 'Ship it?' })] }
+		});
+
+		// A thread rendered without an action client has nobody to answer as, so a
+		// prompt it cannot settle would be a dead control.
+		expect(document.body.textContent).not.toContain('Ship it?');
 	});
 });

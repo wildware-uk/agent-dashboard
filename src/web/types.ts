@@ -200,6 +200,14 @@ export type RequestView = {
 	agentId: string;
 	projectId: string | null;
 	updateId: string | null;
+	/**
+	 * The thread it was asked in (migration 022).
+	 *
+	 * A question raised inside a conversation renders there, under the words that
+	 * led to it, rather than as a card of its own with none of the context beside
+	 * it.
+	 */
+	messageId?: string | null;
 	kind: RequestKind;
 	question: string;
 	detail: string | null;
