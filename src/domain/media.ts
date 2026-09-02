@@ -384,6 +384,52 @@ export function assertAttachableToMessage(
 	return mediaIds;
 }
 
+/**
+ * The bytes of one attachment, small enough to hand to a language model
+ * (migration 016).
+ *
+ * An agent cannot fetch `/media/:id/:variant`: that route wants the owner's
+ * session (design §8), and an agent's bearer token is deliberately not a
+ * licence to walk the media tree. So the only way a picture ever reaches the
+ * agent being asked about it is inside a tool result — which is what this
+ * exists to fill.
+ *
+ * A derivative before the original, because `thumb-1600` is the same screenshot
+ * at a tenth of the size and is what the dashboard itself shows. `null` for
+ * anything that cannot be read: a variant the pipeline has not written yet, a
+ * file that has gone, a picture past `maxBytes`. The caller says so in words
+ * rather than failing the read — an unreadable thumbnail must not cost an agent
+ * the message it came with.
+ */
+export type AttachmentBytes = { mediaId: string; mime: string; bytes: Uint8Array };
+
+/** Best first: readable, then small, then whatever was uploaded. */
+const INLINE_VARIANTS: readonly Variant[] = ['thumb-1600', 'thumb-640', 'original'];
+
+export async function readAttachmentBytes(
+	ctx: DomainContext,
+	input: { mediaId: string; variants: readonly Variant[]; maxBytes: number },
+	settings: MediaSettings = mediaSettings()
+): Promise<AttachmentBytes | null> {
+	for (const variant of INLINE_VARIANTS) {
+		if (!input.variants.includes(variant)) continue;
+
+		try {
+			const file = await openVariant(settings, { db: ctx.db, id: input.mediaId, variant });
+			// Checked before reading rather than after: the point of a ceiling is not
+			// to pull twenty megabytes into memory and then decide against it.
+			if (file.bytes > input.maxBytes) continue;
+
+			const bytes = new Uint8Array(await new Response(file.open()).arrayBuffer());
+			return { mediaId: input.mediaId, mime: file.mime, bytes };
+		} catch {
+			// Not written yet, or gone. Try the next variant; `null` says so in the end.
+		}
+	}
+
+	return null;
+}
+
 /** Every image on one message, for the card that renders it. */
 export function listMessageMedia(ctx: DomainContext, messageId: string): MediaAttachment[] {
 	return listMediaForMessage(ctx.db, messageId).map((row) => attachment(ctx, row));
@@ -423,6 +469,11 @@ export function assertAttachable(
  * No URLs: an address is `/media/:id/:variant` for every deployment, so sending
  * five strings per item would be five copies of a rule the client already has.
  */
+// Re-exported so adapters can name the settings without importing `$media`
+// directly: `$mcp` may see the domain and nothing below it (design §2).
+export { mediaSettings };
+export type { MediaSettings };
+
 export type MediaAttachment = {
 	id: string;
 	updateId: string | null;

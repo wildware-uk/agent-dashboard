@@ -64,6 +64,9 @@ export type WorkFrame = {
 /** The three counts, as the bridge compares them between frames. */
 export type Work = Pick<WorkFrame, 'unread_messages' | 'open_tasks' | 'pending_approvals'>;
 
+/** What is attached to a message: the ids and kinds, never the bytes. */
+export type ChannelAttachment = { id: string; kind: string };
+
 /** One unread message, as the dashboard describes it on the stream. */
 export type ChannelMessage = {
 	message_id: string;
@@ -75,6 +78,17 @@ export type ChannelMessage = {
 	author: string;
 	body: string;
 	created_at: string;
+	/**
+	 * Images and video on the message (migration 016), if any.
+	 *
+	 * Ids and kinds only. The pictures themselves come back from `get_messages`,
+	 * which is the one path that can carry them — the media routes want the
+	 * owner's session, so an agent cannot fetch a URL. What the notification owes
+	 * the agent is the knowledge that a picture exists at all: one that is told
+	 * only the words answers only the words, which is exactly what the owner ran
+	 * into.
+	 */
+	media?: ChannelAttachment[];
 };
 
 /** What an `event: message` frame carries. */
@@ -277,6 +291,27 @@ export function describeRise(previous: Work | null, next: Work): string | null {
 }
 
 /**
+ * What to add to a notification when the message came with pictures.
+ *
+ * Says where to get them in the same breath as saying they exist: an agent told
+ * only that there is an image, with no way to see one, is worse off than one
+ * told nothing.
+ */
+export function describeAttachments(media: ChannelAttachment[] | undefined): string {
+	if (!media || media.length === 0) return '';
+
+	const images = media.filter((item) => item.kind === 'image').length;
+	const others = media.length - images;
+	const parts: string[] = [];
+	if (images > 0) parts.push(`${images} image${images === 1 ? '' : 's'}`);
+	if (others > 0) parts.push(`${others} video${others === 1 ? '' : 's'}`);
+
+	return ` [${parts.join(' and ')} attached — call get_messages to see ${
+		media.length === 1 ? 'it' : 'them'
+	}]`;
+}
+
+/**
  * One settled request as a sentence.
  *
  * The answer comes first and the question second, because the answer is what
@@ -476,8 +511,14 @@ export async function runBridge(options: BridgeOptions): Promise<void> {
 
 			const where = message.project_name ?? message.project ?? 'the dashboard';
 			const who = message.author === 'human' ? 'Your owner' : message.author;
+			if (message.media && message.media.length > 0) {
+				attributes.attachments = String(message.media.length);
+			}
 			remember(message.message_id);
-			await send(`${who} on ${where}: ${message.body}`, attributes);
+			await send(
+				`${who} on ${where}: ${message.body}${describeAttachments(message.media)}`,
+				attributes
+			);
 		}
 	};
 	// Held across reconnects on purpose: the server opens every connection with

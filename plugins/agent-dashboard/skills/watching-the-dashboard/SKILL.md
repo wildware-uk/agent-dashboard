@@ -55,6 +55,11 @@ replying to a notification.
 | waiting on you           | `await_request` with the `request_id` you are holding                                                                                     |
 | your owner answered      | act on it — the answer is in the line; `await_request` re-reads the typed value in full                                                   |
 
+A line that ends with `[1 image attached — call get_messages to see it]` means
+exactly that: the picture is real, and `get_messages` is the only thing that can
+show it to you. Do not answer the words alone when there is an image you have
+not looked at.
+
 An **answer** line is your owner settling one of your own `request_input` calls
 — a button clicked, a form submitted, a prompt dismissed. It arrives the instant
 they act, on the same channel as their messages, and it carries what they said,
