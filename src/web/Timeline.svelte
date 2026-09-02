@@ -135,6 +135,7 @@
 		if (!id || typeof document === 'undefined') return;
 
 		let attempts = 0;
+		let loads = 0;
 		let timer: ReturnType<typeof setTimeout> | undefined;
 		let done = false;
 
@@ -150,8 +151,18 @@
 				timer = setTimeout(() => target.removeAttribute('data-focused'), 4_000);
 				return;
 			}
+
 			attempts += 1;
-			if (attempts > 20) return;
+			// Not on screen yet. The card may simply not have arrived — or it may be
+			// older than the window this page loaded, which is the case that made the
+			// owner say "I cannot find it anywhere": the notification was right and
+			// the timeline was showing the wrong twenty cards. So reach back for
+			// more, a few pages at most, rather than giving up in silence.
+			if (attempts % 8 === 0 && feed.hasMore && !feed.loading && loads < 5) {
+				loads += 1;
+				void feed.loadOlder();
+			}
+			if (attempts > 60) return;
 			timer = setTimeout(look, 150);
 		};
 
