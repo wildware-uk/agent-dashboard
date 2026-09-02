@@ -84,6 +84,18 @@ export function findMessageById(db: Db, id: string): Message | undefined {
 
 export type MessageQuery = {
 	projectId?: string;
+	/**
+	 * Any of these projects, for a reader scoped to a subscription.
+	 *
+	 * Separate from `projectId` because it has to be applied **in the query**: a
+	 * caller that took a page and then filtered it in memory would get an empty
+	 * page whenever the first N unread happened to be somewhere else, which is
+	 * exactly how the channel went silent (see `unreadMessagesInScope`).
+	 *
+	 * An empty list matches nothing, never everything — "these projects" with
+	 * none named is none.
+	 */
+	projectIds?: readonly string[];
 	updateId?: string;
 	taskId?: string;
 	/** Everything newer than this seq: the read cursor's companion. */
@@ -92,32 +104,61 @@ export type MessageQuery = {
 	excludeAuthor?: string;
 	/** Default 100. */
 	limit?: number;
+	/**
+	 * Take the *newest* rows rather than the oldest.
+	 *
+	 * Reading a conversation means oldest first, which is why that is the
+	 * default. Announcing one does not: a notification is about what just
+	 * arrived, and taking the oldest of a long unread list means the newest
+	 * message never reaches the window at all — which is exactly how new
+	 * messages stopped being announced while five old ones were repeated.
+	 *
+	 * The rows still come back oldest first; only which ones are chosen changes.
+	 */
+	newest?: boolean;
 };
 
 /** Messages oldest first. */
 export function listMessages(db: Db, query: MessageQuery = {}): Message[] {
-	const params = {
-		project_id: orNull(query.projectId),
-		update_id: orNull(query.updateId),
-		task_id: orNull(query.taskId),
-		after_seq: orNull(query.afterSeq),
-		exclude_author: orNull(query.excludeAuthor),
-		limit: query.limit ?? 100
-	};
+	// An empty subscription matches nothing rather than everything.
+	if (query.projectIds?.length === 0) return [];
 
-	return db
+	const scope = query.projectIds
+		? `AND project_id IN (${query.projectIds.map(() => '?').join(', ')})`
+		: '';
+	const params = [
+		orNull(query.projectId),
+		orNull(query.projectId),
+		orNull(query.updateId),
+		orNull(query.updateId),
+		orNull(query.taskId),
+		orNull(query.taskId),
+		orNull(query.afterSeq),
+		orNull(query.afterSeq),
+		orNull(query.excludeAuthor),
+		orNull(query.excludeAuthor),
+		...(query.projectIds ?? []),
+		query.limit ?? 100
+	];
+
+	const rows = db
 		.prepare<typeof params, Row>(
 			`SELECT ${COLUMNS} FROM messages
-			 WHERE (:project_id IS NULL OR project_id = :project_id)
-			   AND (:update_id IS NULL OR update_id = :update_id)
-			   AND (:task_id IS NULL OR task_id = :task_id)
-			   AND (:after_seq IS NULL OR seq > :after_seq)
-			   AND (:exclude_author IS NULL OR author <> :exclude_author)
-			 ORDER BY seq
-			 LIMIT :limit`
+			 WHERE (? IS NULL OR project_id = ?)
+			   AND (? IS NULL OR update_id = ?)
+			   AND (? IS NULL OR task_id = ?)
+			   AND (? IS NULL OR seq > ?)
+			   AND (? IS NULL OR author <> ?)
+			   ${scope}
+			 ORDER BY seq ${query.newest ? 'DESC' : 'ASC'}
+			 LIMIT ?`
 		)
-		.all(params)
+		.all(...params)
 		.map(toMessage);
+
+	// Chosen newest-first, read oldest-first: a caller wanting the latest few
+	// still wants them in the order they were said.
+	return query.newest ? rows.reverse() : rows;
 }
 
 /**

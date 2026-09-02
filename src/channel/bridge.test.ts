@@ -190,6 +190,92 @@ describe('pushing into the session', () => {
 		return { notify, fetcher };
 	}
 
+	/**
+	 * The other half of the silence bug: the same messages, over and over.
+	 *
+	 * The stream carries the *unread set*, recomputed from the read cursor on
+	 * every frame — not a delta. The cursor only moves when the agent calls
+	 * `get_messages`, so an agent that has been told about a message and has not
+	 * read it yet is told again on the next rise, and again after that. Five
+	 * messages arriving one at a time meant fifteen notifications for five
+	 * things, which is how a channel teaches its reader to ignore it.
+	 */
+	describe('saying a thing once', () => {
+		it('does not announce a message it has already announced', async () => {
+			const { notify } = await bridge(
+				sse(
+					workFrame({ unread_messages: 1 }),
+					messageFrame({ message_id: 'm1', body: 'first' }),
+					workFrame({ unread_messages: 2 }),
+					// The server resends the whole unread set, because it still is
+					// unread — the agent has not called get_messages.
+					messageFrame({ message_id: 'm1', body: 'first' }),
+					messageFrame({ message_id: 'm2', body: 'second' })
+				)
+			);
+
+			const said = notify.mock.calls.map((call) => String(call[0]));
+			expect(said.filter((line) => line.includes('first'))).toHaveLength(1);
+			expect(said.filter((line) => line.includes('second'))).toHaveLength(1);
+		});
+
+		it('says nothing at all when the whole set has already been said', async () => {
+			const { notify } = await bridge(
+				sse(
+					workFrame({ unread_messages: 1 }),
+					messageFrame({ message_id: 'm1', body: 'only' }),
+					workFrame({ unread_messages: 1 }),
+					messageFrame({ message_id: 'm1', body: 'only' })
+				)
+			);
+
+			// Not even the count sentence: repeating "1 unread message" about
+			// something the agent was already handed is the same interruption.
+			expect(notify).toHaveBeenCalledTimes(1);
+		});
+
+		it('still announces a rise that came with nothing, like a task', async () => {
+			const { notify } = await bridge(sse(workFrame({}), workFrame({ open_tasks: 1 })));
+
+			expect(notify.mock.calls[0]?.[0]).toContain('1 open task');
+		});
+	});
+
+	/**
+	 * A rise that never gets its message frame (the silence bug).
+	 *
+	 * A rise in `unread_messages` is held so the notification can carry the text
+	 * that follows it. Holding it *for ever* is what made the channel go quiet: the
+	 * server had nothing scoped to send, the message frame never came, and the
+	 * notification sat in the bridge while its owner sent five more into the void.
+	 *
+	 * The server side of that is fixed too (`unreadMessagesInScope`), but the bridge
+	 * must not depend on the server being right — a held notification is work the
+	 * agent has not been told about.
+	 */
+	describe('a rise with no message behind it', () => {
+		it('is announced when the next frame arrives instead of being held for ever', async () => {
+			const { notify } = await bridge(
+				sse(workFrame({}), workFrame({ unread_messages: 1 }), workFrame({ unread_messages: 2 }))
+			);
+
+			// The first rise went out on the second frame rather than waiting for a
+			// message that the server had nothing to put in.
+			expect(notify.mock.calls[0]?.[0]).toContain('1 unread message');
+		});
+
+		it('still prefers the message frame when one does arrive', async () => {
+			const { notify } = await bridge(
+				sse(workFrame({ unread_messages: 1 }), messageFrame({ body: 'have a look at this' }))
+			);
+
+			// One notification carrying the text, not two where the first says only
+			// that a second is coming.
+			expect(notify).toHaveBeenCalledTimes(1);
+			expect(notify.mock.calls[0]?.[0]).toContain('have a look at this');
+		});
+	});
+
 	it('sends the message itself, not just that one exists', async () => {
 		const { notify } = await bridge(
 			sse(workFrame({ unread_messages: 1 }), messageFrame({ body: 'try the other branch' }))

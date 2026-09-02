@@ -375,12 +375,24 @@ export function unreadMessagesInScope(
 	const mine = authorText({ kind: 'agent', agentId });
 	const after = readCursorSeq(ctx.db, agentId);
 
-	const messages = listMessages(ctx.db, { afterSeq: after, excludeAuthor: mine, limit });
-	return projectIds === null
-		? messages
-		: messages.filter(
-				(message) => message.projectId !== null && projectIds.includes(message.projectId)
-			);
+	// The scope goes **into the query**, not over its result. Filtering a page
+	// afterwards is how this went silent: the cursor sat behind a run of messages
+	// in other projects, so the first `limit` unread were all somewhere else and
+	// the scoped read came back empty — while the scoped *count* said there was
+	// something waiting. The channel then held a notification for a message frame
+	// that could never arrive.
+	return listMessages(ctx.db, {
+		afterSeq: after,
+		excludeAuthor: mine,
+		limit,
+		// The **newest** few, not the oldest. A notification is about what just
+		// arrived, and the read cursor only moves when the agent calls
+		// `get_messages` — so on a long unread list the oldest window is frozen,
+		// and every new message lands outside it. That is how the owner's newest
+		// message stopped being announced while five old ones repeated.
+		newest: true,
+		...(projectIds ? { projectIds } : {})
+	});
 }
 
 export type ThreadQuery = {

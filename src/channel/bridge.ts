@@ -301,16 +301,48 @@ export async function runBridge(options: BridgeOptions): Promise<void> {
 		await send(sentence, meta(work));
 	};
 
+	/**
+	 * Message ids already delivered, so nothing is announced twice.
+	 *
+	 * The stream sends the *unread set*, not a delta — it is recomputed from the
+	 * read cursor on every frame, and the cursor only moves when the agent calls
+	 * `get_messages`. So an agent that has been told about a message and has not
+	 * yet read it is told again on the next rise, and again on the one after
+	 * that: five messages arriving one at a time meant fifteen notifications for
+	 * five things.
+	 *
+	 * The bridge is the right place to remember, because "have I already said
+	 * this" is a fact about this connection rather than about the dashboard —
+	 * the messages really are still unread, and the dashboard is right to keep
+	 * saying so.
+	 */
+	const announced = new Set<string>();
+
+	/** Enough that nothing repeats in practice; bounded so a long run cannot leak. */
+	const ANNOUNCED_MAX = 500;
+
+	const remember = (id: string) => {
+		announced.add(id);
+		if (announced.size > ANNOUNCED_MAX) {
+			// Oldest first: `Set` keeps insertion order, so this drops what was said
+			// longest ago, which is what an agent is least likely to be told again.
+			const oldest = announced.values().next().value;
+			if (oldest !== undefined) announced.delete(oldest);
+		}
+	};
+
 	/** Send the messages themselves, one notification each. */
-	const announce = async (
-		send: NonNullable<BridgeOptions['notify']>,
-		messages: ChannelMessage[]
-	) => {
+	const announce = async (send: NonNullable<BridgeOptions['notify']>, all: ChannelMessage[]) => {
 		const held = pendingCounts;
 		pendingCounts = null;
+
+		const messages = all.filter((message) => !announced.has(message.message_id));
 		if (messages.length === 0) {
-			// The counts moved but nothing came with them; say what we know.
-			if (held) await send(held.sentence, meta(held.work));
+			// Either nothing came with the counts, or all of it has already been
+			// said. The first is worth a sentence; the second is not — repeating
+			// "1 unread message" about something the agent was already handed is how
+			// a channel teaches its reader to ignore it.
+			if (held && all.length === 0) await send(held.sentence, meta(held.work));
 			return;
 		}
 
@@ -326,6 +358,7 @@ export async function runBridge(options: BridgeOptions): Promise<void> {
 
 			const where = message.project_name ?? message.project ?? 'the dashboard';
 			const who = message.author === 'human' ? 'Your owner' : message.author;
+			remember(message.message_id);
 			await send(`${who} on ${where}: ${message.body}`, attributes);
 		}
 	};
@@ -373,6 +406,13 @@ export async function runBridge(options: BridgeOptions): Promise<void> {
 					// One malformed frame must not drop a working connection.
 					continue;
 				}
+
+				// A rise still held from an earlier frame goes out now. Holding one
+				// for a message frame is right; holding it *for ever* is how the
+				// channel went quiet — the server had nothing scoped to send, so the
+				// frame never came, and the notification sat here while its owner
+				// wondered why nobody was answering.
+				await flush(notify);
 
 				const sentence = describeRise(previous, work);
 				previous = work;

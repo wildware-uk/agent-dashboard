@@ -19830,12 +19830,38 @@ async function runBridge(options) {
 		pendingCounts = null;
 		await send(sentence, meta(work));
 	};
+	/**
+	* Message ids already delivered, so nothing is announced twice.
+	*
+	* The stream sends the *unread set*, not a delta — it is recomputed from the
+	* read cursor on every frame, and the cursor only moves when the agent calls
+	* `get_messages`. So an agent that has been told about a message and has not
+	* yet read it is told again on the next rise, and again on the one after
+	* that: five messages arriving one at a time meant fifteen notifications for
+	* five things.
+	*
+	* The bridge is the right place to remember, because "have I already said
+	* this" is a fact about this connection rather than about the dashboard —
+	* the messages really are still unread, and the dashboard is right to keep
+	* saying so.
+	*/
+	const announced = /* @__PURE__ */ new Set();
+	/** Enough that nothing repeats in practice; bounded so a long run cannot leak. */
+	const ANNOUNCED_MAX = 500;
+	const remember = (id) => {
+		announced.add(id);
+		if (announced.size > ANNOUNCED_MAX) {
+			const oldest = announced.values().next().value;
+			if (oldest !== void 0) announced.delete(oldest);
+		}
+	};
 	/** Send the messages themselves, one notification each. */
-	const announce = async (send, messages) => {
+	const announce = async (send, all) => {
 		const held = pendingCounts;
 		pendingCounts = null;
+		const messages = all.filter((message) => !announced.has(message.message_id));
 		if (messages.length === 0) {
-			if (held) await send(held.sentence, meta(held.work));
+			if (held && all.length === 0) await send(held.sentence, meta(held.work));
 			return;
 		}
 		for (const message of messages) {
@@ -19846,7 +19872,9 @@ async function runBridge(options) {
 			if (message.task_id) attributes.task_id = message.task_id;
 			if (held) Object.assign(attributes, meta(held.work));
 			const where = message.project_name ?? message.project ?? "the dashboard";
-			await send(`${message.author === "human" ? "Your owner" : message.author} on ${where}: ${message.body}`, attributes);
+			const who = message.author === "human" ? "Your owner" : message.author;
+			remember(message.message_id);
+			await send(`${who} on ${where}: ${message.body}`, attributes);
 		}
 	};
 	let previous = null;
@@ -19880,6 +19908,7 @@ async function runBridge(options) {
 				} catch {
 					continue;
 				}
+				await flush(notify);
 				const sentence = describeRise(previous, work);
 				previous = work;
 				if (sentence === null) continue;
