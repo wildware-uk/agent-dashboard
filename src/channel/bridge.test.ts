@@ -6,6 +6,7 @@ import {
 	INSTRUCTIONS,
 	createChannelServer,
 	describeAnswer,
+	describeAttachments,
 	describeRise,
 	main,
 	newClientId,
@@ -671,5 +672,61 @@ describe('who the bridge says it is', () => {
 
 	it('mints a different id per process, because sessions share a token', () => {
 		expect(newClientId()).not.toBe(newClientId());
+	});
+});
+
+/**
+ * Telling an agent a picture exists.
+ *
+ * The owner's report: an agent answered "I could not see your attached image".
+ * It could not, and it was not even told there was one — so it answered the
+ * words and ignored the screenshot. The bytes still cannot ride this transport;
+ * what the line owes the agent is that they exist and where to get them.
+ */
+describe('a message with something attached', () => {
+	it('says so, and says which tool hands the picture over', async () => {
+		const notify = vi.fn().mockResolvedValue(undefined);
+		const abort = new AbortController();
+		const fetcher = vi
+			.fn()
+			.mockResolvedValue(
+				new Response(
+					sse(
+						workFrame({ unread_messages: 1 }),
+						messageFrame({ media: [{ id: 'm1', kind: 'image' }] })
+					),
+					{ status: 200 }
+				)
+			);
+
+		await runBridge({
+			baseUrl: 'https://dash.test',
+			token: 'a-token',
+			projects: ['*'],
+			fetch: fetcher as unknown as typeof globalThis.fetch,
+			notify,
+			sleep: async () => abort.abort(),
+			signal: abort.signal
+		});
+
+		const [content, meta] = notify.mock.calls[0]!;
+		expect(content).toContain('1 image attached');
+		expect(content).toContain('get_messages');
+		expect(meta).toMatchObject({ attachments: '1' });
+	});
+
+	it('counts images and video separately, because only one can be shown', () => {
+		expect(
+			describeAttachments([
+				{ id: 'a', kind: 'image' },
+				{ id: 'b', kind: 'image' },
+				{ id: 'c', kind: 'video' }
+			])
+		).toContain('2 images and 1 video attached');
+	});
+
+	it('adds nothing at all to a message with no attachments', () => {
+		expect(describeAttachments(undefined)).toBe('');
+		expect(describeAttachments([])).toBe('');
 	});
 });

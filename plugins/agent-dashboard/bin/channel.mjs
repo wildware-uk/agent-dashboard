@@ -19790,6 +19790,22 @@ function describeRise(previous, next) {
 	return `Waiting for you on the dashboard: ${parts.join(", ")}.`;
 }
 /**
+* What to add to a notification when the message came with pictures.
+*
+* Says where to get them in the same breath as saying they exist: an agent told
+* only that there is an image, with no way to see one, is worse off than one
+* told nothing.
+*/
+function describeAttachments(media) {
+	if (!media || media.length === 0) return "";
+	const images = media.filter((item) => item.kind === "image").length;
+	const others = media.length - images;
+	const parts = [];
+	if (images > 0) parts.push(`${images} image${images === 1 ? "" : "s"}`);
+	if (others > 0) parts.push(`${others} video${others === 1 ? "" : "s"}`);
+	return ` [${parts.join(" and ")} attached — call get_messages to see ${media.length === 1 ? "it" : "them"}]`;
+}
+/**
 * One settled request as a sentence.
 *
 * The answer comes first and the question second, because the answer is what
@@ -19932,8 +19948,9 @@ async function runBridge(options) {
 			if (held) Object.assign(attributes, meta(held.work));
 			const where = message.project_name ?? message.project ?? "the dashboard";
 			const who = message.author === "human" ? "Your owner" : message.author;
+			if (message.media && message.media.length > 0) attributes.attachments = String(message.media.length);
 			remember(message.message_id);
-			await send(`${who} on ${where}: ${message.body}`, attributes);
+			await send(`${who} on ${where}: ${message.body}${describeAttachments(message.media)}`, attributes);
 		}
 	};
 	let previous = null;

@@ -44,6 +44,7 @@ import {
 	countWork,
 	findProject,
 	findRequest,
+	listMessageMedia,
 	invalid,
 	isDomainError,
 	markMessagesDelivered,
@@ -322,7 +323,16 @@ function messageFrame(
 				task_id: message.taskId,
 				author: message.author,
 				body: message.body,
-				created_at: new Date(message.createdAt).toISOString()
+				created_at: new Date(message.createdAt).toISOString(),
+				// What is attached, so a notification can say "there is a picture
+				// here" (migration 016). The bytes never ride the stream — an agent
+				// gets those from `get_messages`, which is the only thing that can
+				// hand them over — but an agent that is not told a screenshot exists
+				// will answer the words and ignore it, which is what the owner hit.
+				media: listMessageMedia(ctx, message.id).map((item) => ({
+					id: item.id,
+					kind: item.kind
+				}))
 			};
 		})
 	});

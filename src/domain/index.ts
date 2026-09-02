@@ -104,6 +104,8 @@ export {
 	ALLOWED_MIMES,
 	assertAttachableToMessage,
 	listMessageMedia,
+	mediaSettings,
+	readAttachmentBytes,
 	uploadOwnerMedia,
 	FILENAME_MAX_LENGTH,
 	MEDIA_PER_UPDATE_MAX,
@@ -118,12 +120,14 @@ export {
 	readMediaVariant,
 	startMediaSweeper,
 	sweepMedia,
+	type AttachmentBytes,
 	type AttachMediaInput,
 	type AttachMediaResult,
 	type CreateUploadInput,
 	type IngestUploadInput,
 	type IngestedMedia,
 	type MediaAttachment,
+	type MediaSettings,
 	type MediaSweeperOptions,
 	type UploadGrant
 } from './media';

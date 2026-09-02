@@ -11,7 +11,7 @@
  * no way to act as anybody else: there is no argument for it, and nothing global
  * to reach for.
  */
-import type { Agent, DomainContext } from '$domain';
+import type { Agent, DomainContext, MediaSettings } from '$domain';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 import type { z } from 'zod';
 
@@ -28,6 +28,15 @@ export type ToolDeps = {
 	 * over a hold measured in milliseconds instead of waiting out a real one.
 	 */
 	holdMs?: number;
+	/**
+	 * Where the media lives, for the tools that hand an agent a picture.
+	 *
+	 * `get_messages` inlines the images attached to a message, because an agent
+	 * cannot fetch them: `/media/...` wants the owner's session (design §8). The
+	 * settings are resolved once with the rest of the environment rather than
+	 * read per request, and a test hands over a directory of its own.
+	 */
+	media?: MediaSettings;
 };
 
 /** The zod shape a tool's arguments are described by. */

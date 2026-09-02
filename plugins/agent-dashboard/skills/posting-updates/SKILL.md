@@ -151,6 +151,13 @@ and the owner watching a card that has not changed. Close it with
 `acknowledge({ state: 'read', message_id })` when "done" would overstate what
 you did. Anything is better than leaving `thinking` as your last word.
 
+**Your owner's images come back with the message.** If they attached a
+screenshot, `get_messages` returns the picture itself alongside the text — you
+can look at it. You cannot fetch it any other way: the media URLs want their
+browser session, so an id is not something you can open. The summary line says
+when something could not be included (too many, too large, or a video), and that
+is your cue to ask rather than to guess.
+
 Then `get_messages({ mark_read: true })` so it stops being unread. `mark_read`
 defaults to true and is the only default in this API with a side effect — a
 narrowed read (one project, or an explicit `since`) will not move your cursor

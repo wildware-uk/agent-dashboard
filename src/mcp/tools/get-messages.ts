@@ -10,10 +10,12 @@
  * the caller's own, resolved from the bearer token, so no agent can mark another
  * agent's messages read (design §5).
  */
-import { readMessages } from '$domain';
+import { mediaSettings, readMessages, type MediaSettings } from '$domain';
 import { z } from 'zod';
-import { guard, messageView, ok } from '../results';
+import { attachmentsFor } from '../attachments';
+import { guarded, messageView, ok } from '../results';
 import type { McpTool } from './types';
+import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
 
 const inputSchema = {
 	since: z
@@ -34,7 +36,7 @@ const inputSchema = {
 		)
 };
 
-export const getMessagesTool: McpTool<typeof inputSchema> = {
+export const getMessagesTool: McpTool<typeof inputSchema, Promise<CallToolResult>> = {
 	name: 'get_messages',
 	config: {
 		title: 'Read messages from your owner',
@@ -49,6 +51,12 @@ export const getMessagesTool: McpTool<typeof inputSchema> = {
 			'- project (optional): a project slug or id, to read one project at a time.',
 			'- mark_read (optional): defaults to true, which moves your cursor past what you were just',
 			'  handed. Pass false to peek — the same messages will come back next time.',
+			'',
+			'**Images your owner attached come back with the message**, as pictures you can actually',
+			"look at rather than ids you cannot fetch — the media routes want your owner's session,",
+			'so this tool is the only way you will ever see them. A few per call, thumbnails rather',
+			'than originals, and the summary says plainly when something could not be included so you',
+			'can ask rather than assume you have seen everything.',
 			'',
 			'Returns { messages: [{ id, project_id, update_id, task_id, author, body, created_at }],',
 			'count, cursor, unread, marked_read }. `author` is the literal "human" for your owner or',
@@ -68,8 +76,8 @@ export const getMessagesTool: McpTool<typeof inputSchema> = {
 		annotations: { destructiveHint: false, openWorldHint: false }
 	},
 
-	run: ({ ctx, agent }, args) =>
-		guard(() => {
+	run: ({ ctx, agent, media }, args) =>
+		guarded(async () => {
 			const page = readMessages(ctx, {
 				// Identity comes from the token, never from `args` (design §5).
 				agentId: agent.id,
@@ -78,15 +86,42 @@ export const getMessagesTool: McpTool<typeof inputSchema> = {
 				markRead: args.mark_read
 			});
 
-			return ok(summary(page.messages.length, page.unread), {
-				messages: page.messages.map(messageView),
-				count: page.messages.length,
-				cursor: page.cursor,
-				unread: page.unread,
-				marked_read: page.markedRead
-			});
+			// After the read, never instead of it: an image that cannot be opened
+			// must not cost the agent the words it came with — and neither must a
+			// deployment with no media configured at all, which is why the settings
+			// are resolved defensively rather than at import time.
+			const attachments = await attachmentsFor(ctx, settingsFor(media), page.messages);
+
+			return ok(
+				summary(page.messages.length, page.unread, attachments.notes),
+				{
+					messages: page.messages.map(messageView),
+					count: page.messages.length,
+					cursor: page.cursor,
+					unread: page.unread,
+					marked_read: page.markedRead
+				},
+				attachments.images
+			);
 		})
 };
+
+/**
+ * Where the media lives, or nowhere.
+ *
+ * A deployment with no `DATA_DIR` or `TOKEN_SECRET` cannot serve media at all,
+ * and `mediaSettings` says so by throwing. That must not cost an agent its
+ * messages: the words are the point, and the pictures are what this tool adds
+ * to them.
+ */
+function settingsFor(media: MediaSettings | undefined): MediaSettings | null {
+	if (media) return media;
+	try {
+		return mediaSettings();
+	} catch {
+		return null;
+	}
+}
 
 /**
  * The sentence the model actually reads.
@@ -95,9 +130,13 @@ export const getMessagesTool: McpTool<typeof inputSchema> = {
  * "nothing is waiting" is: it is the common answer, and an agent that reads it
  * carries on working instead of going looking through JSON for permission to.
  */
-function summary(count: number, unread: number): string {
+function summary(count: number, unread: number, attachments: string[] = []): string {
 	if (count === 0) return 'No new messages. Carry on.';
 
 	const read = `${count} new message${count === 1 ? '' : 's'}, oldest first.`;
-	return unread === 0 ? read : `${read} ${unread} still unread; call again for the rest.`;
+	const rest = unread === 0 ? read : `${read} ${unread} still unread; call again for the rest.`;
+	// Named rather than left to be noticed: an agent that cannot tell an image
+	// was attached will answer the words and ignore the picture, which is the
+	// complaint this exists to answer.
+	return attachments.length === 0 ? rest : `${rest}\n${attachments.join('\n')}`;
 }

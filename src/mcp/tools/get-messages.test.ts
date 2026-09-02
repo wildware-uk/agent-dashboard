@@ -17,12 +17,12 @@ function fromOwner(body: string, scope: Record<string, string> = { project: slug
 	return postMessage(mcp.h, { author: { kind: 'human' }, body, ...scope });
 }
 
-function get(args: Record<string, unknown> = {}) {
-	return getMessagesTool.run(mcp.deps, args as never);
+async function get(args: Record<string, unknown> = {}) {
+	return await getMessagesTool.run(mcp.deps, args as never);
 }
 
 /** The structured payload, typed enough to read fields off. */
-function payload(result: ReturnType<typeof get>) {
+function payload(result: Awaited<ReturnType<typeof get>>) {
 	return result.structuredContent as {
 		messages: { id: string; body: string; author: string; project_id: string | null }[];
 		count: number;
@@ -38,45 +38,50 @@ beforeEach(() => {
 });
 
 describe('get_messages', () => {
-	it('returns only the messages after the calling agent’s cursor', () => {
+	it('returns only the messages after the calling agent’s cursor', async () => {
 		fromOwner('first');
 		fromOwner('second');
 
-		expect(payload(get()).messages.map((message) => message.body)).toEqual(['first', 'second']);
+		expect(payload(await get()).messages.map((message) => message.body)).toEqual([
+			'first',
+			'second'
+		]);
 		// The cursor moved with the read, so the second call has nothing to say.
-		expect(payload(get()).count).toBe(0);
+		expect(payload(await get()).count).toBe(0);
 
 		fromOwner('third');
-		expect(payload(get()).messages.map((message) => message.body)).toEqual(['third']);
+		expect(payload(await get()).messages.map((message) => message.body)).toEqual(['third']);
 	});
 
-	it('advances the cursor by default, because mark_read defaults to true', () => {
+	it('advances the cursor by default, because mark_read defaults to true', async () => {
 		const message = fromOwner('ship it');
 
-		const read = payload(get());
+		const read = payload(await get());
 
 		expect(read.marked_read).toBe(true);
 		expect(readCursorSeq(mcp.h.db, mcp.deps.agent.id)).toBe(message.seq);
 		expect(read.unread).toBe(0);
 	});
 
-	it('leaves the cursor untouched for mark_read: false, so the same messages return', () => {
+	it('leaves the cursor untouched for mark_read: false, so the same messages return', async () => {
 		fromOwner('ship it');
 
-		const peek = payload(get({ mark_read: false }));
+		const peek = payload(await get({ mark_read: false }));
 
 		expect(peek.marked_read).toBe(false);
 		expect(peek.unread).toBe(1);
 		expect(readCursorSeq(mcp.h.db, mcp.deps.agent.id)).toBe(0);
-		expect(payload(get({ mark_read: false })).messages.map((m) => m.body)).toEqual(['ship it']);
+		expect(payload(await get({ mark_read: false })).messages.map((m) => m.body)).toEqual([
+			'ship it'
+		]);
 	});
 
-	it('reads one project at a time', () => {
+	it('reads one project at a time', async () => {
 		const other = createProject(mcp.h, { name: 'Other' }).project;
 		fromOwner('for other', { project: other.slug });
 		fromOwner('for dashboard');
 
-		const scoped = payload(get({ project: slug }));
+		const scoped = payload(await get({ project: slug }));
 
 		expect(scoped.messages.map((message) => message.body)).toEqual(['for dashboard']);
 		// Not marked read, because the cursor may not step over the message in the
@@ -84,19 +89,19 @@ describe('get_messages', () => {
 		expect(scoped.unread).toBe(2);
 	});
 
-	it('resumes from a cursor it handed out', () => {
+	it('resumes from a cursor it handed out', async () => {
 		fromOwner('first');
 		const second = fromOwner('second');
 
-		const page = payload(get({ mark_read: false }));
+		const page = payload(await get({ mark_read: false }));
 		expect(page.cursor).toBe(String(second.seq));
 
 		// Everything the first call handed over is behind that cursor, so resuming
 		// from it is how an agent polls without re-reading.
-		expect(payload(get({ since: page.cursor, mark_read: false })).count).toBe(0);
+		expect(payload(await get({ since: page.cursor, mark_read: false })).count).toBe(0);
 	});
 
-	it('never hands an agent its own messages back', () => {
+	it('never hands an agent its own messages back', async () => {
 		postMessage(mcp.h, {
 			author: { kind: 'agent', agentId: mcp.deps.agent.id },
 			body: 'mine',
@@ -104,10 +109,10 @@ describe('get_messages', () => {
 		});
 		fromOwner('yours');
 
-		expect(payload(get()).messages.map((message) => message.body)).toEqual(['yours']);
+		expect(payload(await get()).messages.map((message) => message.body)).toEqual(['yours']);
 	});
 
-	it('reports each message as human or agent:<agent_id>, in snake_case fields', () => {
+	it('reports each message as human or agent:<agent_id>, in snake_case fields', async () => {
 		const other = mcp.mint('other');
 		postMessage(mcp.h, {
 			author: { kind: 'agent', agentId: other.agentId },
@@ -116,7 +121,7 @@ describe('get_messages', () => {
 		});
 		const owner = fromOwner('from the owner');
 
-		const [peer, human] = payload(get()).messages;
+		const [peer, human] = payload(await get()).messages;
 
 		expect(peer.author).toBe(`agent:${other.agentId}`);
 		expect(human).toMatchObject({ id: owner.id, author: 'human' });
@@ -133,25 +138,25 @@ describe('get_messages', () => {
 		]);
 	});
 
-	it('says in words how much is waiting, so a model need not parse the JSON', () => {
-		expect(toolText(get())).toContain('No new messages');
+	it('says in words how much is waiting, so a model need not parse the JSON', async () => {
+		expect(toolText(await get())).toContain('No new messages');
 
 		fromOwner('one');
-		expect(toolText(get())).toContain('1 new message');
+		expect(toolText(await get())).toContain('1 new message');
 	});
 
-	it('refuses a cursor it did not issue, and an unknown project, as fixable errors', () => {
-		expect(get({ since: 'yesterday' })).toMatchObject({
+	it('refuses a cursor it did not issue, and an unknown project, as fixable errors', async () => {
+		expect(await get({ since: 'yesterday' })).toMatchObject({
 			isError: true,
 			structuredContent: { error: 'invalid_argument' }
 		});
-		expect(get({ project: 'nope' })).toMatchObject({
+		expect(await get({ project: 'nope' })).toMatchObject({
 			isError: true,
 			structuredContent: { error: 'not_found' }
 		});
 	});
 
-	it('is the count the heartbeat reports, so an agent is never told to look twice', () => {
+	it('is the count the heartbeat reports, so an agent is never told to look twice', async () => {
 		const { session } = registerSession(mcp.h, { agentId: mcp.deps.agent.id });
 		fromOwner('first');
 		fromOwner('second');
@@ -160,7 +165,7 @@ describe('get_messages', () => {
 			unreadMessages: 2
 		});
 
-		get();
+		await get();
 
 		expect(heartbeat(mcp.h, { sessionId: session.id, agentId: mcp.deps.agent.id })).toMatchObject({
 			unreadMessages: 0

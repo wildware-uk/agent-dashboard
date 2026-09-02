@@ -10,6 +10,7 @@ export {
 	INSTRUCTIONS,
 	createChannelServer,
 	describeAnswer,
+	describeAttachments,
 	describeRise,
 	main,
 	newClientId,
@@ -19,6 +20,7 @@ export {
 export type {
 	AnswerFrame,
 	BridgeOptions,
+	ChannelAttachment,
 	ChannelMessage,
 	MessageFrame,
 	Work,

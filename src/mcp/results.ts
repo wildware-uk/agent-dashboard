@@ -29,17 +29,28 @@ import {
 	type Task,
 	type Update
 } from '$domain';
-import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
+import type { CallToolResult, ContentBlock } from '@modelcontextprotocol/sdk/types.js';
 
 /** Milliseconds since the epoch, as agents should read it. */
 function iso(at: number): string {
 	return new Date(at).toISOString();
 }
 
-/** A successful result: one summary line, then the payload. */
-export function ok(summary: string, data: Record<string, unknown>): CallToolResult {
+/**
+ * A successful result: one summary line, then the payload.
+ *
+ * `extra` is for content the reader has to *see* rather than parse — today the
+ * images attached to a message, which cannot travel any other way: an agent has
+ * no session cookie and so cannot fetch `/media/...` for itself. The blocks go
+ * after the text, so the sentence and the JSON are still the first thing read.
+ */
+export function ok(
+	summary: string,
+	data: Record<string, unknown>,
+	extra: ContentBlock[] = []
+): CallToolResult {
 	return {
-		content: [{ type: 'text', text: `${summary}\n${JSON.stringify(data, null, 2)}` }],
+		content: [{ type: 'text', text: `${summary}\n${JSON.stringify(data, null, 2)}` }, ...extra],
 		structuredContent: data
 	};
 }
