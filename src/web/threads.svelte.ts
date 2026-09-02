@@ -50,9 +50,10 @@ export type ThreadSource = {
 	/**
 	 * The owner's own posts, oldest first (migration 014).
 	 *
-	 * A message anchored to nothing — no update, no task, and not a reply — is
-	 * something they wrote straight into the feed, and it renders as a card of
-	 * its own rather than inside somebody else's thread.
+	 * A message anchored to nothing — no update, no task, and not a reply — was
+	 * written straight into the feed, and it renders as a card of its own rather
+	 * than inside somebody else's thread. The owner's and an agent's alike: a
+	 * note an agent files against a project is still something it said out loud.
 	 */
 	posts?(): MessageView[];
 	/** The images on one message (migration 016). */
@@ -194,14 +195,19 @@ export class Threads {
 		return this.messages.filter((message) => message.taskId === taskId);
 	}
 
-	/** The owner's own feed posts, oldest first (migration 014). */
+	/**
+	 * Feed posts, oldest first (migration 014): messages anchored to nothing.
+	 *
+	 * **Agents' as well as the owner's.** This used to be the owner's alone, and
+	 * that was a hole rather than a rule: a `post_message` with no update, task
+	 * or reply is filed against the project, and the feed rendered updates,
+	 * owner posts and replies — so an agent's note answering nothing went into
+	 * the database and onto no screen. An agent that says something and is not
+	 * heard is the one failure this whole product exists to prevent.
+	 */
 	posts(): MessageView[] {
 		return this.messages.filter(
-			(message) =>
-				message.updateId === null &&
-				message.taskId === null &&
-				!message.replyTo &&
-				message.author === 'human'
+			(message) => message.updateId === null && message.taskId === null && !message.replyTo
 		);
 	}
 
