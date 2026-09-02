@@ -22,6 +22,7 @@ import { bus as sharedBus, type EventBus } from '$events';
 import {
 	acknowledgementsFor,
 	deleteMessage,
+	deliveriesFor,
 	invalid,
 	listMessageMedia,
 	listThread,
@@ -134,7 +135,15 @@ export function listMessagesHandler(options: MessageHandlerOptions = {}): OwnerH
 				// And the images on them (migration 016), for the same reason the
 				// timeline's media rides with its cards: a picture that appeared a
 				// beat after the words reads as having just been added.
-				media: mediaByMessage(ctx, messages)
+				media: mediaByMessage(ctx, messages),
+				// Who the server has actually handed each message to (migration 018).
+				// The state between "unread" and "acknowledged", which used to be
+				// invisible: a message nobody had answered looked the same whether an
+				// agent had it and was busy or had never been told.
+				deliveries: deliveriesFor(
+					ctx,
+					messages.map((message) => message.id)
+				)
 			}
 		});
 	});

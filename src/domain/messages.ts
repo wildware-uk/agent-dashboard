@@ -35,6 +35,9 @@ import {
 	advanceReadCursor,
 	attachMediaToMessage,
 	countMessagesAfter,
+	deliveredMessageIds,
+	listDeliveries,
+	recordDelivery,
 	listAgentProjectIds,
 	findAgentById,
 	findMessageById,
@@ -45,7 +48,8 @@ import {
 	listRepliesTo,
 	readCursorSeq,
 	softDeleteMessage,
-	type Message
+	type Message,
+	type MessageDelivery
 } from '$db';
 import type { DomainContext } from './context';
 import { invalid, notFound } from './errors';
@@ -286,6 +290,82 @@ export function deleteMessage(ctx: DomainContext, input: DeleteMessageInput): Me
 	});
 
 	return findMessageById(ctx.db, message.id)!;
+}
+
+/**
+ * Record that messages reached an agent, and say so (migration 018).
+ *
+ * Called by the live stream at the moment it writes them out, which is the
+ * only place that knows delivery happened. Two things follow from that:
+ *
+ * - **The owner can see it.** "delivered to scout" appears under their words
+ *   within a second, and the gap between "unread" and "acknowledged" — where a
+ *   message might have reached nobody at all — stops being invisible.
+ * - **The stream stops repeating itself.** Announcing once used to be
+ *   remembered per connection, which is right until the connection drops or the
+ *   process restarts, and then the whole unread pile goes out again. A row
+ *   survives both.
+ *
+ * Delivery is not reading. Only `get_messages` moves a read cursor, so a
+ * delivered message is still unread, still counted, and still handed over when
+ * the agent asks for it.
+ *
+ * Silent for anything already delivered: the same push over a new connection is
+ * the same fact, and an event for it would make a card flicker for nothing.
+ *
+ * @returns the deliveries this call created, in the order they were named.
+ */
+export function markMessagesDelivered(
+	ctx: DomainContext,
+	input: { agentId: string; messageIds: readonly string[] }
+): MessageDelivery[] {
+	const created: MessageDelivery[] = [];
+
+	for (const messageId of input.messageIds) {
+		const message = findMessageById(ctx.db, messageId);
+		// A message deleted between the read and this write is not delivered to
+		// anybody: the row would outlive what it describes.
+		if (!message || message.deletedAt !== null) continue;
+
+		const { delivery, created: first } = recordDelivery(ctx.db, {
+			messageId,
+			agentId: input.agentId,
+			at: ctx.now()
+		});
+		if (!first) continue;
+
+		created.push(delivery);
+		ctx.bus.publish('message.delivered', {
+			messageId: delivery.messageId,
+			agentId: delivery.agentId,
+			projectId: message.projectId
+		});
+	}
+
+	return created;
+}
+
+/** Which of these messages one agent has already been handed (migration 018). */
+export function alreadyDelivered(
+	ctx: DomainContext,
+	agentId: string,
+	messageIds: readonly string[]
+): Set<string> {
+	return deliveredMessageIds(ctx.db, agentId, messageIds);
+}
+
+/**
+ * Every delivery on a page of messages, for the browser that renders them.
+ *
+ * Read in the same request as the messages, exactly as acknowledgements are: a
+ * "delivered" that painted a beat after the line it belongs to would read as
+ * having just happened rather than as having happened when it did.
+ */
+export function deliveriesFor(
+	ctx: DomainContext,
+	messageIds: readonly string[]
+): MessageDelivery[] {
+	return listDeliveries(ctx.db, messageIds);
 }
 
 export type ReadMessagesInput = {

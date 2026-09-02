@@ -149,7 +149,10 @@ const DESIGN_COLUMNS: Record<string, string[]> = {
 	],
 	// Migration 013: an agent saying "seen it" / "done" against one message or
 	// one task, so a card the owner replied to is not silent.
-	acknowledgements: ['agent_id', 'message_id', 'task_id', 'state', 'created_at', 'updated_at']
+	acknowledgements: ['agent_id', 'message_id', 'task_id', 'state', 'created_at', 'updated_at'],
+	// Migration 018: the moment the server handed one message to one agent, so
+	// "nobody has answered" can be told from "nobody was ever told".
+	message_deliveries: ['message_id', 'agent_id', 'delivered_at']
 };
 
 describe('schema', () => {

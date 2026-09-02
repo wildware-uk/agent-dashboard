@@ -257,6 +257,20 @@ export type Message = Keyed & {
 	deletedAt: number | null;
 };
 
+/**
+ * One message, handed to one agent (migration 018).
+ *
+ * Delivery is a fact about a pair rather than about a message: several agents
+ * work in one project and each is told separately. It is also not "read" —
+ * only `get_messages` moves a read cursor, and a message an agent was handed
+ * and never looked at is precisely the state worth seeing.
+ */
+export type MessageDelivery = Keyed & {
+	messageId: string;
+	agentId: string;
+	deliveredAt: number;
+};
+
 export type ReadCursor = Keyed & {
 	agentId: string;
 	lastSeenMessageSeq: number;

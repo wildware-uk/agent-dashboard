@@ -21,7 +21,7 @@
 	import { absoluteLabel, relativeLabel } from './days';
 	import { clock } from './clock.svelte';
 	import { levelStyle } from './levels';
-	import type { AckView, MediaView, MessageView, UpdateView } from './types';
+	import type { AckView, DeliveryView, MediaView, MessageView, UpdateView } from './types';
 
 	let {
 		update,
@@ -83,7 +83,9 @@
 		/** Ids of the agents beating right now, so a stale "thinking" is not shown. */
 		onlineIds = [],
 		/** The images on each message in this thread, by message id (migration 016). */
-		messageMedia = {}
+		messageMedia = {},
+		/** Which agents each message in this thread has reached (migration 018). */
+		messageDeliveries = {}
 	}: {
 		update: UpdateView;
 		taskTitle?: string;
@@ -96,6 +98,7 @@
 		acks?: Record<string, AckView[]>;
 		onlineIds?: string[];
 		messageMedia?: Record<string, MediaView[]>;
+		messageDeliveries?: Record<string, DeliveryView[]>;
 	} = $props();
 
 	/**
@@ -259,6 +262,7 @@
 				{acks}
 				{onlineIds}
 				media={messageMedia}
+				deliveries={messageDeliveries}
 				uploader={actions}
 				ondelete={async (id) => {
 					await actions?.deleteMessage(id);

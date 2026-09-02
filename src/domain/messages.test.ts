@@ -12,7 +12,10 @@ import {
 	unreadMessagesInScope,
 	listThread,
 	parseAuthor,
+	alreadyDelivered,
 	deleteMessage,
+	deliveriesFor,
+	markMessagesDelivered,
 	postMessage,
 	readMessages
 } from './messages';
@@ -614,5 +617,80 @@ describe('deleting a message', () => {
 		expect(refusalCode(() => deleteMessage(h, { messageId: 'nope', by: { kind: 'human' } }))).toBe(
 			'not_found'
 		);
+	});
+});
+
+/**
+ * Delivery (migration 018): the state between "unread" and "acknowledged".
+ *
+ * The owner asked for it after watching a message sit there with nothing under
+ * it, unable to tell an agent that had it and was busy from an agent that was
+ * never told.
+ */
+describe('marking a message delivered', () => {
+	it('records the moment it reached the agent, and says so', () => {
+		const post = fromOwner('are you there', { project: slug });
+
+		const events: unknown[] = [];
+		h.bus.subscribe((event) => events.push(event));
+		const delivered = markMessagesDelivered(h, { agentId, messageIds: [post.id] });
+
+		expect(delivered).toHaveLength(1);
+		expect(delivered[0]).toMatchObject({ messageId: post.id, agentId });
+		expect(events).toEqual([
+			expect.objectContaining({
+				type: 'message.delivered',
+				payload: { messageId: post.id, agentId, projectId }
+			})
+		]);
+	});
+
+	it('is quiet the second time, because it is the same fact', () => {
+		const post = fromOwner('are you there', { project: slug });
+		markMessagesDelivered(h, { agentId, messageIds: [post.id] });
+
+		const events: unknown[] = [];
+		h.bus.subscribe((event) => events.push(event));
+		const again = markMessagesDelivered(h, { agentId, messageIds: [post.id] });
+
+		expect(again).toEqual([]);
+		expect(events).toEqual([]);
+		expect(deliveriesFor(h, [post.id])).toHaveLength(1);
+	});
+
+	it('does not mark it read: the count stands and the agent still gets it', () => {
+		const post = fromOwner('still waiting', { project: slug });
+
+		markMessagesDelivered(h, { agentId, messageIds: [post.id] });
+
+		expect(countUnreadMessages(h, agentId)).toBe(1);
+		expect(readMessages(h, { agentId }).messages.map((message) => message.id)).toEqual([post.id]);
+	});
+
+	it('delivers nothing for a message that has been deleted', () => {
+		const post = fromOwner('never mind', { project: slug });
+		deleteMessage(h, { messageId: post.id, by: { kind: 'human' } });
+
+		expect(markMessagesDelivered(h, { agentId, messageIds: [post.id] })).toEqual([]);
+		expect(deliveriesFor(h, [post.id])).toEqual([]);
+	});
+
+	it('answers what this agent has already been handed', () => {
+		const first = fromOwner('one', { project: slug });
+		const second = fromOwner('two', { project: slug });
+		markMessagesDelivered(h, { agentId, messageIds: [first.id] });
+
+		const sent = alreadyDelivered(h, agentId, [first.id, second.id]);
+
+		expect([...sent]).toEqual([first.id]);
+	});
+
+	it('is per agent, so one agent’s delivery is not another’s', () => {
+		const post = fromOwner('anybody', { project: slug });
+		const other = h.agent('runner');
+		markMessagesDelivered(h, { agentId, messageIds: [post.id] });
+
+		expect([...alreadyDelivered(h, other, [post.id])]).toEqual([]);
+		expect(deliveriesFor(h, [post.id])).toHaveLength(1);
 	});
 });

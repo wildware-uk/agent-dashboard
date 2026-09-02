@@ -86,6 +86,20 @@ export interface EventPayloads {
 	 */
 	'message.deleted': { messageId: string; projectId: string | null; replies: number };
 	/**
+	 * A message reached an agent: the server pushed it onto that agent's live
+	 * stream (migration 018).
+	 *
+	 * Published so the owner sees "delivered to scout" under their own words
+	 * within a second of it happening, which is the state that used to be
+	 * invisible — a message nobody had answered looked the same whether the
+	 * agent had it and was busy or had never been told.
+	 *
+	 * Only the first delivery of a message to an agent publishes: a second push
+	 * across a new connection is the same fact, and an event announcing it again
+	 * would make a card flicker for nothing.
+	 */
+	'message.delivered': { messageId: string; agentId: string; projectId: string | null };
+	/**
 	 * An agent's read cursor moved, so its unread count fell (design §5).
 	 *
 	 * The only *read* that publishes, and it earns the exception: `unread_messages`

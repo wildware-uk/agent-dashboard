@@ -75,6 +75,9 @@ export const EVENT_TYPES = [
 	// A line taken back: the owner deleted it, or the agent that wrote it
 	// unsent it (migration 017).
 	'message.deleted',
+	// The server handed a message to an agent (migration 018), which is what
+	// puts "delivered to scout" under the owner's own words.
+	'message.delivered',
 	// An agent saying "on it" or "done" without words (migration 013).
 	'ack.updated',
 	'request.created',

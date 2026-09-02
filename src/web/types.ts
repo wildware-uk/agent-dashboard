@@ -309,6 +309,21 @@ export type AckView = {
 	updatedAt: number;
 };
 
+/**
+ * One message handed to one agent (migration 018).
+ *
+ * The state between "unread" and "acknowledged". An agent that has been handed
+ * something and said nothing is a different situation from an agent that was
+ * never told, and until this existed the dashboard showed both the same way.
+ */
+export type DeliveryView = {
+	id: string;
+	seq: number;
+	messageId: string;
+	agentId: string;
+	deliveredAt: number;
+};
+
 /** Where a task is in its life (design §3). */
 export type TaskState = 'todo' | 'claimed' | 'done' | 'cancelled';
 
@@ -392,4 +407,6 @@ export type MessagesSnapshot = {
 	acks?: AckView[];
 	/** The images on them, keyed by message id (migration 016). */
 	media?: Record<string, MediaView[]>;
+	/** Who each message has actually reached (migration 018). */
+	deliveries?: DeliveryView[];
 };

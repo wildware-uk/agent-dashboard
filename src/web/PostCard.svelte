@@ -20,7 +20,7 @@
 	import { absoluteLabel, relativeLabel } from './days';
 	import { clock } from './clock.svelte';
 	import { onMount } from 'svelte';
-	import type { AckView, MediaView, MessageView } from './types';
+	import type { AckView, DeliveryView, MediaView, MessageView } from './types';
 	import type { OwnerActions } from './actions';
 
 	let {
@@ -42,6 +42,10 @@
 		postAcks = [],
 		/** Ids of the agents beating right now, so a stale "thinking" is not shown. */
 		onlineIds = [],
+		/** Which agents this post has reached (migration 018). */
+		postDeliveries = [],
+		/** The same for each reply, by message id. */
+		replyDeliveries = {},
 		/** Post a reply under this post. Resolves when the server has it. */
 		onreply,
 		/** The images on this post, and on each of its replies (migration 016). */
@@ -68,6 +72,8 @@
 		acks?: Record<string, AckView[]>;
 		postAcks?: AckView[];
 		onlineIds?: string[];
+		postDeliveries?: DeliveryView[];
+		replyDeliveries?: Record<string, DeliveryView[]>;
 		onreply: (body: string, mediaIds?: string[]) => Promise<void>;
 		postMedia?: MediaView[];
 		replyMedia?: Record<string, MediaView[]>;
@@ -197,7 +203,7 @@
 		what the owner said is the answer to "has anybody picked this up", and it
 		has to be readable before the thread is.
 	-->
-	<Ack acks={postAcks} {agentNames} {onlineIds} />
+	<Ack acks={postAcks} deliveries={postDeliveries} {agentNames} {onlineIds} />
 
 	<Thread
 		messages={replies}
@@ -205,6 +211,7 @@
 		{acks}
 		{onlineIds}
 		media={replyMedia}
+		deliveries={replyDeliveries}
 		{uploader}
 		{ondelete}
 		{onreply}
