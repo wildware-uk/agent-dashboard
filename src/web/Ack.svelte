@@ -22,7 +22,8 @@
 	 * (`presence.svelte.ts`).
 	 */
 	import { agentLabel } from './avatar';
-	import type { AckView } from './types';
+	import { absoluteLabel } from './days';
+	import type { AckView, DeliveryView } from './types';
 
 	let {
 		/** Every acknowledgement on this one thing. Usually none or one. */
@@ -36,21 +37,36 @@
 		 * component rendered without presence: `done` and `read` still show,
 		 * `thinking` does not.
 		 */
-		onlineIds = []
+		onlineIds = [],
+		/**
+		 * Which agents this message has actually reached (migration 018).
+		 *
+		 * The state before anybody says anything: the server pushed it onto that
+		 * agent's live stream. Shown only while the agent has said nothing —
+		 * "read", "thinking" and "done" all imply it arrived, and two lines saying
+		 * the same thing is one line too many.
+		 */
+		deliveries = []
 	}: {
 		acks?: AckView[];
 		agentNames?: Record<string, string>;
 		onlineIds?: string[];
+		deliveries?: DeliveryView[];
 	} = $props();
 
 	const shown = $derived(
 		acks.filter((ack) => ack.state !== 'thinking' || onlineIds.includes(ack.agentId))
 	);
 
+	/** Delivered, and nothing said about it yet: the agent that has it, silently. */
+	const silent = $derived(
+		deliveries.filter((delivery) => !acks.some((ack) => ack.agentId === delivery.agentId))
+	);
+
 	const nameOf = (agentId: string) => agentLabel(agentId, agentNames[agentId]);
 </script>
 
-{#if shown.length > 0}
+{#if shown.length > 0 || silent.length > 0}
 	<ul data-ack class="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs">
 		{#each shown as ack (ack.id)}
 			<li class="flex items-center gap-1">
@@ -105,6 +121,28 @@
 						>
 					</span>
 				{/if}
+			</li>
+		{/each}
+
+		{#each silent as delivery (delivery.id)}
+			<li class="flex items-center gap-1">
+				<!--
+					A paper-plane rather than a tick: the tick family belongs to what the
+					agent said, and this is what the server did. The distinction matters
+					on a silent card — "we handed it over" is not "somebody read it".
+				-->
+				<svg
+					data-ack-delivered
+					class="size-3 shrink-0 text-content-muted"
+					viewBox="0 0 16 16"
+					fill="currentColor"
+					aria-hidden="true"
+				>
+					<path d="M1.5 7.5 14.5 2l-4 12-2.6-4.4z" />
+				</svg>
+				<span class="text-content-muted" title={absoluteLabel(delivery.deliveredAt)}>
+					delivered to {nameOf(delivery.agentId)}
+				</span>
 			</li>
 		{/each}
 	</ul>

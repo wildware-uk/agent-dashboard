@@ -42,7 +42,8 @@ describe('the $db surface', () => {
 			approvals: 'insertApproval',
 			push_subscriptions: 'upsertPushSubscription',
 			update_shares: 'insertUpdateShare',
-			acknowledgements: 'upsertAcknowledgement'
+			acknowledgements: 'upsertAcknowledgement',
+			message_deliveries: 'recordDelivery'
 		};
 
 		for (const table of TABLES) {

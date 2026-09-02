@@ -27,7 +27,7 @@
 	import { onMount } from 'svelte';
 	import { absoluteLabel, relativeLabel } from './days';
 	import { clock } from './clock.svelte';
-	import type { AckView, MediaView, MessageView } from './types';
+	import type { AckView, DeliveryView, MediaView, MessageView } from './types';
 	import type { OwnerActions } from './actions';
 	import { Uploads } from './uploads.svelte';
 
@@ -51,6 +51,14 @@
 		/** The images on each message, by message id (migration 016). */
 		media = {},
 		/**
+		 * Which agents each message has reached, by message id (migration 018).
+		 *
+		 * What fills the gap under a line nobody has answered: "delivered to
+		 * scout" is a different situation from silence, and the owner could not
+		 * tell them apart.
+		 */
+		deliveries = {},
+		/**
 		 * Somewhere to upload an image for a reply. Given one, the box grows a
 		 * picker; without one it is exactly the text box it always was, which is
 		 * what keeps every existing spec renderable with no server behind it.
@@ -72,6 +80,7 @@
 		acks?: Record<string, AckView[]>;
 		onlineIds?: string[];
 		media?: Record<string, MediaView[]>;
+		deliveries?: Record<string, DeliveryView[]>;
 		uploader?: Pick<OwnerActions, 'uploadMedia'>;
 		ondelete?: (id: string) => Promise<void>;
 	} = $props();
@@ -259,7 +268,12 @@
 					{#if (media[message.id] ?? []).length > 0}
 						<MediaGrid items={media[message.id]} />
 					{/if}
-					<Ack acks={acks[message.id] ?? []} {agentNames} {onlineIds} />
+					<Ack
+						acks={acks[message.id] ?? []}
+						deliveries={deliveries[message.id] ?? []}
+						{agentNames}
+						{onlineIds}
+					/>
 
 					{#if ondelete}
 						{#if confirming === message.id}

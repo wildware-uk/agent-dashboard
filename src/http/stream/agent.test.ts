@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
 	broadcastTask,
 	createTask,
+	deliveriesFor,
 	postMessage,
 	postUpdate,
 	createProject,
@@ -543,7 +544,7 @@ describe('saying each message once', () => {
 		expect(messages.flatMap((frame) => bodiesOf(frame))).toEqual(['first', 'second']);
 	});
 
-	it('still opens a fresh connection with what is waiting', async () => {
+	it('opens a fresh connection with what has never been delivered', async () => {
 		const mcp = mcpHarness();
 		const { project } = createProject(mcp.h, { name: 'Dashboard' });
 		postMessage(mcp.h, {
@@ -552,9 +553,6 @@ describe('saying each message once', () => {
 			body: 'while you were out'
 		});
 
-		// A reconnect is a new connection and knows nothing of what the last one
-		// said, which is the right way round: the alternative is an agent that
-		// reconnects into silence with an inbox it never hears about.
 		const stream = connect(mcp, mcp.token, `?project=${project.slug}`);
 		const frames = await stream.take(4);
 		stream.abort.abort();
@@ -562,5 +560,53 @@ describe('saying each message once', () => {
 		expect(bodiesOf(frames.find((frame) => frame.event === 'message'))).toEqual([
 			'while you were out'
 		]);
+	});
+
+	/**
+	 * The half a per-connection memory could not cover.
+	 *
+	 * Delivery is written down (migration 018), so a dropped connection and a
+	 * restarted deployment both come back to an agent that has already been told.
+	 * Without this the whole unread pile is announced again every time anything
+	 * reconnects — which is what the owner was seeing after every deploy.
+	 */
+	it('stays quiet on a reconnect about what it already delivered', async () => {
+		const mcp = mcpHarness();
+		const { project } = createProject(mcp.h, { name: 'Dashboard' });
+		postMessage(mcp.h, { project: project.slug, author: { kind: 'human' }, body: 'told you' });
+
+		const first = connect(mcp, mcp.token, `?project=${project.slug}`);
+		expect(bodiesOf((await first.take(4)).find((frame) => frame.event === 'message'))).toEqual([
+			'told you'
+		]);
+		first.abort.abort();
+
+		// Same agent, same still-unread message, a brand new connection.
+		const again = connect(mcp, mcp.token, `?project=${project.slug}`);
+		const frames = await again.take(3);
+		again.abort.abort();
+
+		expect(frames.some((frame) => frame.event === 'message')).toBe(false);
+		// And it is still unread: delivery is not reading, so the count stands and
+		// `get_messages` will still hand it over.
+		expect(counts(workFrames(frames).at(-1)!)).toEqual([1, 0, 0]);
+	});
+
+	it('records the delivery for the owner to see, once per agent per message', async () => {
+		const mcp = mcpHarness();
+		const { project } = createProject(mcp.h, { name: 'Dashboard' });
+		const message = postMessage(mcp.h, {
+			project: project.slug,
+			author: { kind: 'human' },
+			body: 'anybody there?'
+		});
+
+		const stream = connect(mcp, mcp.token, `?project=${project.slug}`);
+		await stream.take(4);
+		stream.abort.abort();
+
+		const delivered = deliveriesFor(mcp.h, [message.id]);
+		expect(delivered).toHaveLength(1);
+		expect(delivered[0]).toMatchObject({ messageId: message.id, agentId: mcp.deps.agent.id });
 	});
 });

@@ -4,7 +4,7 @@ import '../http/routes/app.css';
 import { render } from 'vitest-browser-svelte';
 import { describe, expect, it } from 'vitest';
 import Ack from './Ack.svelte';
-import { anAck } from './testing';
+import { aDelivery, anAck } from './testing';
 
 /**
  * What an agent has said about a message or a task, without words
@@ -123,5 +123,45 @@ describe('has read this', () => {
 		});
 
 		expect(document.querySelector('[data-ack-done]')).toBeNull();
+	});
+});
+
+/**
+ * "Delivered" (migration 018): the state before anybody says anything.
+ *
+ * The owner asked for it after watching a message sit with nothing under it,
+ * unable to tell an agent that had it and was busy from one never told.
+ */
+describe('delivered to', () => {
+	it('names the agent the server handed it to', async () => {
+		const screen = render(Ack, {
+			deliveries: [aDelivery({ agentId: 'a1' })],
+			agentNames: { a1: 'scout' }
+		});
+
+		await expect.element(screen.getByText('delivered to scout')).toBeVisible();
+	});
+
+	it('gives way to anything the agent actually said', async () => {
+		render(Ack, {
+			acks: [anAck({ id: 'ack1', agentId: 'a1', state: 'read' })],
+			deliveries: [aDelivery({ agentId: 'a1' })],
+			agentNames: { a1: 'scout' }
+		});
+
+		// One line, not two: "read" already means it arrived.
+		expect(document.querySelector('[data-ack-delivered]')).toBeNull();
+		expect(document.querySelector('[data-ack-read]')).not.toBeNull();
+	});
+
+	it('still shows for an agent that has said nothing, beside one that has', async () => {
+		const screen = render(Ack, {
+			acks: [anAck({ id: 'ack1', agentId: 'a1', state: 'done' })],
+			deliveries: [aDelivery({ id: 'del2', agentId: 'a2' })],
+			agentNames: { a1: 'scout', a2: 'runner' }
+		});
+
+		await expect.element(screen.getByText('scout marked this done')).toBeVisible();
+		await expect.element(screen.getByText('delivered to runner')).toBeVisible();
 	});
 });

@@ -28,7 +28,7 @@
  * no optimistic insert to reconcile, and no path where the tab that replied
  * disagrees with the tab that watched.
  */
-import type { AckView, MediaView, MessageView, MessagesSnapshot } from './types';
+import type { AckView, DeliveryView, MediaView, MessageView, MessagesSnapshot } from './types';
 import type { Fetcher } from './timeline.svelte';
 import {
 	DirectLink,
@@ -60,6 +60,14 @@ export type ThreadSource = {
 	/** The replies under one post. */
 	repliesTo?(messageId: string): MessageView[];
 	/**
+	 * Which agents one message has actually reached (migration 018).
+	 *
+	 * What a card shows under a line nobody has answered yet: "delivered to
+	 * scout" rather than nothing, so an agent that has the message and is silent
+	 * can be told from a message that reached nobody at all.
+	 */
+	deliveriesFor?(messageId: string): DeliveryView[];
+	/**
 	 * What agents have said about one message, newest claim last.
 	 *
 	 * Usually empty, occasionally one, and more than one only when several agents
@@ -80,6 +88,9 @@ export type ThreadSource = {
 /** The events that change a thread. */
 const WATCHED = [
 	'message.created',
+	// The server handed a message to an agent (migration 018): the line under
+	// the owner's own words changes from nothing to "delivered to scout".
+	'message.delivered',
 	// A line was taken back (migration 017). Watched for the same reason an
 	// arrival is: the store refetches and the thread is whatever the server now
 	// says it is, so a delete reaches every tab the way a reply does.
@@ -130,6 +141,14 @@ export class Threads {
 	 * as having just been added to them.
 	 */
 	media = $state<Record<string, MediaView[]>>({});
+	/**
+	 * Which agents each message has reached (migration 018).
+	 *
+	 * Held beside the messages for the same reason acknowledgements are: one
+	 * message can be delivered to several agents, and which of them a card shows
+	 * is the card's decision.
+	 */
+	deliveries = $state<DeliveryView[]>([]);
 	/** The newest event seq this state accounts for. */
 	seq = $state(0);
 	status = $state<ThreadsStatus>('idle');
@@ -194,6 +213,11 @@ export class Threads {
 	/** The images on one message. Empty for the ordinary text-only case. */
 	mediaFor(messageId: string): MediaView[] {
 		return this.media[messageId] ?? [];
+	}
+
+	/** Which agents this message has reached (migration 018). */
+	deliveriesFor(messageId: string): DeliveryView[] {
+		return this.deliveries.filter((delivery) => delivery.messageId === messageId);
 	}
 
 	/** What agents have said about one message (migration 013). */
@@ -321,6 +345,7 @@ export class Threads {
 		// would leave a tick on a message whose acknowledgement has gone.
 		this.acks = snapshot.acks ?? [];
 		this.media = snapshot.media ?? {};
+		this.deliveries = snapshot.deliveries ?? [];
 		// Adopted, not raised to the greater of the two: the server's stamp says
 		// where the stream *is*, and a seq below the one held means the deployment
 		// restarted — its bus counts from zero and is never persisted. Keeping the

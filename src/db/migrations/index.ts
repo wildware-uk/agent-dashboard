@@ -22,6 +22,7 @@ import { sql as messageReplies } from './014-message-replies';
 import { sql as repliesSeen } from './015-replies-seen';
 import { sql as ownerMedia } from './016-owner-media';
 import { sql as messageDeletes } from './017-message-deletes';
+import { sql as messageDeliveries } from './018-message-deliveries';
 
 export type Migration = {
 	/** 1-based, contiguous, and permanent once shipped. */
@@ -67,5 +68,6 @@ export const MIGRATIONS: readonly Migration[] = [
 	{ version: 14, name: 'message-replies', sql: messageReplies },
 	{ version: 15, name: 'replies-seen', sql: repliesSeen },
 	{ version: 16, name: 'owner-media', sql: ownerMedia, rebuildsTables: true },
-	{ version: 17, name: 'message-deletes', sql: messageDeletes }
+	{ version: 17, name: 'message-deletes', sql: messageDeletes },
+	{ version: 18, name: 'message-deliveries', sql: messageDeliveries }
 ];

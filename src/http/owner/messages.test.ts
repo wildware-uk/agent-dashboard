@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { createProject, listThread, postMessage, postUpdate } from '$domain';
+import { createProject, listThread, markMessagesDelivered, postMessage, postUpdate } from '$domain';
 import { harness, type Harness } from '$domain/testing';
 import { SESSION_COOKIE, signSession } from '../auth';
 import {
@@ -306,5 +306,27 @@ describe('DELETE /api/messages/[id]', () => {
 		});
 
 		expect(status).toBe(404);
+	});
+});
+
+describe('GET /api/messages — deliveries (migration 018)', () => {
+	it('says which agent each message has reached', async () => {
+		const post = postMessage(h, { author: { kind: 'human' }, body: 'anybody', project: slug });
+		markMessagesDelivered(h, { agentId, messageIds: [post.id] });
+
+		const { body } = await call(listMessagesHandler, { query: { project: slug } });
+
+		expect(body.deliveries as unknown as unknown[]).toHaveLength(1);
+		expect(
+			(body.deliveries as unknown as { messageId: string; agentId: string }[])[0]
+		).toMatchObject({ messageId: post.id, agentId });
+	});
+
+	it('sends an empty list when nothing has been handed over yet', async () => {
+		postMessage(h, { author: { kind: 'human' }, body: 'just said it', project: slug });
+
+		const { body } = await call(listMessagesHandler, { query: { project: slug } });
+
+		expect(body.deliveries).toEqual([]);
 	});
 });

@@ -13,6 +13,7 @@
  */
 import type {
 	AckView,
+	DeliveryView,
 	MediaView,
 	MessageView,
 	MessagesSnapshot,
@@ -577,6 +578,18 @@ export function anAck(overrides: Partial<AckView> = {}): AckView {
 		state: 'thinking',
 		createdAt: Date.UTC(2026, 7, 25, 11, 1),
 		updatedAt: Date.UTC(2026, 7, 25, 11, 1),
+		...overrides
+	};
+}
+
+/** A delivery with sensible defaults: the default message, handed to `a1`. */
+export function aDelivery(overrides: Partial<DeliveryView> = {}): DeliveryView {
+	return {
+		id: 'del1',
+		seq: 1,
+		messageId: 'msg1',
+		agentId: 'a1',
+		deliveredAt: Date.UTC(2026, 7, 25, 11, 1),
 		...overrides
 	};
 }

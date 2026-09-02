@@ -48,6 +48,7 @@ export type {
 	MediaKind,
 	MediaStatus,
 	Message,
+	MessageDelivery,
 	Project,
 	BoardColumn,
 	ProjectBoard,
@@ -167,6 +168,7 @@ export {
 	type NewMessage
 } from './messages';
 export { advanceReadCursor, getReadCursor, readCursorSeq } from './read-cursors';
+export { deliveredMessageIds, listDeliveries, recordDelivery } from './deliveries';
 export {
 	listAcknowledgements,
 	upsertAcknowledgement,
