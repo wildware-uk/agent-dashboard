@@ -31,6 +31,7 @@
 	import { Push } from './push.svelte';
 	import { Notifications } from './notifications.svelte';
 	import { Requests } from './requests.svelte';
+	import { claimsGesture, readSwipe } from './swipe';
 	import { Tasks } from './tasks.svelte';
 	import { Threads } from './threads.svelte';
 	import { Timeline } from './timeline.svelte';
@@ -225,6 +226,60 @@
 		});
 
 	let drawer = $state(false);
+	/**
+	 * The edge swipe that opens the project drawer (design §7).
+	 *
+	 * The owner asked for it "instead of going back", and that is the whole
+	 * difficulty: a drag from the left edge is the browser's own back gesture, so
+	 * the only way to mean something else by it is to claim it on the *first*
+	 * touch — `preventDefault` on a non-passive `touchstart`, before there is any
+	 * movement to judge. Being wrong there costs a scroll that does not navigate
+	 * back; not claiming it at all costs the feature.
+	 *
+	 * Only below `lg`, where the sidebar is a drawer rather than a column: on a
+	 * desktop the projects are already on screen and a swipe would open a copy of
+	 * what somebody is looking at.
+	 */
+	let touch: { x: number; y: number } | null = null;
+
+	const narrow = () =>
+		typeof window === 'undefined' ? false : !window.matchMedia('(min-width: 1024px)').matches;
+
+	function ontouchstart(event: TouchEvent): void {
+		if (!narrow() || event.touches.length !== 1) return;
+		const point = event.touches[0]!;
+		touch = { x: point.clientX, y: point.clientY };
+		// Claimed here or not at all: this is the only moment the back gesture can
+		// be refused, and only for a touch that begins where back begins.
+		if (claimsGesture(point.clientX, drawer) && event.cancelable) event.preventDefault();
+	}
+
+	function forgetTouch(): void {
+		touch = null;
+	}
+
+	function ontouchend(event: TouchEvent): void {
+		const start = touch;
+		touch = null;
+		if (!start || !narrow()) return;
+
+		const point = event.changedTouches[0];
+		if (!point) return;
+
+		const verdict = readSwipe(
+			{
+				startX: start.x,
+				startY: start.y,
+				endX: point.clientX,
+				endY: point.clientY,
+				width: window.innerWidth
+			},
+			drawer
+		);
+		if (verdict === 'open-left') drawer = true;
+		if (verdict === 'close-left') drawer = false;
+	}
+
 	/** The right rail as a drawer, which is how a phone reaches it (design §7). */
 	let rail = $state(false);
 
@@ -251,12 +306,23 @@
 		// The bell. Started here for the same reason the queue is: it is the
 		// owner's, not the project's, and it sits above every view.
 		notifications.start();
+
+		// By hand rather than as an attribute, because the option is the point:
+		// Svelte registers touch handlers as *passive*, and a passive listener's
+		// `preventDefault` is ignored — which is exactly the call that stops the
+		// browser treating an edge drag as "go back".
+		window.addEventListener('touchstart', ontouchstart, { passive: false, capture: true });
+		window.addEventListener('touchend', ontouchend);
+		window.addEventListener('touchcancel', forgetTouch);
 		return () => {
 			feed.stop();
 			presence.stop();
 			requests.stop();
 			threads.stop();
 			notifications.stop();
+			window.removeEventListener('touchstart', ontouchstart, { capture: true });
+			window.removeEventListener('touchend', ontouchend);
+			window.removeEventListener('touchcancel', forgetTouch);
 		};
 	});
 

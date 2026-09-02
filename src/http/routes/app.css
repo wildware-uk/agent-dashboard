@@ -75,6 +75,19 @@ body {
 	}
 }
 
+/*
+	The left edge belongs to the drawer, not to "go back" (design §7).
+
+	`overscroll-behavior-x` is what asks a browser not to turn a horizontal drag
+	at the edge into navigation; the touch handler in `Shell.svelte` does the rest
+	on the platforms that ignore it. Applied to the scroller as well as the page,
+	because the feed is the thing under the thumb.
+*/
+html,
+body {
+	overscroll-behavior-x: none;
+}
+
 .update-enter {
 	animation: update-enter 200ms ease-out both;
 }
