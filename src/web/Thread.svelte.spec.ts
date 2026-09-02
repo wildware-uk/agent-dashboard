@@ -323,3 +323,36 @@ describe('separating the replies', () => {
 		expect(document.querySelector('[data-message] time')).not.toBeNull();
 	});
 });
+
+/**
+ * Cmd as well as Ctrl in the reply box (#feedback: "allow CMD + Enter").
+ */
+describe('the reply chord', () => {
+	it('sends on Cmd+Enter', async () => {
+		const { onreply, sent } = replies();
+		const screen = render(Thread, { messages: [], onreply });
+
+		await screen.getByRole('button', { name: 'Reply' }).click();
+		const field = screen.getByRole('textbox');
+		await field.fill('on it');
+		field.element().dispatchEvent(
+			new KeyboardEvent('keydown', {
+				key: 'Enter',
+				metaKey: true,
+				bubbles: true,
+				cancelable: true
+			})
+		);
+
+		await expect.poll(() => sent).toEqual(['on it']);
+	});
+
+	it('names both chords in the box', async () => {
+		const screen = render(Thread, { messages: [], onreply: replies().onreply });
+
+		await screen.getByRole('button', { name: 'Reply' }).click();
+		const placeholder = screen.getByRole('textbox').element().getAttribute('placeholder') ?? '';
+		expect(placeholder).toContain('Cmd');
+		expect(placeholder).toContain('Ctrl');
+	});
+});
