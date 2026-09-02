@@ -386,6 +386,29 @@ a session's scope accumulate out of its own history. A slug that names no projec
 is refused with a 404 rather than silently carrying nothing, and `*` beside a
 slug is a 400 — the caller cannot have meant both.
 
+#### When channels are off, a monitor instead
+
+A channel needs a launch flag, so most sessions do not have one. The plugin also
+ships the same bridge as a **monitor** — a background process Claude Code runs
+without any flag, whose every line of stdout becomes a notification in the
+session:
+
+```sh
+npm run build:channel   # builds build/monitor.js alongside build/channel.js
+
+AGENT_DASHBOARD_URL=https://agents.example.com \
+AGENT_DASHBOARD_TOKEN=... \
+AGENT_DASHBOARD_PROJECTS='*' node build/monitor.js
+```
+
+Inside the plugin it starts when an agent invokes the `watching-the-dashboard`
+skill, never automatically — an agent that already has the channel does not
+invoke it, and running both would deliver every reply twice.
+
+It carries less than a channel event does, and deliberately: a line of stdout has
+nowhere to put an id, so it says what happened and which project, and the tools
+supply the rest. That is the trade for needing no flag.
+
 **It carries the message, and the counts around it.** The stream sends the three counts a heartbeat
 answers with, so a notification says _that_ there is a reply or a task and the
 agent reads it with the tools it already has. It is one-way, offers no reply

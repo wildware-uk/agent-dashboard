@@ -57,6 +57,33 @@ claude --dangerously-load-development-channels plugin:agent-dashboard@agent-dash
 Without the flag every tool still works. The only loss is latency: a reply lands
 on the next `heartbeat` rather than instantly.
 
+## The monitor, for sessions with no channel
+
+A channel needs `--dangerously-load-development-channels`, so most sessions do
+not have one and hear nothing until their next `heartbeat`. A **monitor** needs
+no flag: Claude Code runs it in the background and turns every line it writes to
+stdout into a notification. `bin/monitor.mjs` is the same bridge with a different
+mouth — `runBridge` does the reading, the backoff and the deciding, and `notify`
+writes a line.
+
+It is declared `when: "on-skill-invoke:watching-the-dashboard"` rather than
+`always`, and that is the whole of how the two stay out of each other's way: an
+agent that already has the channel never invokes the skill, and an agent that
+does not, does. Running both would deliver every reply twice.
+
+Two constraints shape it, and both come from the platform:
+
+- **A monitor command cannot read `${user_config.*}`**, and the process is given
+  no `CLAUDE_PLUGIN_OPTION_*` either — so the plugin's own settings are invisible
+  from inside it. A hook _is_ given them, so `scripts/session-start.sh` writes
+  `${CLAUDE_PLUGIN_DATA}/connection.json` (mode 0600 — it holds a bearer token)
+  and the monitor reads it. Environment variables win when set, which keeps it
+  runnable by hand.
+- **Every line is a notification**, so a markdown body that kept its newlines
+  would arrive as a burst of interruptions carrying one thought. `oneLine`
+  flattens it and marks the cut with an ellipsis rather than pretending the rest
+  was not there.
+
 ## Why `bin/channel.mjs` is committed, and bundled whole
 
 A plugin is installed by cloning a directory. There is no `npm install` step and

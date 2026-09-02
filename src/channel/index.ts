@@ -15,3 +15,12 @@ export {
 	runBridge
 } from './bridge';
 export type { BridgeOptions, ChannelMessage, MessageFrame, Work, WorkFrame } from './bridge';
+export {
+	CONNECTION_FILE,
+	LINE_MAX,
+	oneLine,
+	readConnection,
+	runMonitor,
+	type Connection,
+	type MonitorOptions
+} from './monitor';
