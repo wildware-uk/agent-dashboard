@@ -1,0 +1,21 @@
+{
+	"name": "agent-dashboard",
+	"owner": {
+		"name": "Wildware",
+		"url": "https://github.com/wildware-uk"
+	},
+	"description": "The Agent Dashboard, as a Claude Code plugin: both MCP servers, the skills that say how to use them, slash commands, and the channel bridge.",
+	"plugins": [
+		{
+			"name": "agent-dashboard",
+			"source": "./plugins/agent-dashboard",
+			"displayName": "Agent Dashboard",
+			"description": "Report to a human owner while you work: post updates, take tasks off a board, and stop to ask a question — over MCP, with a channel that wakes you when they answer.",
+			"version": "0.1.0",
+			"category": "productivity",
+			"keywords": ["mcp", "channel", "dashboard", "status", "tasks", "human-in-the-loop"],
+			"license": "MIT",
+			"homepage": "https://github.com/wildware-uk/agent-dashboard"
+		}
+	]
+}
