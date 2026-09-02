@@ -262,3 +262,42 @@ describe('what agents have said without words', () => {
 		expect(store.acksFor('m1')).toEqual([]);
 	});
 });
+
+/**
+ * The hole that made an agent's answer disappear.
+ *
+ * `post_message` with no update, task or reply files a message against the
+ * project. The feed renders updates, feed posts and replies — and "feed posts"
+ * used to mean the owner's alone, so an agent answering that way wrote to the
+ * database and to no screen. The owner asked "HELLO?" because of it.
+ */
+describe('feed posts', () => {
+	it('carries what an agent said with no anchor, not only the owner', () => {
+		const threads = new Threads();
+		threads.hydrate({
+			seq: 1,
+			at: new Date().toISOString(),
+			messages: [
+				aMessage({ id: 'm1', author: 'human', updateId: null, taskId: null, replyTo: null }),
+				aMessage({ id: 'm2', author: 'agent:a1', updateId: null, taskId: null, replyTo: null })
+			]
+		});
+
+		expect(threads.posts().map((post) => post.id)).toEqual(['m1', 'm2']);
+	});
+
+	it('still leaves replies and card threads out of the feed', () => {
+		const threads = new Threads();
+		threads.hydrate({
+			seq: 1,
+			at: new Date().toISOString(),
+			messages: [
+				aMessage({ id: 'm1', author: 'human', updateId: null, taskId: null, replyTo: null }),
+				aMessage({ id: 'm2', author: 'agent:a1', updateId: null, taskId: null, replyTo: 'm1' }),
+				aMessage({ id: 'm3', author: 'agent:a1', updateId: 'u1', taskId: null, replyTo: null })
+			]
+		});
+
+		expect(threads.posts().map((post) => post.id)).toEqual(['m1']);
+	});
+});

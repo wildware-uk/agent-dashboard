@@ -17,6 +17,7 @@
 	import MediaGrid from './MediaGrid.svelte';
 	import Thread from './Thread.svelte';
 	import { actionMessage } from './actions';
+	import { agentLabel } from './avatar';
 	import { absoluteLabel, relativeLabel } from './days';
 	import { clock } from './clock.svelte';
 	import { onMount } from 'svelte';
@@ -104,6 +105,24 @@
 		}
 	}
 
+	/**
+	 * Who wrote it.
+	 *
+	 * `human` is the owner, and the owner is the one reading this, so it says
+	 * "You". Anything else is `agent:<agent_id>` — an agent's note filed against
+	 * the project rather than against a card. Those used to render nowhere at
+	 * all, which meant an agent could answer and never be heard.
+	 */
+	const mine = $derived(post.author === 'human');
+	const writer = $derived(
+		mine
+			? 'You'
+			: agentLabel(
+					post.author.startsWith('agent:') ? post.author.slice('agent:'.length) : '',
+					agentNames[post.author.startsWith('agent:') ? post.author.slice('agent:'.length) : '']
+				)
+	);
+
 	/** The page's one ticking clock, so "4m ago" keeps up (design §7). */
 	const ticking = clock();
 	onMount(() => ticking.hold());
@@ -111,16 +130,19 @@
 
 <article
 	data-post={post.id}
-	class="flex min-w-0 flex-col gap-2 rounded-lg border border-l-3 border-border-subtle border-l-accent bg-surface-raised p-3 {isNew
-		? 'update-enter'
-		: ''}"
+	data-mine={mine ? 'true' : undefined}
+	class="flex min-w-0 flex-col gap-2 rounded-lg border border-l-3 border-border-subtle bg-surface-raised p-3 {mine
+		? 'border-l-accent'
+		: 'border-l-border-subtle'} {isNew ? 'update-enter' : ''}"
 >
 	<p class="flex flex-wrap items-baseline gap-x-2 text-xs">
 		<!--
-			"You", not a name: there is one owner and they are the one reading this,
-			so a name here would be a label nobody set repeated on every card.
+			"You" for the owner — there is one, and they are the one reading this, so
+			a name would be a label nobody set repeated on every card. An agent gets
+			its name, and the accent rail stays the owner's alone: "mine" means one
+			thing everywhere on the page.
 		-->
-		<span class="font-medium text-content">You</span>
+		<span class="font-medium text-content">{writer}</span>
 		<span class="text-content-muted">posted</span>
 		<time
 			class="ml-auto text-content-muted"
