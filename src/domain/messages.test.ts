@@ -8,6 +8,8 @@ import {
 	MESSAGE_BODY_MAX_LENGTH,
 	authorText,
 	countUnreadMessages,
+	countUnreadMessagesInScope,
+	unreadMessagesInScope,
 	listThread,
 	parseAuthor,
 	postMessage,
@@ -405,5 +407,100 @@ describe('replying to a post', () => {
 		// The unread count is what the heartbeat and the channel both report, so a
 		// post arriving with no anchor must still be work the agent hears about.
 		expect(countUnreadMessages(h, agentId)).toBe(1);
+	});
+});
+
+/**
+ * The bug that made the channel go quiet.
+ *
+ * `unreadMessagesInScope` took a page of unread messages and *then* filtered it
+ * by project. With the cursor sitting behind a run of messages in other
+ * projects, the first page was entirely somewhere else, so a subscribed reader
+ * got nothing — while the scoped *count* said there was something waiting. The
+ * channel held a notification for a message frame that could never arrive, and
+ * the owner sent five messages into silence.
+ *
+ * The scope belongs in the query, not over its result.
+ */
+describe('reading unread messages in a subscription', () => {
+	it('finds a scoped message sitting behind a page of others', () => {
+		const elsewhere = createProject(h, { name: 'Somewhere Else' }).project;
+		// More than the limit, all in the project this reader is not subscribed to.
+		for (let index = 0; index < 8; index += 1) {
+			postMessage(h, {
+				author: { kind: 'human' },
+				body: `other ${index}`,
+				project: elsewhere.slug
+			});
+		}
+		fromOwner('the one that matters', { project: slug });
+
+		const found = unreadMessagesInScope(h, agentId, 5, [projectId]);
+
+		expect(found.map((message) => message.body)).toEqual(['the one that matters']);
+	});
+
+	it('agrees with the count it is paired with', () => {
+		const elsewhere = createProject(h, { name: 'Somewhere Else' }).project;
+		for (let index = 0; index < 8; index += 1) {
+			postMessage(h, {
+				author: { kind: 'human' },
+				body: `other ${index}`,
+				project: elsewhere.slug
+			});
+		}
+		fromOwner('mine', { project: slug });
+
+		// The pair is the contract: a count that says "something is waiting" and a
+		// read that returns nothing is what the channel could not recover from.
+		expect(countUnreadMessagesInScope(h, agentId, [projectId])).toBe(1);
+		expect(unreadMessagesInScope(h, agentId, 5, [projectId])).toHaveLength(1);
+	});
+
+	it('reads nothing for a subscription naming no projects', () => {
+		fromOwner('mine', { project: slug });
+
+		expect(unreadMessagesInScope(h, agentId, 5, [])).toEqual([]);
+	});
+
+	it('still reads everywhere when nothing is subscribed', () => {
+		const elsewhere = createProject(h, { name: 'Somewhere Else' }).project;
+		postMessage(h, { author: { kind: 'human' }, body: 'other', project: elsewhere.slug });
+		fromOwner('mine', { project: slug });
+
+		expect(unreadMessagesInScope(h, agentId, 5, null)).toHaveLength(2);
+	});
+});
+
+/**
+ * The third face of the same bug: the newest message never reaching the window.
+ *
+ * The stream's message frame carries at most a handful of unread messages, and
+ * it took the *oldest*. The read cursor only moves when an agent calls
+ * `get_messages`, so on a long unread list that window is frozen — the owner's
+ * newest message lands outside it and is never announced, while the same five
+ * old ones are repeated on every rise.
+ */
+describe('which unread messages a notification carries', () => {
+	it('carries the newest, not the oldest', () => {
+		for (let index = 0; index < 8; index += 1) {
+			fromOwner(`old ${index}`, { project: slug });
+		}
+		fromOwner('the one that just arrived', { project: slug });
+
+		const found = unreadMessagesInScope(h, agentId, 3, [projectId]);
+
+		expect(found.at(-1)?.body).toBe('the one that just arrived');
+		expect(found).toHaveLength(3);
+	});
+
+	it('still reads oldest first, so a thread makes sense', () => {
+		fromOwner('first', { project: slug });
+		fromOwner('second', { project: slug });
+
+		expect(unreadMessagesInScope(h, agentId, 5, [projectId]).map((m) => m.body)).toEqual([
+			'first',
+			'second'
+		]);
 	});
 });
