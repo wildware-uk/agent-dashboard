@@ -3,13 +3,16 @@ import { freshDatabase, type Db } from './testing';
 import { insertAgent } from './agents';
 import { insertProject, updateProject } from './projects';
 import { insertUpdate } from './updates';
+import { insertMessage } from './messages';
 import {
+	attachMediaToMessage,
 	attachMediaToUpdate,
 	deleteMedia,
 	findMediaById,
 	findMediaBySha256,
 	insertMedia,
 	listMediaByStatus,
+	listMediaForMessage,
 	listMediaForUpdate,
 	listOrphanedMedia,
 	setMediaBytes,
@@ -307,5 +310,119 @@ describe('listOrphanedMedia and project logos', () => {
 		const swept = listOrphanedMedia(db, { createdBefore: Date.now() }).map((row) => row.id);
 
 		expect(swept).toContain('nobody-wants-this');
+	});
+});
+
+/**
+ * What the sweeper must not eat (migration 016).
+ *
+ * "No update" stopped meaning "nobody wants this" twice: once when logos
+ * arrived, and again when an image could hang off a message. Both are attached
+ * to something, just not to a card, and both would have been collected an hour
+ * later without a word.
+ */
+describe('media on a message', () => {
+	it('is not orphaned, however old it gets', () => {
+		const projectId = insertProject(db, { slug: 'msg-1', name: 'P' }).id;
+		const message = insertMessage(db, { projectId, author: 'human', body: 'look' });
+		const kept = insertMedia(db, {
+			author: 'human',
+			messageId: message.id,
+			kind: 'image',
+			mime: 'image/png',
+			bytes: 10,
+			sha256: 'a',
+			status: 'ready',
+			createdAt: 1
+		});
+		const loose = insertMedia(db, {
+			author: 'human',
+			kind: 'image',
+			mime: 'image/png',
+			bytes: 10,
+			sha256: 'b',
+			status: 'ready',
+			createdAt: 1
+		});
+
+		const orphans = listOrphanedMedia(db, { createdBefore: 1_000 }).map((row) => row.id);
+
+		expect(orphans).toContain(loose.id);
+		expect(orphans).not.toContain(kept.id);
+	});
+
+	it('reads back on its message, oldest first', () => {
+		const projectId = insertProject(db, { slug: 'msg-2', name: 'P' }).id;
+		const message = insertMessage(db, { projectId, author: 'human', body: 'look' });
+		const first = insertMedia(db, {
+			author: 'human',
+			kind: 'image',
+			mime: 'image/png',
+			bytes: 1,
+			sha256: 'a',
+			status: 'ready'
+		});
+		const second = insertMedia(db, {
+			author: 'human',
+			kind: 'image',
+			mime: 'image/png',
+			bytes: 1,
+			sha256: 'b',
+			status: 'ready'
+		});
+
+		attachMediaToMessage(db, {
+			mediaIds: [first.id, second.id],
+			messageId: message.id,
+			author: 'human'
+		});
+
+		expect(listMediaForMessage(db, message.id).map((row) => row.id)).toEqual([first.id, second.id]);
+	});
+
+	it('will not attach an image somebody else uploaded', () => {
+		const projectId = insertProject(db, { slug: 'msg-3', name: 'P' }).id;
+		const message = insertMessage(db, { projectId, author: 'human', body: 'look' });
+		const agentId = insertAgent(db, { name: 'scout', tokenHash: 'h' }).id;
+		const theirs = insertMedia(db, {
+			agentId,
+			kind: 'image',
+			mime: 'image/png',
+			bytes: 1,
+			sha256: 'a',
+			status: 'ready'
+		});
+
+		const attached = attachMediaToMessage(db, {
+			mediaIds: [theirs.id],
+			messageId: message.id,
+			author: 'human'
+		});
+
+		expect(attached).toEqual([]);
+	});
+
+	it('will not let a card steal an image that is already on a message', () => {
+		const projectId = insertProject(db, { slug: 'msg-4', name: 'P' }).id;
+		const agentId = insertAgent(db, { name: 'scout', tokenHash: 'h' }).id;
+		const message = insertMessage(db, { projectId, author: `agent:${agentId}`, body: 'look' });
+		const update = insertUpdate(db, { projectId, agentId, body: 'shipped' });
+		const image = insertMedia(db, {
+			agentId,
+			kind: 'image',
+			mime: 'image/png',
+			bytes: 1,
+			sha256: 'a',
+			status: 'ready'
+		});
+		attachMediaToMessage(db, {
+			mediaIds: [image.id],
+			messageId: message.id,
+			author: `agent:${agentId}`
+		});
+
+		expect(attachMediaToUpdate(db, { mediaIds: [image.id], updateId: update.id, agentId })).toEqual(
+			[]
+		);
 	});
 });

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import { MIGRATIONS } from './migrations';
 import { appliedMigrations, migrate, pendingMigrations } from './migrate';
 import { openDatabase } from './connection';
+import { freshDatabase } from './testing';
 import type { Migration } from './migrations';
 
 /** A migration list that is cheap to reason about, for the runner's own tests. */
@@ -107,5 +108,67 @@ describe('the real migration list', () => {
 
 		expect(appliedMigrations(db)).toHaveLength(MIGRATIONS.length);
 		expect(pendingMigrations(db)).toEqual([]);
+	});
+});
+
+/**
+ * The one migration that rebuilds a table (016).
+ *
+ * SQLite cannot drop a `NOT NULL` in place, so `media` had to be rebuilt for the
+ * owner to upload anything. A rebuild drops the old table, and a drop with
+ * foreign keys **on** cascades into everything referencing it — `upload_tokens`
+ * would have gone with it, silently. The pragma cannot be toggled inside a
+ * transaction, so the runner is the only place it can happen.
+ */
+describe('a migration that rebuilds a table', () => {
+	it('keeps the rows that referenced the rebuilt table', () => {
+		const db = freshDatabase();
+
+		// A media row and the upload token pointing at it, both written *before*
+		// the rebuild would have run — except `freshDatabase` has already migrated,
+		// so this asserts the shape the rebuild left behind rather than replaying
+		// it. What matters is that the reference still works.
+		db.prepare(
+			`INSERT INTO agents (id, name, token_hash, created_at) VALUES ('a1', 'scout', 'h', 1)`
+		).run();
+		db.prepare(
+			`INSERT INTO media (id, agent_id, author, kind, mime, bytes, sha256, status, created_at)
+			 VALUES ('m1', 'a1', 'agent:a1', 'image', 'image/png', 1, 's', 'ready', 1)`
+		).run();
+		db.prepare(
+			`INSERT INTO upload_tokens (id, agent_id, media_id, max_bytes, mime_allow, expires_at)
+			 VALUES ('t1', 'a1', 'm1', 10, 'image/png', 2)`
+		).run();
+
+		expect(db.pragma('foreign_key_check')).toEqual([]);
+	});
+
+	it('leaves foreign keys enforced afterwards', () => {
+		const db = freshDatabase();
+
+		// The connection outlives the migration, and one that quietly stopped
+		// enforcing references would be the worst thing to leave behind.
+		expect(db.pragma('foreign_keys', { simple: true })).toBe(1);
+		expect(() =>
+			db
+				.prepare(
+					`INSERT INTO media (id, agent_id, author, kind, mime, bytes, sha256, status, created_at)
+					 VALUES ('m2', 'nobody', 'agent:nobody', 'image', 'image/png', 1, 's', 'ready', 1)`
+				)
+				.run()
+		).toThrow(/FOREIGN KEY/);
+	});
+
+	it('lets the owner own an image, which is what the rebuild was for', () => {
+		const db = freshDatabase();
+
+		expect(() =>
+			db
+				.prepare(
+					`INSERT INTO media (id, agent_id, author, kind, mime, bytes, sha256, status, created_at)
+					 VALUES ('m3', NULL, 'human', 'image', 'image/png', 1, 's', 'ready', 1)`
+				)
+				.run()
+		).not.toThrow();
 	});
 });

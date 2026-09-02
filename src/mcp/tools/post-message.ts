@@ -56,6 +56,15 @@ const inputSchema = {
 		.optional()
 		.describe(
 			'A project slug or id, for a note that answers no particular card. Derived from the update or task when you name one, so you rarely need it.'
+		),
+	media_ids: z
+		.array(z.string())
+		.optional()
+		.describe(
+			'Images or video to show on this reply: ids from create_upload whose bytes you have ' +
+				'already PUT. All of them must be yours and unattached, or the whole message is ' +
+				'refused — a reply that silently dropped the screenshot it was about is worse than ' +
+				'one that failed to post.'
 		)
 };
 
@@ -84,6 +93,8 @@ export const postMessageTool: McpTool<typeof inputSchema> = {
 			'  is always one level deep.',
 			'- project (optional): a slug or id, for a note that answers no card. Taken from the',
 			'  update or task when you name one.',
+			'- media_ids (optional): images to show on the reply, from create_upload with their bytes',
+			'  already uploaded. Answer with the screenshot rather than describing it.',
 			'',
 			'Returns { message: { id, project_id, update_id, task_id, reply_to, author, body,',
 			'created_at } }.',
@@ -109,7 +120,8 @@ export const postMessageTool: McpTool<typeof inputSchema> = {
 				updateId: args.update_id,
 				taskId: args.task_id,
 				replyTo: args.message_id,
-				project: args.project
+				project: args.project,
+				mediaIds: args.media_ids
 			});
 
 			return ok('Replied. It is on your owner’s screen now.', {

@@ -57,11 +57,19 @@ export {
 export { UPLOAD_ROUTE, UPLOAD_TOKEN_TTL_MS, uploadPath, uploadUrl } from './tokens';
 export {
 	FILENAME_MAX_LENGTH,
+	createOwnerMedia,
 	createUpload,
 	type CreateUploadInput,
-	type CreatedUpload
+	type CreatedUpload,
+	type OwnerMediaInput
 } from './upload';
-export { ingest, type IngestInput, type IngestResult } from './ingest';
+export {
+	ingest,
+	storeBytes,
+	type IngestInput,
+	type IngestResult,
+	type StoreBytesInput
+} from './ingest';
 export {
 	VARIANTS,
 	derivativesFor,

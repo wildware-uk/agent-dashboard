@@ -49,6 +49,7 @@ export {
 	readUpdatePatch
 } from './actions';
 export type { OwnerActionEvent, OwnerHandler, OwnerHandlerOptions, TaskPatch } from './actions';
+export { FILENAME_PARAM, uploadMediaHandler } from './media';
 export { answerRequestHandler, dismissRequestHandler } from './requests';
 export {
 	revokeShareHandler,

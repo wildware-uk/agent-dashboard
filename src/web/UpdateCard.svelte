@@ -21,7 +21,7 @@
 	import { absoluteLabel, relativeLabel } from './days';
 	import { clock } from './clock.svelte';
 	import { levelStyle } from './levels';
-	import type { AckView, MessageView, UpdateView } from './types';
+	import type { AckView, MediaView, MessageView, UpdateView } from './types';
 
 	let {
 		update,
@@ -81,7 +81,9 @@
 		 */
 		acks = {},
 		/** Ids of the agents beating right now, so a stale "thinking" is not shown. */
-		onlineIds = []
+		onlineIds = [],
+		/** The images on each message in this thread, by message id (migration 016). */
+		messageMedia = {}
 	}: {
 		update: UpdateView;
 		taskTitle?: string;
@@ -93,6 +95,7 @@
 		agentNames?: Record<string, string>;
 		acks?: Record<string, AckView[]>;
 		onlineIds?: string[];
+		messageMedia?: Record<string, MediaView[]>;
 	} = $props();
 
 	/**
@@ -114,8 +117,12 @@
 	 * refetches, so the reply arrives here the same way it arrives in a tab that
 	 * was only watching (design §4).
 	 */
-	async function reply(body: string): Promise<void> {
-		await actions?.postMessage({ update: update.id, body });
+	async function reply(body: string, mediaIds: string[] = []): Promise<void> {
+		await actions?.postMessage({
+			update: update.id,
+			body,
+			...(mediaIds.length > 0 ? { mediaIds } : {})
+		});
 	}
 </script>
 
@@ -246,7 +253,15 @@
 			to write as.
 		-->
 		{#if actions}
-			<Thread {messages} {agentNames} {acks} {onlineIds} onreply={reply} />
+			<Thread
+				{messages}
+				{agentNames}
+				{acks}
+				{onlineIds}
+				media={messageMedia}
+				uploader={actions}
+				onreply={reply}
+			/>
 		{/if}
 	</div>
 </article>

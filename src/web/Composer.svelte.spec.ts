@@ -173,3 +173,80 @@ describe('the send chord', () => {
 		expect(placeholder).toContain('Ctrl');
 	});
 });
+
+/**
+ * Images on a post (migration 016).
+ *
+ * The three ways in are three habits, and paste is the one that matters most:
+ * it is how a screenshot actually arrives.
+ */
+describe('attaching images', () => {
+	const png = (name = 'shot.png') =>
+		new File([new Uint8Array([1, 2, 3])], name, { type: 'image/png' });
+
+	function paste(files: File[]): void {
+		const event = new Event('paste', { bubbles: true, cancelable: true }) as ClipboardEvent;
+		Object.defineProperty(event, 'clipboardData', { value: { files } });
+		box().dispatchEvent(event);
+	}
+
+	function drop(files: File[]): void {
+		const event = new Event('drop', { bubbles: true, cancelable: true }) as DragEvent;
+		Object.defineProperty(event, 'dataTransfer', { value: { files } });
+		box().dispatchEvent(event);
+	}
+
+	it('takes a pasted image and sends its id with the post', async () => {
+		const { acts, screen } = mount();
+
+		paste([png()]);
+		await expect.poll(() => acts.calls.map((call) => call.name)).toContain('uploadMedia');
+
+		await screen.getByRole('textbox').fill('look at this');
+		await screen.getByRole('button', { name: 'Post' }).click();
+
+		await expect
+			.poll(() => acts.calls.find((call) => call.name === 'postMessage')?.args[0])
+			.toMatchObject({ body: 'look at this', mediaIds: ['m-shot.png'] });
+	});
+
+	it('takes a dropped image too', async () => {
+		const { acts } = mount();
+
+		drop([png('dropped.png')]);
+
+		await expect.poll(() => acts.calls.map((call) => call.name)).toContain('uploadMedia');
+	});
+
+	it('lets a picture be the whole post, with no words', async () => {
+		const { acts, screen } = mount();
+
+		paste([png()]);
+		await expect.poll(() => acts.calls.length).toBe(1);
+
+		await expect.element(screen.getByRole('button', { name: 'Post' })).toBeEnabled();
+		await screen.getByRole('button', { name: 'Post' }).click();
+
+		await expect
+			.poll(() => acts.calls.find((call) => call.name === 'postMessage')?.args[0])
+			.toMatchObject({ body: '', mediaIds: ['m-shot.png'] });
+	});
+
+	it('leaves a paste of plain text alone', async () => {
+		const { acts } = mount();
+
+		paste([]);
+
+		expect(acts.calls).toEqual([]);
+	});
+
+	it('empties the tray once the post has landed', async () => {
+		const { acts, screen } = mount();
+		paste([png()]);
+		await expect.poll(() => acts.calls.length).toBe(1);
+
+		await screen.getByRole('button', { name: 'Post' }).click();
+
+		await expect.poll(() => document.querySelectorAll('[data-attachments] li').length).toBe(0);
+	});
+});

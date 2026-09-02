@@ -281,6 +281,8 @@ export type SnapshotResponse = {
 	messages?: MessageView[];
 	/** The acknowledgements on those messages, in the same document as them. */
 	acks?: AckView[];
+	/** The images on them, keyed by message id (migration 016). */
+	messageMedia?: Record<string, MediaView[]>;
 };
 
 /**
@@ -388,4 +390,6 @@ export type MessagesSnapshot = {
 	messages: MessageView[];
 	/** The acknowledgements on those messages (migration 013). */
 	acks?: AckView[];
+	/** The images on them, keyed by message id (migration 016). */
+	media?: Record<string, MediaView[]>;
 };

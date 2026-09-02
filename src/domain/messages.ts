@@ -33,6 +33,7 @@
  */
 import {
 	advanceReadCursor,
+	attachMediaToMessage,
 	countMessagesAfter,
 	listAgentProjectIds,
 	findAgentById,
@@ -46,6 +47,7 @@ import {
 } from '$db';
 import type { DomainContext } from './context';
 import { invalid, notFound } from './errors';
+import { assertAttachableToMessage } from './media';
 import { resolveProject } from './projects';
 import { requiredText } from './text';
 
@@ -112,6 +114,15 @@ export type PostMessageInput = {
 	 * asked for and a renderer nobody wants to write.
 	 */
 	replyTo?: string | null;
+	/**
+	 * Images to show on this message (migration 016).
+	 *
+	 * The owner's come from `POST /api/media`, an agent's from `create_upload`.
+	 * All of them must be the caller's own and unattached, or the whole message
+	 * is refused: a reply that silently dropped the screenshot it was about would
+	 * be worse than one that failed to post.
+	 */
+	mediaIds?: readonly string[];
 };
 
 /**
@@ -174,6 +185,13 @@ export function postMessage(ctx: DomainContext, input: PostMessageInput): Messag
 	}
 	const projectId = anchored ?? named;
 
+	// Checked before the insert, so a message is never posted without the images
+	// it was written about.
+	const mediaIds =
+		input.mediaIds && input.mediaIds.length > 0
+			? assertAttachableToMessage(ctx, { mediaIds: input.mediaIds, author })
+			: [];
+
 	const message = insertMessage(ctx.db, {
 		projectId,
 		updateId,
@@ -183,6 +201,10 @@ export function postMessage(ctx: DomainContext, input: PostMessageInput): Messag
 		body,
 		createdAt: ctx.now()
 	});
+
+	if (mediaIds.length > 0) {
+		attachMediaToMessage(ctx.db, { mediaIds, messageId: message.id, author });
+	}
 
 	ctx.bus.publish('message.created', {
 		messageId: message.id,

@@ -18,7 +18,7 @@
 	import type { ThreadSource } from './threads.svelte';
 	import type { Timeline } from './timeline.svelte';
 	import { resolve } from '$app/paths';
-	import type { AckView, MessageView, RequestView, UpdateView } from './types';
+	import type { AckView, MediaView, MessageView, RequestView, UpdateView } from './types';
 
 	let {
 		feed,
@@ -239,6 +239,26 @@
 		return groupByDay(rows, renderedAt);
 	});
 
+	/** The images on one card's thread, keyed by message id (migration 016). */
+	function mediaForThread(updateId: string): Record<string, MediaView[]> {
+		const map: Record<string, MediaView[]> = {};
+		for (const message of threads?.for(updateId) ?? []) {
+			const images = threads?.mediaFor?.(message.id) ?? [];
+			if (images.length > 0) map[message.id] = images;
+		}
+		return map;
+	}
+
+	/** The same, for the replies under one post. */
+	function mediaForPost(postId: string): Record<string, MediaView[]> {
+		const map: Record<string, MediaView[]> = {};
+		for (const reply of threads?.repliesTo?.(postId) ?? []) {
+			const images = threads?.mediaFor?.(reply.id) ?? [];
+			if (images.length > 0) map[reply.id] = images;
+		}
+		return map;
+	}
+
 	/** The acknowledgements on one post's replies, keyed by message id. */
 	function acksForPost(postId: string): Record<string, AckView[]> {
 		const map: Record<string, AckView[]> = {};
@@ -387,6 +407,7 @@
 							{agentNames}
 							messages={threads?.for(update.id)}
 							acks={acksFor(update.id)}
+							messageMedia={mediaForThread(update.id)}
 							{onlineIds}
 						/>
 						{#if actions}
@@ -430,6 +451,7 @@
 						{agentNames}
 						messages={threads?.for(update.id)}
 						acks={acksFor(update.id)}
+						messageMedia={mediaForThread(update.id)}
 						{onlineIds}
 					/>
 				{/each}
@@ -459,6 +481,9 @@
 								{agentNames}
 								acks={acksForPost(row.post.id)}
 								postAcks={threads?.acksFor?.(row.post.id) ?? []}
+								postMedia={threads?.mediaFor?.(row.post.id) ?? []}
+								replyMedia={mediaForPost(row.post.id)}
+								uploader={actions}
 								{onlineIds}
 								onreply={async (body) => {
 									await actions?.postMessage({ replyTo: row.post.id, body });
@@ -475,6 +500,7 @@
 								{agentNames}
 								messages={threads?.for(row.update.id)}
 								acks={acksFor(row.update.id)}
+								messageMedia={mediaForThread(row.update.id)}
 								{onlineIds}
 							/>
 						{/if}

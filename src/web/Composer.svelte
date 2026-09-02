@@ -20,7 +20,9 @@
 	 * session, and `get_messages` already delivers them — so an owner post needed
 	 * no new notification path at all.
 	 */
+	import Attachments from './Attachments.svelte';
 	import { actionMessage, type OwnerActions } from './actions';
+	import { Uploads } from './uploads.svelte';
 	import type { ProjectView } from './types';
 
 	let {
@@ -40,20 +42,42 @@
 	let busy = $state(false);
 	let error = $state<string | null>(null);
 	let box = $state<HTMLTextAreaElement | null>(null);
+	/**
+	 * Images going out with this post (migration 016).
+	 *
+	 * Built from the actions once, deliberately: this component is mounted with
+	 * one server behind it for its whole life, and rebuilding the queue if that
+	 * prop changed would throw away pictures mid-upload.
+	 */
+	// svelte-ignore state_referenced_locally
+	const uploads = new Uploads(actions);
+	/** True while a file is being dragged over the box, so it can say it will take it. */
+	let dragging = $state(false);
 
 	/** Where it goes: the project on screen, or the one picked. */
 	const destination = $derived(project ?? target);
-	const ready = $derived(text.trim() !== '' && destination !== '' && !busy);
+	// A picture on its own is a post: "look at this" needs no words. What it must
+	// not do is post while an upload is still in flight, or the ids would be short
+	// by however many had not landed.
+	const ready = $derived(
+		(text.trim() !== '' || uploads.ids.length > 0) && destination !== '' && !busy && !uploads.busy
+	);
 
 	async function send(): Promise<void> {
 		const body = text.trim();
-		if (body === '' || destination === '') return;
+		const mediaIds = uploads.ids;
+		if ((body === '' && mediaIds.length === 0) || destination === '') return;
 
 		busy = true;
 		error = null;
 		try {
-			await actions.postMessage({ project: destination, body });
+			await actions.postMessage({
+				project: destination,
+				body,
+				...(mediaIds.length > 0 ? { mediaIds } : {})
+			});
 			text = '';
+			uploads.clear();
 			// The card arrives the way every other card does: the write publishes
 			// `message.created`, the tab hears it and refetches. Nothing is inserted
 			// optimistically here, so the tab that posted and the tab that watched
@@ -80,6 +104,29 @@
 			event.preventDefault();
 			void send();
 		}
+	}
+
+	/**
+	 * A pasted or dropped image becomes an attachment.
+	 *
+	 * Wired on the box rather than on the document: a paste belongs to whatever
+	 * is focused, and a component grabbing it globally would swallow one meant
+	 * for something else on the page. The event is only prevented when there
+	 * really are files on it, so pasting text still pastes text.
+	 */
+	function onpaste(event: ClipboardEvent): void {
+		const files = [...(event.clipboardData?.files ?? [])];
+		if (files.length === 0) return;
+		event.preventDefault();
+		void uploads.add(files);
+	}
+
+	function ondrop(event: DragEvent): void {
+		dragging = false;
+		const files = [...(event.dataTransfer?.files ?? [])];
+		if (files.length === 0) return;
+		event.preventDefault();
+		void uploads.add(files);
 	}
 </script>
 
@@ -116,10 +163,20 @@
 				bind:this={box}
 				bind:value={text}
 				{onkeydown}
+				{onpaste}
+				{ondrop}
+				ondragover={(event) => {
+					// Preventing this is what tells the browser a drop is welcome here;
+					// without it the page navigates to the file instead.
+					event.preventDefault();
+					dragging = true;
+				}}
+				ondragleave={() => (dragging = false)}
 				rows="2"
-				placeholder="Say something to your agents. Markdown. Cmd/Ctrl+Enter posts."
-				class="w-full min-w-0 rounded border border-border-subtle bg-surface px-2 py-1.5 text-sm text-content"
-			></textarea>
+				placeholder="Say something to your agents. Markdown, images, Cmd/Ctrl+Enter posts."
+				class="w-full min-w-0 rounded border bg-surface px-2 py-1.5 text-sm text-content {dragging
+					? 'border-accent'
+					: 'border-border-subtle'}"></textarea>
 		</label>
 
 		<button
@@ -131,6 +188,8 @@
 			Post
 		</button>
 	</div>
+
+	<Attachments {uploads} label="Add image" />
 
 	{#if error}
 		<p role="alert" class="text-xs text-rose-400">{error}</p>

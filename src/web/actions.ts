@@ -16,6 +16,7 @@
  * call succeeded before it closes its form.
  */
 import type {
+	MediaView,
 	MessageView,
 	ProjectStatus,
 	ProjectView,
@@ -98,6 +99,13 @@ export type NewMessage = {
 	 * reply names it directly. Exactly one anchor, or none for a project note.
 	 */
 	replyTo?: string;
+	/**
+	 * Images already uploaded with {@link OwnerActions.uploadMedia}.
+	 *
+	 * Ids, not bytes: the upload is its own request, so a slow picture never
+	 * holds up the words and a failed one is reported before anything is posted.
+	 */
+	mediaIds?: string[];
 };
 
 /** The fields the owner may change about a project (design §7). */
@@ -168,6 +176,16 @@ export type OwnerActions = {
 	 * What lets a card leave "Recent replies" and drop back into its day.
 	 */
 	markRepliesSeen(id: string): Promise<UpdateView>;
+	/**
+	 * Upload one image and get the row back (migration 016).
+	 *
+	 * One request per file, bytes in the body: the browser already carries the
+	 * session cookie, so there is nothing for a token to authorise that the
+	 * request does not already prove. The id comes back unattached — hold it and
+	 * send it with the message, exactly as an agent does between `create_upload`
+	 * and `post_message`.
+	 */
+	uploadMedia(file: File): Promise<MediaView>;
 	postMessage(input: NewMessage): Promise<MessageView>;
 	/**
 	 * Answer an agent's request (design §5).
@@ -231,6 +249,32 @@ export function ownerActions(request: Requester = defaultRequest): OwnerActions 
 	}
 
 	/**
+	 * One file, as raw bytes.
+	 *
+	 * Not `send`: that one is for JSON bodies, and a multipart wrapper here would
+	 * be a second encoding for the server to unwrap when the browser can simply
+	 * put the file on the request. `Content-Type` is the file's own, which is
+	 * also what the server checks the bytes against.
+	 */
+	async function sendBytes(url: string, file: File): Promise<MediaView> {
+		let response: Response;
+		try {
+			response = await request(url, {
+				method: 'POST',
+				headers: { accept: 'application/json', 'content-type': file.type },
+				body: file
+			});
+		} catch {
+			throw new ActionError('unreachable', 'Could not reach the server. Try again.', 0);
+		}
+
+		const payload = await readJson(response);
+		if (!response.ok) throw failure(response.status, payload);
+
+		return (payload as { media: MediaView }).media;
+	}
+
+	/**
 	 * The same request, returning the whole body.
 	 *
 	 * {@link send} plucks one row out by key, which is right for every endpoint
@@ -264,6 +308,8 @@ export function ownerActions(request: Requester = defaultRequest): OwnerActions 
 			send('project', `/api/projects/${encodeURIComponent(reference)}/seen`, 'POST'),
 		markRepliesSeen: (id) =>
 			send('update', `/api/updates/${encodeURIComponent(id)}/replies-seen`, 'POST'),
+		uploadMedia: (file) =>
+			sendBytes(`/api/media?filename=${encodeURIComponent(file.name || 'upload')}`, file),
 		postMessage: (input) => send('message', '/api/messages', 'POST', input),
 		answerRequest: (id, value) =>
 			send('request', `/api/requests/${encodeURIComponent(id)}/answer`, 'POST', { value }),

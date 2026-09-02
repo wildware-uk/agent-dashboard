@@ -19,7 +19,14 @@
  * other field only the server gets to decide.
  */
 import { bus as sharedBus, type EventBus } from '$events';
-import { acknowledgementsFor, invalid, listThread, postMessage, type ThreadQuery } from '$domain';
+import {
+	acknowledgementsFor,
+	invalid,
+	listMessageMedia,
+	listThread,
+	postMessage,
+	type ThreadQuery
+} from '$domain';
 import {
 	ownerAction,
 	readOwnerJson,
@@ -37,6 +44,24 @@ export type MessageHandlerOptions = OwnerHandlerOptions & {
 	 */
 	bus?: EventBus;
 };
+
+/**
+ * The images on a page of messages, keyed by message id.
+ *
+ * Absent rather than empty for a message with none, so a thread of plain text
+ * costs one key per page instead of fifty.
+ */
+function mediaByMessage(
+	ctx: Parameters<typeof listMessageMedia>[0],
+	messages: readonly { id: string }[]
+): Record<string, ReturnType<typeof listMessageMedia>> {
+	const byMessage: Record<string, ReturnType<typeof listMessageMedia>> = {};
+	for (const message of messages) {
+		const media = listMessageMedia(ctx, message.id);
+		if (media.length > 0) byMessage[message.id] = media;
+	}
+	return byMessage;
+}
 
 /** What a `POST /api/messages` body may say. */
 type Body = Record<string, unknown>;
@@ -82,7 +107,11 @@ export function listMessagesHandler(options: MessageHandlerOptions = {}): OwnerH
 				messages,
 				// In the same read as the messages, so a tick can never paint a beat
 				// after the reply it belongs to (migration 013).
-				acks: acknowledgementsFor(ctx, { messageIds: messages.map((message) => message.id) })
+				acks: acknowledgementsFor(ctx, { messageIds: messages.map((message) => message.id) }),
+				// And the images on them (migration 016), for the same reason the
+				// timeline's media rides with its cards: a picture that appeared a
+				// beat after the words reads as having just been added.
+				media: mediaByMessage(ctx, messages)
 			}
 		});
 	});
@@ -95,6 +124,7 @@ export function readReply(body: Body): {
 	updateId?: string;
 	taskId?: string;
 	replyTo?: string;
+	mediaIds?: string[];
 } {
 	const input: {
 		body: string;
@@ -102,6 +132,7 @@ export function readReply(body: Body): {
 		updateId?: string;
 		taskId?: string;
 		replyTo?: string;
+		mediaIds?: string[];
 	} = {
 		body: text(body.body, 'body')
 	};
@@ -111,6 +142,12 @@ export function readReply(body: Body): {
 	// reply names it directly.
 	if ('replyTo' in body) input.replyTo = text(body.replyTo, 'replyTo');
 	if ('project' in body) input.project = text(body.project, 'project');
+	// Images the owner already uploaded to `POST /api/media` (migration 016).
+	// Shape-checked here, owned-and-unattached checked in `$domain`.
+	if ('mediaIds' in body) {
+		if (!Array.isArray(body.mediaIds)) throw invalid('mediaIds must be a list');
+		input.mediaIds = body.mediaIds.map((id, index) => text(id, `mediaIds[${index}]`));
+	}
 	return input;
 }
 

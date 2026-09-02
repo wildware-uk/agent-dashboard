@@ -101,6 +101,9 @@ export {
 } from './projects';
 export {
 	ALLOWED_MIMES,
+	assertAttachableToMessage,
+	listMessageMedia,
+	uploadOwnerMedia,
 	FILENAME_MAX_LENGTH,
 	MEDIA_PER_UPDATE_MAX,
 	MEDIA_SWEEP_INTERVAL_MS,
