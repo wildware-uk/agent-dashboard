@@ -197,7 +197,11 @@
 			// Carried through, or a tick would be absent at first paint and appear
 			// on the first refetch — which reads as the agent having only just
 			// acknowledged something it acknowledged an hour ago (migration 013).
-			acks: snapshot.acks
+			acks: snapshot.acks,
+			// The images on those messages (migration 016), for the same reason the
+			// acks are here: a picture that appeared a beat after the words reads as
+			// having just been added to them.
+			media: snapshot.messageMedia
 		});
 
 	let drawer = $state(false);

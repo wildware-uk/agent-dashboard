@@ -26,6 +26,7 @@ import {
 	listThread,
 	listUpdateMedia,
 	acknowledgementsFor,
+	listMessageMedia,
 	listUpdateShares,
 	listUpdates,
 	unseenUpdateCounts,
@@ -144,6 +145,9 @@ export type SnapshotUnseen = Record<string, number>;
  */
 export type SnapshotAcks = ReturnType<typeof acknowledgementsFor>;
 
+/** The images on the messages in this snapshot, keyed by message id. */
+export type SnapshotMessageMedia = Record<string, MediaAttachment[]>;
+
 export type FullSnapshot = {
 	projects: SnapshotProjects;
 	unseen: SnapshotUnseen;
@@ -151,6 +155,7 @@ export type FullSnapshot = {
 	agentNames: SnapshotAgentNames;
 	messages: SnapshotMessages;
 	acks: SnapshotAcks;
+	messageMedia: SnapshotMessageMedia;
 };
 
 /** Just the timeline, for paging and for a scoped refetch. */
@@ -208,7 +213,12 @@ export function readFullSnapshot(
 		updates: readUpdates(query, ctx),
 		agentNames: listAgentNames(ctx),
 		messages,
-		acks: acknowledgementsFor(ctx, { messageIds: messages.map((message) => message.id) })
+		acks: acknowledgementsFor(ctx, { messageIds: messages.map((message) => message.id) }),
+		messageMedia: Object.fromEntries(
+			messages
+				.map((message) => [message.id, listMessageMedia(ctx, message.id)] as const)
+				.filter(([, media]) => media.length > 0)
+		)
 	};
 }
 

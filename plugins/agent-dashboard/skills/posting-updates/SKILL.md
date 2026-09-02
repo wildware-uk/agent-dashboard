@@ -123,6 +123,11 @@ until newer conversations push it down. Reply where the message came from:
 post_message({ update_id | task_id, body })
 ```
 
+A reply can carry images too: `post_message({ ..., media_ids })`, with the same
+three-step upload as a card. Answer with the screenshot rather than describing
+it — "the layout is broken at 375px" is a sentence, and the picture is the
+answer.
+
 Before you reply — or before you start work you are about to do instead of
 replying — `acknowledge({ state: 'thinking', message_id })`. It is one call, and
 it is the difference between the owner seeing that you picked their message up

@@ -4,7 +4,7 @@ import '../http/routes/app.css';
 import { render } from 'vitest-browser-svelte';
 import { describe, expect, it, vi } from 'vitest';
 import Thread from './Thread.svelte';
-import { aMessage, anAck } from './testing';
+import { aMedia, aMessage, anAck, fakeActions } from './testing';
 
 /**
  * The conversation on a card (design §7): the thread, and the box the owner
@@ -354,5 +354,63 @@ describe('the reply chord', () => {
 		const placeholder = screen.getByRole('textbox').element().getAttribute('placeholder') ?? '';
 		expect(placeholder).toContain('Cmd');
 		expect(placeholder).toContain('Ctrl');
+	});
+});
+
+/**
+ * Images on a reply (migration 016).
+ *
+ * The box grows a picker only when there is somewhere to upload to, which is
+ * what keeps every other spec in this file renderable with no server behind it.
+ */
+describe('replying with an image', () => {
+	const png = (name = 'shot.png') =>
+		new File([new Uint8Array([1, 2, 3])], name, { type: 'image/png' });
+
+	function paste(field: Element, files: File[]): void {
+		const event = new Event('paste', { bubbles: true, cancelable: true }) as ClipboardEvent;
+		Object.defineProperty(event, 'clipboardData', { value: { files } });
+		field.dispatchEvent(event);
+	}
+
+	it('sends the uploaded ids with the reply', async () => {
+		const acts = fakeActions();
+		const sent: { body: string; mediaIds?: string[] }[] = [];
+		const screen = render(Thread, {
+			messages: [],
+			uploader: acts.actions,
+			onreply: (body: string, mediaIds?: string[]) => {
+				sent.push({ body, mediaIds });
+				return Promise.resolve();
+			}
+		});
+
+		await screen.getByRole('button', { name: 'Reply' }).click();
+		const field = screen.getByRole('textbox').element();
+		paste(field, [png()]);
+		await expect.poll(() => acts.calls.length).toBe(1);
+
+		await screen.getByRole('textbox').fill('like this');
+		await screen.getByRole('button', { name: 'Send reply' }).click();
+
+		await expect.poll(() => sent).toEqual([{ body: 'like this', mediaIds: ['m-shot.png'] }]);
+	});
+
+	it('offers no picker at all without somewhere to upload to', async () => {
+		const screen = render(Thread, { messages: [], onreply: replies().onreply });
+
+		await screen.getByRole('button', { name: 'Reply' }).click();
+
+		expect(document.querySelector('[data-attachments]')).toBeNull();
+	});
+
+	it('shows the images already on a message', async () => {
+		render(Thread, {
+			messages: [aMessage({ id: 'm1', body: 'here it is' })],
+			media: { m1: [aMedia({ id: 'img1', status: 'ready' })] },
+			onreply: replies().onreply
+		});
+
+		expect(document.querySelector('[data-message] img')).not.toBeNull();
 	});
 });

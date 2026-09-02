@@ -230,6 +230,9 @@ describe('reading the real state through the domain', () => {
 				id: media.id,
 				updateId: update.id,
 				kind: 'image',
+				// Migration 016: an image can hang off a message instead. A card's
+				// media says so by carrying null here.
+				messageId: null,
 				mime: 'image/png',
 				status: 'pending',
 				width: 1200,

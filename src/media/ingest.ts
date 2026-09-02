@@ -115,35 +115,72 @@ export async function ingest(settings: MediaSettings, input: IngestInput): Promi
 	if (!media) throw mediaNotFound('the media this token was minted for is gone');
 	if (media.sha256 !== '') throw mediaConflict('bytes have already landed for this media');
 
-	const allowed = token.mimeAllow.filter(isAllowedMime);
-	if (allowed.length === 0) throw unsupportedType('this token authorises no servable type');
+	return storeBytes(settings, {
+		db: input.db,
+		media,
+		body: input.body,
+		maxBytes: token.maxBytes,
+		allowed: token.mimeAllow,
+		contentLength: input.contentLength
+	});
+}
 
-	if (input.contentLength != null && input.contentLength > token.maxBytes) {
+export type StoreBytesInput = {
+	db: Db;
+	/** The row the bytes belong to. Already exists; this fills it in. */
+	media: Media;
+	body: ReadableStream<Uint8Array>;
+	maxBytes: number;
+	/** Types this upload may be, before the allowlist is applied to them. */
+	allowed: readonly string[];
+	/** `Content-Length`, if the client sent one. Never trusted for the cap. */
+	contentLength?: number | null;
+};
+
+/**
+ * Take the bytes: cap them, sniff them, place them, record them.
+ *
+ * The half of an upload that has nothing to do with *who* is uploading, split
+ * out when the owner gained an upload path of their own. An agent arrives with a
+ * single-use token because it is remote and MCP cannot carry bytes; the owner
+ * arrives with a session cookie on the request itself and needs no token at all.
+ * Everything after that difference is identical, and identical is what it has to
+ * stay — a second pipeline would be a second set of caps, a second sniffer, and
+ * eventually a second answer to "is this really a PNG".
+ */
+export async function storeBytes(
+	settings: MediaSettings,
+	input: StoreBytesInput
+): Promise<IngestResult> {
+	const allowed = input.allowed.filter(isAllowedMime);
+	if (allowed.length === 0) throw unsupportedType('this upload authorises no servable type');
+
+	if (input.contentLength != null && input.contentLength > input.maxBytes) {
 		// Declared too big. Refused without reading a byte — the only thing
 		// `Content-Length` is ever trusted for.
-		throw overCap(token.maxBytes);
+		throw overCap(input.maxBytes);
 	}
 
 	const written = await streamToTempFile(settings, {
 		body: input.body,
-		maxBytes: token.maxBytes,
+		maxBytes: input.maxBytes,
 		allowed
 	});
 
 	const stored = await place(settings, {
 		db: input.db,
-		media,
+		media: input.media,
 		tempPath: written.tempPath,
 		mime: written.mime,
 		sha256: written.sha256
 	});
 
-	const updated = setMediaBytes(input.db, media.id, {
+	const updated = setMediaBytes(input.db, input.media.id, {
 		bytes: written.bytes,
 		sha256: written.sha256
 	});
 
-	return { media: updated ?? media, deduped: stored.deduped };
+	return { media: updated ?? input.media, deduped: stored.deduped };
 }
 
 function rejected() {

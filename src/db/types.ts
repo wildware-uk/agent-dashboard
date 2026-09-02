@@ -142,9 +142,14 @@ export type MediaKind = 'image' | 'video';
 export type MediaStatus = 'pending' | 'ready' | 'failed';
 
 export type Media = Keyed & {
-	agentId: string;
+	/** The agent that uploaded it, or `null` for the owner's own (migration 016). */
+	agentId: string | null;
+	/** Who posted it: `human`, or `agent:<agent_id>` — the vocabulary messages use. */
+	author: string;
 	/** Null until an update references it: upload precedes the post (design §3). */
 	updateId: string | null;
+	/** The message this hangs off, for an image in a reply or one of the owner's posts. */
+	messageId: string | null;
 	kind: MediaKind;
 	mime: string;
 	bytes: number;

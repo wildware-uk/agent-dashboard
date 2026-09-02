@@ -28,7 +28,7 @@
  * no optimistic insert to reconcile, and no path where the tab that replied
  * disagrees with the tab that watched.
  */
-import type { AckView, MessageView, MessagesSnapshot } from './types';
+import type { AckView, MediaView, MessageView, MessagesSnapshot } from './types';
 import type { Fetcher } from './timeline.svelte';
 import {
 	DirectLink,
@@ -55,6 +55,8 @@ export type ThreadSource = {
 	 * its own rather than inside somebody else's thread.
 	 */
 	posts?(): MessageView[];
+	/** The images on one message (migration 016). */
+	mediaFor?(messageId: string): MediaView[];
 	/** The replies under one post. */
 	repliesTo?(messageId: string): MessageView[];
 	/**
@@ -83,6 +85,10 @@ const WATCHED = [
 	// from the message it is on: it arrives in the same read, and a second store
 	// would be a second cursor to keep in step for one field.
 	'ack.updated',
+	// A derivative finished, so an image on a message has variants it did not
+	// have a moment ago (design §6). The timeline watches this for its cards;
+	// messages carry images now too (migration 016).
+	'media.ready',
 	'resync'
 ] as const;
 
@@ -112,6 +118,14 @@ export class Threads {
 	 * the card's decision.
 	 */
 	acks = $state<AckView[]>([]);
+	/**
+	 * The images on those messages, keyed by message id (migration 016).
+	 *
+	 * In the same read as the messages, for the same reason the timeline's media
+	 * rides with its cards: a picture that appeared a beat after the words reads
+	 * as having just been added to them.
+	 */
+	media = $state<Record<string, MediaView[]>>({});
 	/** The newest event seq this state accounts for. */
 	seq = $state(0);
 	status = $state<ThreadsStatus>('idle');
@@ -171,6 +185,11 @@ export class Threads {
 	/** The replies under one post, oldest first. */
 	repliesTo(messageId: string): MessageView[] {
 		return this.messages.filter((message) => message.replyTo === messageId);
+	}
+
+	/** The images on one message. Empty for the ordinary text-only case. */
+	mediaFor(messageId: string): MediaView[] {
+		return this.media[messageId] ?? [];
 	}
 
 	/** What agents have said about one message (migration 013). */
@@ -297,6 +316,7 @@ export class Threads {
 		// acknowledgements is saying there are none, and folding the old list in
 		// would leave a tick on a message whose acknowledgement has gone.
 		this.acks = snapshot.acks ?? [];
+		this.media = snapshot.media ?? {};
 		// Adopted, not raised to the greater of the two: the server's stamp says
 		// where the stream *is*, and a seq below the one held means the deployment
 		// restarted — its bus counts from zero and is never persisted. Keeping the

@@ -67,7 +67,12 @@ const DESIGN_COLUMNS: Record<string, string[]> = {
 	],
 	media: [
 		'agent_id',
+		// Appended by migration 016: who posted it, in the vocabulary messages use,
+		// and the message it hangs off. `agent_id` became nullable in the same
+		// rebuild, so the owner can upload at all.
+		'author',
 		'update_id',
+		'message_id',
 		'kind',
 		'mime',
 		'bytes',
@@ -235,7 +240,7 @@ describe('schema', () => {
 			agents: [['token_hash']],
 			sessions: [['agent_id', 'last_heartbeat_at']],
 			updates: [['project_id', 'seq']],
-			media: [['sha256'], ['status', 'created_at'], ['update_id']],
+			media: [['sha256'], ['status', 'created_at'], ['update_id'], ['message_id']],
 			derivatives: [['media_id', 'kind']],
 			upload_tokens: [['media_id']],
 			tasks: [['project_id', 'state']],

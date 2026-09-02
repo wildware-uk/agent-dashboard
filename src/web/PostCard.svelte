@@ -14,11 +14,13 @@
 	 */
 	import Ack from './Ack.svelte';
 	import Markdown from './Markdown.svelte';
+	import MediaGrid from './MediaGrid.svelte';
 	import Thread from './Thread.svelte';
 	import { absoluteLabel, relativeLabel } from './days';
 	import { clock } from './clock.svelte';
 	import { onMount } from 'svelte';
-	import type { AckView, MessageView } from './types';
+	import type { AckView, MediaView, MessageView } from './types';
+	import type { OwnerActions } from './actions';
 
 	let {
 		/** The post itself: a message anchored to nothing. */
@@ -41,6 +43,11 @@
 		onlineIds = [],
 		/** Post a reply under this post. Resolves when the server has it. */
 		onreply,
+		/** The images on this post, and on each of its replies (migration 016). */
+		postMedia = [],
+		replyMedia = {},
+		/** Somewhere to upload a reply's images, when there is a server behind the card. */
+		uploader = undefined,
 		/** Whether the card animates in, as arrivals do elsewhere (design §7). */
 		isNew = false
 	}: {
@@ -50,7 +57,10 @@
 		acks?: Record<string, AckView[]>;
 		postAcks?: AckView[];
 		onlineIds?: string[];
-		onreply: (body: string) => Promise<void>;
+		onreply: (body: string, mediaIds?: string[]) => Promise<void>;
+		postMedia?: MediaView[];
+		replyMedia?: Record<string, MediaView[]>;
+		uploader?: Pick<OwnerActions, 'uploadMedia'>;
 		isNew?: boolean;
 	} = $props();
 
@@ -89,6 +99,10 @@
 	-->
 	<Markdown body={post.body} />
 
+	{#if postMedia.length > 0}
+		<MediaGrid items={postMedia} />
+	{/if}
+
 	<!--
 		Directly under the post, above the replies: "scout is thinking…" against
 		what the owner said is the answer to "has anybody picked this up", and it
@@ -96,5 +110,13 @@
 	-->
 	<Ack acks={postAcks} {agentNames} {onlineIds} />
 
-	<Thread messages={replies} {agentNames} {acks} {onlineIds} {onreply} />
+	<Thread
+		messages={replies}
+		{agentNames}
+		{acks}
+		{onlineIds}
+		media={replyMedia}
+		{uploader}
+		{onreply}
+	/>
 </article>

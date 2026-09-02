@@ -98,6 +98,14 @@ export function pendingMigrations(
  * Each migration runs inside a transaction, so a migration that fails part way
  * leaves nothing behind and the failure is visible on the next boot rather than
  * being half-applied.
+ *
+ * A migration marked `rebuildsTables` gets the one exception SQLite forces: the
+ * foreign-key pragma is turned off around it, because a table rebuild has to
+ * drop the old table and a drop with enforcement on cascades into everything
+ * referencing it. The pragma cannot be toggled inside a transaction, so the
+ * runner is the only place it can happen. `foreign_key_check` afterwards is what
+ * makes that safe rather than merely quiet: a rebuild that left a dangling
+ * reference fails here, before anything else runs.
  */
 export function migrate(db: Db, migrations: readonly Migration[] = MIGRATIONS): Migration[] {
 	const pending = pendingMigrations(db, migrations);
@@ -112,7 +120,29 @@ export function migrate(db: Db, migrations: readonly Migration[] = MIGRATIONS): 
 			db.exec(migration.sql);
 			record.run(migration.version, migration.name, checksum(migration.sql), Date.now());
 		});
-		apply();
+
+		if (!migration.rebuildsTables) {
+			apply();
+			continue;
+		}
+
+		db.pragma('foreign_keys = OFF');
+		try {
+			apply();
+
+			const dangling = db.pragma('foreign_key_check') as unknown[];
+			if (dangling.length > 0) {
+				throw new Error(
+					`migration ${migration.version} (${migration.name}) left ${dangling.length} ` +
+						`dangling foreign key reference(s)`
+				);
+			}
+		} finally {
+			// Restored even when the rebuild threw: the connection outlives this
+			// call, and one that quietly stopped enforcing references would be the
+			// worst possible thing to leave behind.
+			db.pragma('foreign_keys = ON');
+		}
 	}
 
 	return pending;

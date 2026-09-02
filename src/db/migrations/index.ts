@@ -20,6 +20,7 @@ import { sql as seenWhatIsAlreadyRead } from './012-seen-what-is-already-read';
 import { sql as acknowledgements } from './013-acknowledgements';
 import { sql as messageReplies } from './014-message-replies';
 import { sql as repliesSeen } from './015-replies-seen';
+import { sql as ownerMedia } from './016-owner-media';
 
 export type Migration = {
 	/** 1-based, contiguous, and permanent once shipped. */
@@ -28,6 +29,24 @@ export type Migration = {
 	name: string;
 	/** One or more statements, applied as a single transaction. */
 	sql: string;
+	/**
+	 * Turn foreign keys off around this migration, for a table rebuild.
+	 *
+	 * SQLite cannot drop a `NOT NULL` or a column reference in place, so changing
+	 * one means the documented twelve-step dance: build the new table, copy, drop
+	 * the old, rename. With foreign keys **on**, the drop cascades — every
+	 * `upload_tokens` row referencing `media` would go with it — and
+	 * `PRAGMA foreign_keys` is a no-op inside a transaction, so the migration
+	 * cannot turn them off itself.
+	 *
+	 * The runner does it instead, exactly as the SQLite docs prescribe: pragma
+	 * off, BEGIN, rebuild, COMMIT, pragma on, then `foreign_key_check` to prove
+	 * nothing was left dangling. Atomicity is unchanged; only the enforcement
+	 * window moves.
+	 *
+	 * Set this only for a rebuild, and only when there is no other shape.
+	 */
+	rebuildsTables?: true;
 };
 
 export const MIGRATIONS: readonly Migration[] = [
@@ -45,5 +64,6 @@ export const MIGRATIONS: readonly Migration[] = [
 	{ version: 12, name: 'seen-what-is-already-read', sql: seenWhatIsAlreadyRead },
 	{ version: 13, name: 'acknowledgements', sql: acknowledgements },
 	{ version: 14, name: 'message-replies', sql: messageReplies },
-	{ version: 15, name: 'replies-seen', sql: repliesSeen }
+	{ version: 15, name: 'replies-seen', sql: repliesSeen },
+	{ version: 16, name: 'owner-media', sql: ownerMedia, rebuildsTables: true }
 ];

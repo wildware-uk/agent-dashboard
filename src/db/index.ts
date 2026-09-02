@@ -111,12 +111,14 @@ export {
 	type UpdateQuery
 } from './updates';
 export {
+	attachMediaToMessage,
 	attachMediaToUpdate,
 	deleteMedia,
 	findMediaById,
 	findMediaBySha256,
 	insertMedia,
 	listMediaByStatus,
+	listMediaForMessage,
 	listMediaForUpdate,
 	listOrphanedMedia,
 	setMediaBytes,

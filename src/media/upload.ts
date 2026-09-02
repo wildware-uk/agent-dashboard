@@ -20,7 +20,7 @@
  *   (`./paths.ts`). Validating it anyway means an agent that sends rubbish hears
  *   about it instead of wondering why its label vanished.
  */
-import { findAgentById, insertMedia, insertUploadToken, type Db } from '$db';
+import { findAgentById, insertMedia, insertUploadToken, type Db, type Media } from '$db';
 import { mediaInvalid, mediaNotFound, tooLarge, unsupportedType } from './errors';
 import { isAllowedMime, kindForMime, normaliseMime } from './mime';
 import type { MediaSettings } from './settings';
@@ -80,6 +80,74 @@ function checkFilename(filename: string): void {
  *   `invalid_argument` for a size or filename that makes no sense, and
  *   `not_found` if the agent does not exist.
  */
+export type OwnerMediaInput = {
+	db: Db;
+	filename: string;
+	mime: string;
+	/** `Content-Length`, or 0 when the browser did not say. Checked again as bytes arrive. */
+	bytes?: number;
+	now?: number;
+};
+
+/**
+ * A media row for something the **owner** uploaded, with no token.
+ *
+ * An agent gets a single-use URL because it is somewhere else and MCP cannot
+ * carry bytes: the token is what authorises a request that has no session. The
+ * owner's browser already carries the session cookie on the request putting the
+ * bytes, so a token would be a round trip that authorises what is already
+ * authorised, plus a row in `upload_tokens` whose `agent_id` there is nobody to
+ * fill in.
+ *
+ * So: the row, and then {@link storeBytes} on the same request. The validation
+ * that matters — the type allowlist, the per-kind cap — is the same code, and
+ * the cap is returned rather than assumed, because a browser's `Content-Length`
+ * is a claim and the stream is where it is actually enforced.
+ *
+ * @throws {@link MediaError} `unsupported_type` for a type off the allowlist
+ *   (SVG always), `too_large` for a declared size past the cap.
+ */
+export function createOwnerMedia(
+	settings: MediaSettings,
+	input: OwnerMediaInput
+): { media: Media; maxBytes: number; allowed: string[] } {
+	const now = input.now ?? Date.now();
+
+	checkFilename(input.filename);
+
+	const mime = normaliseMime(input.mime);
+	const kind = kindForMime(mime);
+	if (!isAllowedMime(mime) || !kind) {
+		throw unsupportedType(
+			`${JSON.stringify(mime)} is not an accepted type. Allowed: image/png, image/jpeg, ` +
+				`image/webp, image/gif, video/mp4, video/webm, video/quicktime. SVG is never accepted.`
+		);
+	}
+
+	const limit = kind === 'image' ? settings.maxImageBytes : settings.maxVideoBytes;
+	if (input.bytes != null && input.bytes > limit) {
+		const article = kind === 'image' ? 'an' : 'a';
+		throw tooLarge(
+			`${article} ${kind} may be at most ${limit} bytes; this one declares ${input.bytes}`
+		);
+	}
+
+	const media = insertMedia(input.db, {
+		// No agent: this is the owner's own. `author` is what a card renders.
+		agentId: null,
+		author: 'human',
+		kind,
+		mime,
+		bytes: 0,
+		// No bytes yet. `./serve.ts` reads this as "nothing to serve".
+		sha256: '',
+		status: 'pending',
+		createdAt: now
+	});
+
+	return { media, maxBytes: limit, allowed: [mime] };
+}
+
 export function createUpload(settings: MediaSettings, input: CreateUploadInput): CreatedUpload {
 	const now = input.now ?? Date.now();
 

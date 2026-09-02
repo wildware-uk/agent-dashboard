@@ -29,12 +29,16 @@ import {
 	findMediaById,
 	findUpdateById,
 	isId,
+	listMediaForMessage,
 	listMediaForUpdate,
+	type Media,
 	type MediaKind,
 	type MediaStatus
 } from '$db';
 import {
+	createOwnerMedia,
 	createUpload as mintUpload,
+	storeBytes,
 	derivativesFor,
 	ingest,
 	isMediaError,
@@ -81,6 +85,17 @@ function asDomainError(error: unknown): DomainError | undefined {
 }
 
 /** Run a `$media` call, reporting its refusals in the domain's vocabulary. */
+/** {@link translating}, for a body that can reject rather than throw. */
+async function translatingAsync<T>(body: () => Promise<T>): Promise<T> {
+	try {
+		return await body();
+	} catch (error) {
+		const translated = asDomainError(error);
+		if (translated) throw translated;
+		throw error;
+	}
+}
+
 function translating<T>(body: () => T): T {
 	try {
 		return body();
@@ -127,6 +142,63 @@ export function createUpload(
 			now: ctx.now()
 		})
 	);
+}
+
+export type OwnerUploadInput = {
+	filename: string;
+	mime: string;
+	body: ReadableStream<Uint8Array> | null;
+	/** `Content-Length`, if the browser sent one. Never trusted for the cap. */
+	contentLength?: number | null;
+};
+
+/**
+ * Take an image the owner uploaded, in one request.
+ *
+ * No token, and that is the whole difference from {@link createUpload}: an agent
+ * is remote and MCP cannot carry bytes, so it gets a single-use URL to PUT to.
+ * The owner's browser puts the bytes on a request that already carries their
+ * session cookie, so a token would authorise what is already authorised — and
+ * `upload_tokens.agent_id` has nobody to fill it in.
+ *
+ * Everything after that is the same pipeline: the same allowlist, the same
+ * per-kind cap, the same sniffing, the same place on disk. A second pipeline
+ * would be a second answer to "is this really a PNG", and one of them would be
+ * wrong.
+ *
+ * @throws {@link DomainError} `invalid_argument` for a type off the allowlist,
+ *   a body that never arrived, or bytes past the cap.
+ */
+export async function uploadOwnerMedia(
+	ctx: DomainContext,
+	input: OwnerUploadInput,
+	settings: MediaSettings = mediaSettings()
+): Promise<Media> {
+	if (!input.body) throw invalid('the request carried no body');
+
+	// `translating` unwraps a synchronous throw; this path is asynchronous, so the
+	// rejection is translated here rather than slipping past as a `MediaError`
+	// the HTTP layer would answer 500 to.
+	return translatingAsync(async () => {
+		const { media, maxBytes, allowed } = createOwnerMedia(settings, {
+			db: ctx.db,
+			filename: input.filename,
+			mime: input.mime,
+			bytes: input.contentLength ?? undefined,
+			now: ctx.now()
+		});
+
+		const stored = await storeBytes(settings, {
+			db: ctx.db,
+			media,
+			body: input.body!,
+			maxBytes,
+			allowed,
+			contentLength: input.contentLength
+		});
+
+		return stored.media;
+	});
 }
 
 export type IngestUploadInput = {
@@ -280,6 +352,43 @@ export function checkedMediaIds(mediaIds: readonly string[]): string[] {
  * @throws {@link DomainError} `not_found` for an unknown id, `invalid_argument`
  *   for one belonging to another agent or already attached elsewhere.
  */
+/**
+ * The same check as {@link assertAttachable}, for a message rather than a card.
+ *
+ * Keyed on `author` because the owner uploads too and has no agent id: `human`
+ * or `agent:<id>` is the one question both can be asked. Everything else is the
+ * same rule and for the same reasons — an image with no bytes is a placeholder,
+ * and an image already attached belongs to whatever it is on.
+ *
+ * @throws {@link DomainError} `not_found` for an unknown id,
+ *   `invalid_argument` for one that is not the caller's, is already attached, or
+ *   has no bytes.
+ */
+export function assertAttachableToMessage(
+	ctx: DomainContext,
+	input: { mediaIds: readonly string[]; author: string }
+): string[] {
+	const mediaIds = checkedMediaIds(input.mediaIds);
+
+	for (const id of mediaIds) {
+		const media = findMediaById(ctx.db, id);
+		if (!media) throw notFound(`no such media: ${id}`);
+		if (media.author !== input.author) throw invalid(`media ${id} was uploaded by somebody else`);
+		if (media.updateId !== null) throw invalid(`media ${id} is already on an update`);
+		if (media.messageId !== null) throw invalid(`media ${id} is already on another message`);
+		if (media.sha256 === '') {
+			throw invalid(`media ${id} has no bytes yet: upload the file first`);
+		}
+	}
+
+	return mediaIds;
+}
+
+/** Every image on one message, for the card that renders it. */
+export function listMessageMedia(ctx: DomainContext, messageId: string): MediaAttachment[] {
+	return listMediaForMessage(ctx.db, messageId).map((row) => attachment(ctx, row));
+}
+
 export function assertAttachable(
 	ctx: DomainContext,
 	input: { mediaIds: readonly string[]; agentId: string }
@@ -317,6 +426,8 @@ export function assertAttachable(
 export type MediaAttachment = {
 	id: string;
 	updateId: string | null;
+	/** The message this is on, for an image in a reply or one of the owner's posts. */
+	messageId: string | null;
 	kind: MediaKind;
 	mime: string;
 	status: MediaStatus;
@@ -327,6 +438,22 @@ export type MediaAttachment = {
 	/** Which variants exist. Empty for a row with no bytes, and for a failure. */
 	variants: Variant[];
 };
+
+/** One row as a card renders it, with the variants that exist right now. */
+function attachment(ctx: DomainContext, row: Media): MediaAttachment {
+	return {
+		id: row.id,
+		updateId: row.updateId,
+		messageId: row.messageId,
+		kind: row.kind,
+		mime: row.mime,
+		status: row.status,
+		width: row.width,
+		height: row.height,
+		durationMs: row.durationMs,
+		variants: derivativesFor({ db: ctx.db, id: row.id }).map((available) => available.variant)
+	};
+}
 
 /**
  * The media on a page of updates, grouped by update.
@@ -356,17 +483,7 @@ export function listUpdateMedia(
 		const rows = listMediaForUpdate(ctx.db, updateId);
 		if (rows.length === 0) continue;
 
-		byUpdate[updateId] = rows.map((row) => ({
-			id: row.id,
-			updateId: row.updateId,
-			kind: row.kind,
-			mime: row.mime,
-			status: row.status,
-			width: row.width,
-			height: row.height,
-			durationMs: row.durationMs,
-			variants: derivativesFor({ db: ctx.db, id: row.id }).map((available) => available.variant)
-		}));
+		byUpdate[updateId] = rows.map((row) => attachment(ctx, row));
 	}
 
 	return byUpdate;

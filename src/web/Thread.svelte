@@ -19,13 +19,17 @@
 	 * on the screen, not one in the owner's browser.
 	 */
 	import Ack from './Ack.svelte';
+	import Attachments from './Attachments.svelte';
 	import Markdown from './Markdown.svelte';
+	import MediaGrid from './MediaGrid.svelte';
 	import { actionMessage } from './actions';
 	import { agentLabel } from './avatar';
 	import { onMount } from 'svelte';
 	import { absoluteLabel, relativeLabel } from './days';
 	import { clock } from './clock.svelte';
-	import type { AckView, MessageView } from './types';
+	import type { AckView, MediaView, MessageView } from './types';
+	import type { OwnerActions } from './actions';
+	import { Uploads } from './uploads.svelte';
 
 	let {
 		/** The thread, oldest first. Empty is the common case. */
@@ -43,13 +47,23 @@
 		 */
 		acks = {},
 		/** Ids of the agents beating right now, so a stale "thinking" is not shown. */
-		onlineIds = []
+		onlineIds = [],
+		/** The images on each message, by message id (migration 016). */
+		media = {},
+		/**
+		 * Somewhere to upload an image for a reply. Given one, the box grows a
+		 * picker; without one it is exactly the text box it always was, which is
+		 * what keeps every existing spec renderable with no server behind it.
+		 */
+		uploader = undefined
 	}: {
 		messages?: MessageView[];
-		onreply: (body: string) => Promise<void>;
+		onreply: (body: string, mediaIds?: string[]) => Promise<void>;
 		agentNames?: Record<string, string>;
 		acks?: Record<string, AckView[]>;
 		onlineIds?: string[];
+		media?: Record<string, MediaView[]>;
+		uploader?: Pick<OwnerActions, 'uploadMedia'>;
 	} = $props();
 
 	let open = $state(false);
@@ -58,6 +72,49 @@
 	let busy = $state(false);
 	let error = $state<string | null>(null);
 	let draft = $state('');
+	let dragging = $state(false);
+
+	/**
+	 * This box's own upload queue (migration 016).
+	 *
+	 * Built here rather than handed in, because a thread *is* the unit: one per
+	 * card, per task, per post. Two drafts open at once are two queues, and a
+	 * shared one would put the screenshot on whichever posted first.
+	 */
+	// svelte-ignore state_referenced_locally
+	const uploads = uploader ? new Uploads(uploader) : undefined;
+
+	/**
+	 * A picture on its own is a reply — "look at this" needs no words — but
+	 * nothing sends while an upload is still in flight, or the ids would be short
+	 * by however many had not landed.
+	 */
+	const ready = $derived(
+		(draft.trim() !== '' || (uploads?.ids.length ?? 0) > 0) && !busy && !uploads?.busy
+	);
+
+	/**
+	 * A pasted or dropped image becomes an attachment.
+	 *
+	 * On the box rather than on the document: a paste belongs to whatever is
+	 * focused, and grabbing it globally would swallow one meant for something
+	 * else. Only prevented when there really are files, so pasting text still
+	 * pastes text.
+	 */
+	function onpaste(event: ClipboardEvent): void {
+		const files = [...(event.clipboardData?.files ?? [])];
+		if (files.length === 0 || !uploads) return;
+		event.preventDefault();
+		void uploads.add(files);
+	}
+
+	function ondrop(event: DragEvent): void {
+		dragging = false;
+		const files = [...(event.dataTransfer?.files ?? [])];
+		if (files.length === 0 || !uploads) return;
+		event.preventDefault();
+		void uploads.add(files);
+	}
 
 	/**
 	 * Who said it.
@@ -90,7 +147,8 @@
 		busy = true;
 		error = null;
 		try {
-			await onreply(draft.trim());
+			await onreply(draft.trim(), uploads?.ids ?? []);
+			uploads?.clear();
 			close();
 		} catch (cause) {
 			// The box stays open holding what was typed: retyping a paragraph to
@@ -111,7 +169,7 @@
 	 * a keyboard-driven owner should not have to reach for the mouse either.
 	 */
 	function onkeydown(event: KeyboardEvent): void {
-		if (event.key === 'Enter' && (event.metaKey || event.ctrlKey) && draft.trim() !== '') {
+		if (event.key === 'Enter' && (event.metaKey || event.ctrlKey) && ready) {
 			event.preventDefault();
 			void send();
 		}
@@ -160,6 +218,9 @@
 						</time>
 					</p>
 					<Markdown body={message.body} />
+					{#if (media[message.id] ?? []).length > 0}
+						<MediaGrid items={media[message.id]} />
+					{/if}
 					<Ack acks={acks[message.id] ?? []} {agentNames} {onlineIds} />
 				</li>
 			{/each}
@@ -179,11 +240,28 @@
 					bind:this={box}
 					bind:value={draft}
 					{onkeydown}
+					{onpaste}
+					{ondrop}
+					ondragover={(event) => {
+						if (!uploads) return;
+						// Preventing this is what tells the browser a drop is welcome;
+						// without it the page navigates to the file instead.
+						event.preventDefault();
+						dragging = true;
+					}}
+					ondragleave={() => (dragging = false)}
 					rows="3"
-					placeholder="Markdown. Cmd/Ctrl+Enter sends."
-					class="w-full rounded border border-border-subtle bg-surface px-2 py-1.5 text-sm text-content"
-				></textarea>
+					placeholder={uploads
+						? 'Markdown, images, Cmd/Ctrl+Enter sends.'
+						: 'Markdown. Cmd/Ctrl+Enter sends.'}
+					class="w-full rounded border bg-surface px-2 py-1.5 text-sm text-content {dragging
+						? 'border-accent'
+						: 'border-border-subtle'}"></textarea>
 			</label>
+
+			{#if uploads}
+				<Attachments {uploads} label="Add image" />
+			{/if}
 
 			{#if error}
 				<p role="alert" class="text-xs text-rose-400">{error}</p>
@@ -199,7 +277,7 @@
 				</button>
 				<button
 					type="button"
-					disabled={busy || draft.trim() === ''}
+					disabled={!ready}
 					onclick={send}
 					class="min-h-11 rounded bg-accent px-3 text-sm font-medium text-surface disabled:opacity-50"
 				>

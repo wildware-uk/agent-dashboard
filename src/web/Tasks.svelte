@@ -31,7 +31,7 @@
 	import Ack from './Ack.svelte';
 	import Thread from './Thread.svelte';
 	import type { ThreadSource } from './threads.svelte';
-	import type { AckView, ProjectView, TaskView } from './types';
+	import type { AckView, MediaView, ProjectView, TaskView } from './types';
 
 	let {
 		/** The live list. Owned by whoever mounts this; a spec injects its own. */
@@ -173,6 +173,16 @@
 	 */
 	function acksForTask(taskId: string): AckView[] {
 		return tasks.acksForTask(taskId);
+	}
+
+	/** The images on one task's messages, keyed by message id (migration 016). */
+	function taskMedia(taskId: string): Record<string, MediaView[]> {
+		const map: Record<string, MediaView[]> = {};
+		for (const message of threads?.forTask(taskId) ?? []) {
+			const images = threads?.mediaFor?.(message.id) ?? [];
+			if (images.length > 0) map[message.id] = images;
+		}
+		return map;
 	}
 
 	/** The acknowledgements on one task's *messages*, keyed by message id. */
@@ -471,9 +481,15 @@
 									messages={threads?.forTask(task.id) ?? []}
 									{agentNames}
 									acks={ackedMessages(task.id)}
+									media={taskMedia(task.id)}
+									uploader={actions}
 									{onlineIds}
-									onreply={async (body) => {
-										await actions.postMessage({ task: task.id, body });
+									onreply={async (body, mediaIds = []) => {
+										await actions.postMessage({
+											task: task.id,
+											body,
+											...(mediaIds.length > 0 ? { mediaIds } : {})
+										});
 									}}
 								/>
 							</li>
