@@ -798,6 +798,25 @@ describe('answering a comment', () => {
 		expect(answer.answers).toBe(post.id);
 	});
 
+	/**
+	 * Found by using it: answering one of the owner's feed posts filed the answer
+	 * *beside* the post as a second post of its own, with no project on it — so
+	 * it appeared in no feed at all. Naming a post means answering it.
+	 */
+	it('files an answer to a post underneath that post, keeping its project', () => {
+		const post = fromOwner('a question in the feed', { project: slug });
+
+		const answer = postMessage(h, {
+			author: { kind: 'agent', agentId },
+			answers: post.id,
+			body: 'here is the answer'
+		});
+
+		expect(answer.replyTo).toBe(post.id);
+		expect(answer.projectId).toBe(projectId);
+		expect(listThread(h, { project: slug }).map((m) => m.id)).toEqual([post.id, answer.id]);
+	});
+
 	it('refuses a comment from a different thread', () => {
 		const update = postUpdate(h, { project: slug, agentId, body: 'shipped' });
 		const elsewhere = postMessage(h, {

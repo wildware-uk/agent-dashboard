@@ -167,7 +167,11 @@ export function postMessage(ctx: DomainContext, input: PostMessageInput): Messag
 
 	const updateId = input.updateId ?? answered?.updateId ?? null;
 	const taskId = input.taskId ?? answered?.taskId ?? null;
-	const replyTo = input.replyTo ?? (answered ? (answered.replyTo ?? null) : null);
+	// Answering a message takes its thread. When that message *is* the head of a
+	// thread — one of the owner's feed posts, which anchors to nothing — the
+	// answer goes underneath it rather than beside it as a second post: naming a
+	// post and being filed next to it is the one reading nobody wants.
+	const replyTo = input.replyTo ?? (answered ? (answered.replyTo ?? threadHead(answered)) : null);
 	if (updateId !== null && taskId !== null) {
 		throw invalid('a message hangs off an update or a task, not both');
 	}
@@ -203,7 +207,12 @@ export function postMessage(ctx: DomainContext, input: PostMessageInput): Messag
 	const named = input.project ? resolveProject(ctx, input.project).id : null;
 	// A reply belongs to whatever its post belonged to, which is the same rule an
 	// update or a task anchor keeps.
-	const anchored = parent ? parent.projectId : anchorProject(ctx, { updateId, taskId });
+	// A reply belongs to whatever its post belonged to, and an answer to whatever
+	// it answered: a message that inherited its thread must not lose the project
+	// on the way, or it lands in no feed at all.
+	const anchored = parent
+		? parent.projectId
+		: (anchorProject(ctx, { updateId, taskId }) ?? answered?.projectId ?? null);
 	if (anchored !== null && named !== null && anchored !== named) {
 		throw invalid('that update, task or message belongs to a different project');
 	}
@@ -676,6 +685,11 @@ function readTo(
 	const skipped = unread.find((message) => !handed.has(message.id));
 
 	return skipped ? Math.min(last, skipped.seq - 1) : last;
+}
+
+/** A message that heads a thread rather than sitting in one: an id, or null. */
+function threadHead(message: Message): string | null {
+	return message.updateId === null && message.taskId === null ? message.id : null;
 }
 
 /**
