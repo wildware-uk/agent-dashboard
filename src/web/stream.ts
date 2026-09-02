@@ -77,6 +77,8 @@ export const EVENT_TYPES = [
 	'request.created',
 	'request.answered',
 	'agent.presence',
+	// The owner renamed an agent: every card it posted is relabelled.
+	'agent.renamed',
 	'resync'
 ] as const;
 

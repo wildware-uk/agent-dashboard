@@ -24,9 +24,48 @@
 	 */
 	import { onMount } from 'svelte';
 	import Avatar from './Avatar.svelte';
+	import { actionMessage, type OwnerActions } from './actions';
 	import { Presence, heartbeatLabel } from './presence.svelte';
 
-	let { presence = new Presence() }: { presence?: Presence } = $props();
+	let {
+		presence = new Presence(),
+		/**
+		 * The owner's write calls (design §7). Given one, each agent's name becomes
+		 * editable; without one the rail is the read-only list it always was.
+		 */
+		actions
+	}: { presence?: Presence; actions?: OwnerActions } = $props();
+
+	/** Which agent is being renamed, and what it is being renamed to. */
+	let editing = $state<string | null>(null);
+	let draft = $state('');
+	let busy = $state(false);
+	let error = $state<string | null>(null);
+
+	function start(agentId: string, name: string): void {
+		editing = agentId;
+		draft = name;
+		error = null;
+	}
+
+	async function save(agentId: string): Promise<void> {
+		const name = draft.trim();
+		if (name === '') return;
+
+		busy = true;
+		error = null;
+		try {
+			await actions?.renameAgent(agentId, name);
+			// Nothing is inserted here: the write publishes `agent.renamed`, the tab
+			// hears it and refetches, and every card that agent posted is relabelled
+			// with the rail. Same rule as every other control on this page.
+			editing = null;
+		} catch (cause) {
+			error = actionMessage(cause);
+		} finally {
+			busy = false;
+		}
+	}
 
 	onMount(() => {
 		presence.start();
@@ -61,13 +100,50 @@
 		{:else}
 			<ul class="flex flex-col gap-3">
 				{#each agents as agent (agent.agentId)}
-					<li class="update-enter flex items-start gap-2">
+					<li class="group update-enter flex items-start gap-2">
 						<Avatar name={agent.name} class="size-7" />
 						<div class="flex min-w-0 flex-col gap-0.5">
 							<div class="flex items-center gap-1.5">
 								<span class="size-2 shrink-0 rounded-full bg-emerald-500" aria-hidden="true"></span>
-								<span class="truncate font-medium text-content">{agent.name}</span>
-								<span class="sr-only">online</span>
+								{#if editing === agent.agentId}
+									<!--
+										A name is the one thing about an agent the owner authors —
+										its token is its identity — so this edits in place rather
+										than opening a dialog for one field.
+									-->
+									<input
+										bind:value={draft}
+										aria-label="Name for {agent.name}"
+										disabled={busy}
+										onkeydown={(event) => {
+											if (event.key === 'Enter') void save(agent.agentId);
+											if (event.key === 'Escape') editing = null;
+										}}
+										class="min-w-0 flex-1 rounded border border-border-subtle bg-surface px-1.5 py-0.5 text-sm text-content"
+									/>
+									<button
+										type="button"
+										disabled={busy || draft.trim() === ''}
+										onclick={() => save(agent.agentId)}
+										class="shrink-0 rounded px-1.5 text-xs font-medium text-accent disabled:opacity-50"
+									>
+										Save
+									</button>
+								{:else}
+									<span class="truncate font-medium text-content">{agent.name}</span>
+									<span class="sr-only">online</span>
+									{#if actions}
+										<button
+											type="button"
+											data-testid="rename-agent"
+											aria-label="Rename {agent.name}"
+											onclick={() => start(agent.agentId, agent.name)}
+											class="shrink-0 rounded px-1 text-xs text-content-muted opacity-0 group-hover:opacity-100 hover:text-content focus:opacity-100"
+										>
+											Rename
+										</button>
+									{/if}
+								{/if}
 								{#if agent.sessions > 1}
 									<span class="shrink-0 text-xs text-content-muted">
 										{agent.sessions} sessions
@@ -102,6 +178,10 @@
 									</dd>
 								</div>
 							</dl>
+
+							{#if error && editing === agent.agentId}
+								<p role="alert" class="text-xs text-rose-400">{error}</p>
+							{/if}
 						</div>
 					</li>
 				{/each}

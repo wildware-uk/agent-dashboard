@@ -24,6 +24,7 @@ live in the owner UI:
 | `mint-token <name>`        | Creates an agent, prints its bearer token once.                |
 | `hash-password <password>` | argon2id hash for `ADMIN_PASSWORD_HASH`. `--stdin` also works. |
 | `list-tokens [--revoked]`  | Agents by id and name. Tokens are not recoverable.             |
+| `rename-token <id> <name>` | Renames an agent. The token keeps working.                     |
 | `revoke-token <agent-id>`  | Switches a token off for good.                                 |
 | `vapid-keys`               | Generates a Web Push keypair for `.env`. Needs no database.    |
 | `backup <destination.db>`  | Online backup of the database, safe against a running server.  |

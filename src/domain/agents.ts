@@ -29,6 +29,7 @@ import {
 	findAgentByTokenHash,
 	insertAgent,
 	listAgents as listAgentRows,
+	renameAgentRow,
 	revokeAgent,
 	touchAgent,
 	type Agent
@@ -228,6 +229,37 @@ export function listAgentNames(ctx: DomainContext): Record<string, string> {
  * @throws {DomainError} `not_found` if there is no such agent — a typo'd id must
  *   not read as a successful revoke.
  */
+/**
+ * Rename an agent, leaving its token exactly as it was.
+ *
+ * A name is the one thing about an agent that is purely for the owner to read,
+ * and it was previously fixed at `mint-token` time — so a token called
+ * `claude-code@laptop` stayed that on every card for ever, and the way to
+ * correct it was to mint a new one and rewrite the MCP config of whichever
+ * machine held it. That is a lot of ceremony for a label.
+ *
+ * The identity does not move: same id, same token hash, same history. Every card
+ * that agent has ever posted simply starts reading the new name, which is what
+ * renaming a thing should do.
+ *
+ * It publishes `agent.renamed` so open tabs pick it up without a reload — the
+ * names ride in the timeline snapshot (`listAgentNames`), so a browser hearing
+ * this refetches and every card is relabelled at once.
+ *
+ * @throws {DomainError} `not_found` for an unknown agent, `invalid_argument`
+ *   for an empty or over-long name.
+ */
+export function renameAgent(ctx: DomainContext, agentId: string, name: string): Agent {
+	const agent = findAgentById(ctx.db, agentId);
+	if (!agent) throw notFound(`no such agent: ${agentId}`);
+
+	const wanted = requiredText(name, 'name', AGENT_NAME_MAX_LENGTH);
+	renameAgentRow(ctx.db, agentId, wanted);
+
+	ctx.bus.publish('agent.renamed', { agentId, name: wanted });
+	return { ...agent, name: wanted };
+}
+
 export function revokeAgentToken(ctx: DomainContext, agentId: string): boolean {
 	if (!findAgentById(ctx.db, agentId)) throw notFound(`no such agent: ${agentId}`);
 	return revokeAgent(ctx.db, agentId, ctx.now());

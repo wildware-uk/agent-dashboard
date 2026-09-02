@@ -6,6 +6,7 @@ import {
 	createProjectHandler,
 	deleteUpdateHandler,
 	markRepliesSeenHandler,
+	renameAgentHandler,
 	patchProjectHandler,
 	patchUpdateHandler,
 	type OwnerHandler
@@ -328,5 +329,88 @@ describe('marking a thread read', () => {
 		});
 
 		expect(response.status).toBe(401);
+	});
+});
+
+/**
+ * Renaming an agent over HTTP.
+ *
+ * The only thing the owner may change about one: its token is its identity, and
+ * a name was previously fixed at mint time — so correcting `claude-code@laptop`
+ * to `work-laptop` meant a new token and a rewritten MCP config.
+ */
+describe('renaming an agent', () => {
+	it('renames it and answers with the agent', async () => {
+		const { response, body } = await call(renameAgentHandler, {
+			method: 'PATCH',
+			params: { id: agentId },
+			body: { name: 'work-laptop' }
+		});
+
+		expect(response.status).toBe(200);
+		expect(body.agent).toMatchObject({ id: agentId, name: 'work-laptop' });
+	});
+
+	it('refuses a patch that reaches for anything else', async () => {
+		// A hopeful `tokenHash` must fail loudly rather than appear to work.
+		const { response } = await call(renameAgentHandler, {
+			method: 'PATCH',
+			params: { id: agentId },
+			body: { name: 'work-laptop', tokenHash: 'nope' }
+		});
+
+		expect(response.status).toBe(400);
+	});
+
+	it('refuses an empty name', async () => {
+		const { response } = await call(renameAgentHandler, {
+			method: 'PATCH',
+			params: { id: agentId },
+			body: { name: '   ' }
+		});
+
+		expect(response.status).toBe(400);
+	});
+
+	it('answers 404 for an agent that is not there, and 401 with no session', async () => {
+		expect(
+			(
+				await call(renameAgentHandler, {
+					method: 'PATCH',
+					params: { id: 'nope' },
+					body: { name: 'x' }
+				})
+			).response.status
+		).toBe(404);
+
+		expect(
+			(
+				await call(renameAgentHandler, {
+					method: 'PATCH',
+					params: { id: agentId },
+					body: { name: 'x' },
+					cookie: null
+				})
+			).response.status
+		).toBe(401);
+	});
+});
+
+/**
+ * What a rename answers with.
+ *
+ * The agent row carries `tokenHash`, and an HMAC never leaves the database
+ * (design §8) — not because a browser could do anything with it, but because a
+ * response is the easiest place for it to end up somewhere it should not.
+ */
+describe('what the rename hands back', () => {
+	it('is the id and the name, and nothing else', async () => {
+		const { body } = await call(renameAgentHandler, {
+			method: 'PATCH',
+			params: { id: agentId },
+			body: { name: 'work-laptop' }
+		});
+
+		expect(Object.keys(body.agent as object).sort()).toEqual(['id', 'name']);
 	});
 });

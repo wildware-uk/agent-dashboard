@@ -26,6 +26,7 @@ import {
 	isDomainError,
 	listAgents,
 	mintAgentToken,
+	renameAgent,
 	revokeAgentToken,
 	type DomainContext
 } from '$domain';
@@ -157,6 +158,25 @@ export const COMMANDS: Record<string, Command> = {
 				const state = agent.revokedAt ? '  REVOKED' : '';
 				io.out(`${agent.id}  ${agent.name}  (${seen})${state}`);
 			}
+			return OK;
+		}
+	},
+
+	'rename-token': {
+		args: '<agent-id> <name>',
+		summary: 'Give an agent a different display name. The token keeps working.',
+		run: (argv, io) => {
+			const [id, ...rest] = argv;
+			const name = rest.join(' ').trim();
+			if (!id || name === '') {
+				return usageError(io, 'rename-token needs an agent id and a name (see list-tokens)');
+			}
+
+			// The token is untouched on purpose: a name is what the owner reads on a
+			// card, and re-minting to fix one would mean rewriting the MCP config of
+			// whichever machine holds it.
+			const renamed = renameAgent(domain(io), id, name);
+			io.out(`${renamed.id} is now ${renamed.name}`);
 			return OK;
 		}
 	},

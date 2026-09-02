@@ -85,6 +85,7 @@ export {
 	findAgentByTokenHash,
 	insertAgent,
 	listAgents,
+	renameAgent as renameAgentRow,
 	revokeAgent,
 	touchAgent,
 	type NewAgent

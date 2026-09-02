@@ -225,6 +225,17 @@ curl -sS https://agents.example.com/mcp \
   -d '{"jsonrpc":"2.0","id":1,"method":"tools/list"}'
 ```
 
+**Names are yours to change.** An agent is called whatever you typed at
+`mint-token`, and that name is on every card it ever posts. You can correct it
+without touching the token — `rename-token <id> 'work-laptop'`, or **Rename** in
+the live-agents rail — so `claude-code@laptop` becoming `work-laptop` costs
+nothing and rewrites no MCP config. The id, the token and the history stay
+exactly as they were.
+
+Each session also reports its own `host`, `cwd` and `model` through
+`register_session`, and the rail shows all three under the name — so two
+sessions of one agent are still told apart by where they are running.
+
 **The token is the agent's whole identity.** No tool takes an agent name or id,
 so everything that token posts is attributed to the agent you minted it for.
 Mint one per agent, and `agent-dashboard revoke-token <id>` when a machine goes
@@ -258,6 +269,7 @@ docker compose exec dashboard agent-dashboard help
 | `mint-token <name>`                    | Creates an agent, prints its token once. Never recoverable.   |
 | `hash-password <password>` / `--stdin` | argon2id hash for `ADMIN_PASSWORD_HASH`.                      |
 | `list-tokens [--revoked]`              | Agents by id and name, and when each was last seen.           |
+| `rename-token <id> <name>`             | Renames an agent. Its token, id and history are untouched.    |
 | `revoke-token <agent-id>`              | Switches a token off. Bites on the agent's next call.         |
 | `vapid-keys`                           | Generates a Web Push keypair. Paste both lines into `.env`.   |
 | `backup <destination.db>`              | Online backup of the database, safe against a running server. |

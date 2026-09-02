@@ -64,6 +64,7 @@ export {
 	listAgents,
 	mintAgentToken,
 	noteAgentSeen,
+	renameAgent,
 	revokeAgentToken,
 	type AgentAuthFailure,
 	type AgentAuthResult,

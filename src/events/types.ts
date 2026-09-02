@@ -127,6 +127,15 @@ export interface EventPayloads {
 		taskId: string | null;
 		state: AckState;
 	};
+	/**
+	 * The owner renamed an agent.
+	 *
+	 * The name rides in the timeline snapshot rather than on each card, so a
+	 * browser hearing this refetches once and every card that agent ever posted
+	 * is relabelled together. `name` is on the payload so a subscriber can decide
+	 * whether it cares before asking for anything.
+	 */
+	'agent.renamed': { agentId: string; name: string };
 	/** Presence is derived from heartbeats, never stored as a flag (design §4). */
 	'agent.presence': { agentId: string; sessionId: string | null; online: boolean };
 }

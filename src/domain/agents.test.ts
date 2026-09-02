@@ -11,6 +11,7 @@ import {
 	listAgents,
 	mintAgentToken,
 	noteAgentSeen,
+	renameAgent,
 	revokeAgentToken
 } from './agents';
 import { DomainError } from './errors';
@@ -222,5 +223,56 @@ describe('listAgentNames', () => {
 
 	it('is an empty map on a deployment where no agent has ever been minted', () => {
 		expect(listAgentNames(h)).toEqual({});
+	});
+});
+
+/**
+ * Renaming an agent (#feedback: "I'd like to see the actual helpful names").
+ *
+ * A name was fixed at `mint-token` time, so correcting one meant minting a new
+ * token and rewriting the MCP config of whichever machine held it. The identity
+ * must not move: same id, same token, same history — every card that agent ever
+ * posted simply starts reading the new name.
+ */
+describe('renameAgent', () => {
+	it('changes the name and leaves the token working', () => {
+		const minted = mintAgentToken(h, { name: 'claude-code@laptop', secret: SECRET });
+
+		const renamed = renameAgent(h, minted.agent.id, 'work-laptop');
+
+		expect(renamed.name).toBe('work-laptop');
+		expect(authenticateAgent(h, { token: minted.token, secret: SECRET })).toMatchObject({
+			ok: true,
+			agent: { id: minted.agent.id, name: 'work-laptop' }
+		});
+	});
+
+	it('relabels every card that agent already posted', () => {
+		const minted = mintAgentToken(h, { name: 'claude-code@laptop', secret: SECRET });
+
+		renameAgent(h, minted.agent.id, 'home-server');
+
+		// The names ride in one map rather than on each card, so a rename is one
+		// write and the whole timeline reads differently.
+		expect(listAgentNames(h)[minted.agent.id]).toBe('home-server');
+	});
+
+	it('tells every open tab, so nothing needs a reload', () => {
+		const minted = mintAgentToken(h, { name: 'one', secret: SECRET });
+		h.events.length = 0;
+
+		renameAgent(h, minted.agent.id, 'two');
+
+		expect(h.eventNames()).toContain('agent.renamed');
+	});
+
+	it('refuses an empty name rather than storing one nobody can read', () => {
+		const minted = mintAgentToken(h, { name: 'one', secret: SECRET });
+
+		expect(() => renameAgent(h, minted.agent.id, '   ')).toThrow();
+	});
+
+	it('says which agent it could not find', () => {
+		expect(() => renameAgent(h, 'nope', 'work-laptop')).toThrow();
 	});
 });

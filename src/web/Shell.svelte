@@ -656,7 +656,7 @@
 		</main>
 
 		<aside class="hidden min-h-0 overflow-y-auto border-l border-border-subtle xl:block">
-			<RightRail {presence} />
+			<RightRail {presence} {actions} />
 			<div class="border-t border-border-subtle p-3">
 				<TasksPanel
 					{tasks}
@@ -691,7 +691,7 @@
 			aria-label="Agents and tasks"
 			class="update-enter absolute inset-y-0 right-0 w-80 max-w-[90vw] overflow-y-auto border-l border-border-subtle bg-surface"
 		>
-			<RightRail {presence} />
+			<RightRail {presence} {actions} />
 			<div class="border-t border-border-subtle p-3">
 				<TasksPanel
 					{tasks}
