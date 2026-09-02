@@ -1,0 +1,8 @@
+[
+	{
+		"name": "agent-dashboard-monitor",
+		"command": "node \"${CLAUDE_PLUGIN_ROOT}/bin/monitor.mjs\"",
+		"description": "Work waiting on the Agent Dashboard: replies, tasks, and answers to what you asked",
+		"when": "on-skill-invoke:watching-the-dashboard"
+	}
+]

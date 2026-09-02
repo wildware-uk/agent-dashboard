@@ -129,8 +129,8 @@ describe('.mcp.json', () => {
 	});
 });
 
-describe('the committed channel bundle', () => {
-	const bundle = read('plugins/agent-dashboard/bin/channel.mjs');
+describe.each(['channel', 'monitor'])('the committed %s bundle', (name) => {
+	const bundle = read(`plugins/agent-dashboard/bin/${name}.mjs`);
 
 	it('is self-contained, because a plugin is cloned and never npm-installed', () => {
 		// A bare specifier here resolves to nothing beside the plugin directory and
@@ -146,11 +146,51 @@ describe('the committed channel bundle', () => {
 	});
 
 	it('was built from the current src/channel, not left behind by an older one', () => {
-		expect(bundle).toContain(CHANNEL_NAME);
-		// One whole line of the instructions, so a reworded contract fails here
-		// rather than shipping stale advice to every installed agent.
-		expect(bundle).toContain('- open_tasks above zero: call list_tasks');
+		// The wording both bundles share, so a reworded contract fails here rather
+		// than shipping stale advice to every installed agent.
+		expect(bundle).toContain('Waiting for you on the dashboard');
 		expect(bundle).toContain('AGENT_DASHBOARD_PROJECTS');
+		if (name === 'channel') expect(bundle).toContain(CHANNEL_NAME);
+	});
+});
+
+/**
+ * The monitor: the fallback for the sessions that have no channel, which is
+ * most of them.
+ */
+describe('monitors', () => {
+	const monitors = readJson('plugins/agent-dashboard/monitors/monitors.json');
+
+	it('runs a bundled script that is really there', () => {
+		expect(Array.isArray(monitors)).toBe(true);
+		for (const monitor of monitors) {
+			expect(monitor.command).toContain('${CLAUDE_PLUGIN_ROOT}');
+			expect(exists('plugins/agent-dashboard/bin/monitor.mjs')).toBe(true);
+		}
+	});
+
+	it('starts on the skill rather than always, so it cannot double up with the channel', () => {
+		// Both running means every reply arrives twice, and being interrupted
+		// twice for one thing is worse than being interrupted late.
+		const [monitor] = monitors;
+		expect(monitor.when).toBe('on-skill-invoke:watching-the-dashboard');
+		expect(skillDirs).toContain('watching-the-dashboard');
+	});
+
+	it('reads no plugin option, because a monitor is given none', () => {
+		// `${user_config.*}` in a monitor command is refused outright, and the
+		// process gets no CLAUDE_PLUGIN_OPTION_* either. The hook writes a file
+		// instead; this is the assertion that stops somebody "simplifying" it back.
+		const raw = read('plugins/agent-dashboard/monitors/monitors.json');
+		expect(raw).not.toContain('user_config');
+	});
+
+	it('is handed its connection by the SessionStart hook', () => {
+		const hook = read('plugins/agent-dashboard/scripts/session-start.sh');
+		expect(hook).toContain('CLAUDE_PLUGIN_DATA');
+		expect(hook).toContain('connection.json');
+		// The file holds a bearer token, which is the agent's whole identity.
+		expect(hook).toContain('umask 077');
 	});
 });
 
