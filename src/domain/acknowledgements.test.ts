@@ -10,7 +10,7 @@ import { acknowledge, acknowledgementsFor } from './acknowledgements';
  * An agent answering without words (migration 013).
  *
  * The rules worth asserting are the ones a caller can get wrong from the other
- * side of an MCP connection: exactly one target, only the two states, and a
+ * side of an MCP connection: exactly one target, only the three states, and a
  * revision that stays one row.
  */
 function setup(h: Harness = harness()) {
@@ -160,5 +160,45 @@ describe('acknowledgementsFor', () => {
 		acknowledge(h, { agentId, messageId: message.id, state: 'done' });
 
 		expect(acknowledgementsFor(h, {})).toEqual([]);
+	});
+});
+
+/**
+ * `read` (the owner's ask): agents reach for `thinking` and leave it there,
+ * because `done` sounds like a claim about the work. The smaller word is the
+ * one they will actually use.
+ */
+describe('saying only that it was read', () => {
+	it('records read as a state of its own', () => {
+		const { h, agentId, message } = setup();
+
+		const ack = acknowledge(h, { agentId, messageId: message.id, state: 'read' });
+
+		expect(ack.state).toBe('read');
+	});
+
+	it('revises the same row, so read then done is one acknowledgement', () => {
+		const { h, agentId, message } = setup();
+
+		const read = acknowledge(h, { agentId, messageId: message.id, state: 'read' });
+		const done = acknowledge(h, { agentId, messageId: message.id, state: 'done' });
+
+		expect(done.id).toBe(read.id);
+		expect(acknowledgementsFor(h, { messageIds: [message.id] })).toHaveLength(1);
+		expect(done.state).toBe('done');
+	});
+
+	it('still refuses a word nobody defined', () => {
+		const { h, agentId, message } = setup();
+
+		expect(
+			codeOf(() =>
+				acknowledge(h, {
+					agentId,
+					messageId: message.id,
+					state: 'busy' as unknown as 'read'
+				})
+			)
+		).toBe('invalid_argument');
 	});
 });

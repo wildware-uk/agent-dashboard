@@ -7,11 +7,16 @@
  * connected", and the only way an agent could previously say so was to post a
  * message, which costs a line of conversation for what is really a state.
  *
- * So: two words, no body. `thinking` renders as a live "Agent is thinking…",
- * `done` as a tick. Anything an agent wants to *say* still belongs in
- * `post_message`, which is why there is no note argument here — a status that
- * could carry a sentence would become a second message channel, and the two
- * would drift.
+ * So: three words, no body. `thinking` renders as a live "Agent is thinking…",
+ * `read` as "has read this", `done` as a tick. Anything an agent wants to *say*
+ * still belongs in `post_message`, which is why there is no note argument here
+ * — a status that could carry a sentence would become a second message channel,
+ * and the two would drift.
+ *
+ * `read` exists because of what agents actually did with the other two: they
+ * said `thinking` and left it, since `done` reads as a claim about the work
+ * rather than about the message. The owner asked for the smaller word, and the
+ * smaller word is the one that gets used.
  *
  * There is no agent argument, for the same reason nothing else here has one:
  * the acknowledger is resolved from the bearer token (design §5).
@@ -23,11 +28,13 @@ import type { McpTool } from './types';
 
 const inputSchema = {
 	state: z
-		.enum(['thinking', 'done'])
+		.enum(['thinking', 'read', 'done'])
 		.describe(
-			'What you are telling your owner: "thinking" while you are working on it, which shows ' +
-				'as a live "Agent is thinking…" on their screen, or "done" when you have dealt with ' +
-				'it, which shows as a tick. Sending "done" over an earlier "thinking" replaces it.'
+			'What you are telling your owner: "read" when you have seen it, which shows as "has ' +
+				'read this"; "thinking" while you are working on it, which shows as a live "Agent ' +
+				'is thinking…"; "done" when you have dealt with it, which shows as a tick. Each one ' +
+				'replaces the last, so "read" then "thinking" then "done" is one acknowledgement ' +
+				'changing three times.'
 		),
 	message_id: z
 		.string()
@@ -60,10 +67,11 @@ export const acknowledgeTool: McpTool<typeof inputSchema> = {
 			'soon as you have it — before you start the work, not after.',
 			'',
 			'Arguments:',
-			'- state (required): "thinking" or "done". "thinking" shows an animated "Agent is',
-			'  thinking…" and means you are on it right now; "done" shows a tick and means you have',
-			'  dealt with it. Send "thinking" when you pick something up and "done" when you finish,',
-			'  which replaces it.',
+			'- state (required): "read", "thinking" or "done". "read" means you have seen it and is',
+			'  the least you can say — say it the moment a message reaches you. "thinking" shows an',
+			'  animated "Agent is thinking…" and means you are on it right now. "done" shows a tick',
+			'  and means you have dealt with it. Each replaces the last, so read → thinking → done',
+			'  is one acknowledgement changing three times.',
 			'- message_id (optional): the message you are acknowledging, from get_messages or from a',
 			'  channel event. A post your owner wrote straight into the feed is a message like any',
 			'  other, so acknowledge it the same way — that is what puts "… is thinking…" under',
@@ -76,7 +84,8 @@ export const acknowledgeTool: McpTool<typeof inputSchema> = {
 			'IMPORTANT: "thinking" is a claim about right now, and your owner only sees it while you',
 			'are online — a session that dies mid-job stops animating rather than lying about being',
 			'busy. So finish with "done", and do not leave "thinking" behind as your last word on',
-			'something you actually completed.',
+			'something you actually completed. If "done" feels like too big a claim about the work,',
+			'"read" is still an honest last word; silence is not.',
 			'',
 			'It is not a reply, and it is not a task state. Anything you want to *say* goes in',
 			'post_message; finishing the work itself is still complete_task. A "done" here means',
@@ -91,7 +100,7 @@ export const acknowledgeTool: McpTool<typeof inputSchema> = {
 			'minutes later".',
 			'',
 			'On failure: "invalid_argument" means you named neither target or both of them, or a',
-			'state that is not one of the two. "not_found" means the message or task does not',
+			'state that is not one of the three. "not_found" means the message or task does not',
 			'exist — a deleted message cannot be acknowledged.'
 		].join('\n'),
 		inputSchema,
@@ -108,11 +117,12 @@ export const acknowledgeTool: McpTool<typeof inputSchema> = {
 				state: args.state
 			});
 
-			return ok(
-				ack.state === 'done'
-					? 'Marked done. Your owner sees a tick on it.'
-					: 'Acknowledged. Your owner sees that you are on it.',
-				{ ack: ackView(ack) }
-			);
+			const said = {
+				done: 'Marked done. Your owner sees a tick on it.',
+				read: 'Marked read. Your owner sees that it reached you.',
+				thinking: 'Acknowledged. Your owner sees that you are on it.'
+			};
+
+			return ok(said[ack.state], { ack: ackView(ack) });
 		})
 };

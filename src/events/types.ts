@@ -15,7 +15,7 @@ export type MediaKind = 'image' | 'video';
 export type TaskState = 'todo' | 'claimed' | 'done' | 'cancelled';
 
 /** What an agent is saying about a message or a task (migration 013). */
-export type AckState = 'thinking' | 'done';
+export type AckState = 'thinking' | 'read' | 'done';
 
 /** The shapes an owner request takes (design §5). */
 export type RequestKind = 'text' | 'confirm' | 'buttons' | 'choice' | 'multi_choice' | 'form';

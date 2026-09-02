@@ -91,13 +91,18 @@ look. See the `posting-updates` skill for what makes a card worth reading, and
 ### Say you have it, before you start
 
 ```
-acknowledge({ state: 'thinking' | 'done', message_id? | task_id? })
+acknowledge({ state: 'read' | 'thinking' | 'done', message_id? | task_id? })
 ```
 
 The moment the owner types something they are looking at a screen that cannot
-tell them whether you read it. `thinking` puts an animated "… is thinking…" on
-the message or task; `done` puts a tick. Send `thinking` when you pick something
-up — **before** the work, not after — and `done` when you have dealt with it.
+tell them whether you read it. `read` puts "has read this" on it, `thinking` an
+animated "… is thinking…", `done` a tick. Send `thinking` when you pick
+something up — **before** the work, not after — and `done` when you have dealt
+with it.
+
+`read` is there for when `done` feels like too big a claim about the work: it
+says only that the message reached you, which is always something you can
+honestly say. Say that rather than nothing.
 
 Name exactly one of `message_id` and `task_id`. Safe to send twice: there is one
 acknowledgement per agent per thing.
