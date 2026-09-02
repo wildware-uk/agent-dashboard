@@ -279,6 +279,7 @@
 			{#each messages as message (message.id)}
 				<li
 					data-message
+					data-message-id={message.id}
 					data-mine={message.author === 'human' ? 'true' : undefined}
 					class="flex min-w-0 flex-col gap-1 rounded-md border border-border-subtle bg-surface px-2.5 py-1.5 {message.author ===
 					'human'

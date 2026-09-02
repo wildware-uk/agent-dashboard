@@ -203,6 +203,18 @@ export {
 	type ThreadQuery
 } from './messages';
 export {
+	DEFAULT_NOTIFICATION_LIMIT,
+	countUnseen,
+	listNotifications,
+	markSeen,
+	notificationForMessage,
+	notificationForRequest,
+	notificationForUpdate,
+	recordNotification,
+	startNotificationRecorder,
+	type NotificationView
+} from './notifications';
+export {
 	DEFAULT_HOLD_MS,
 	DEFAULT_TIMEOUT_S,
 	DETAIL_MAX_LENGTH,

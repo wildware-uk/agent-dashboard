@@ -79,6 +79,36 @@ body {
 	animation: update-enter 200ms ease-out both;
 }
 
+/*
+	What a notification landed on (migration 021).
+
+	A ring rather than a background: the card already carries a level colour and
+	a post already carries the owner's accent rail, so the marker has to be
+	something neither of them uses. It fades itself out — the point is "this one",
+	not a state the owner then has to clear.
+*/
+[data-focused='true'] {
+	outline: 2px solid var(--color-accent);
+	outline-offset: 2px;
+	border-radius: 0.5rem;
+	animation: focus-fade 4s ease-out both;
+}
+
+@keyframes focus-fade {
+	from {
+		outline-color: var(--color-accent);
+	}
+	to {
+		outline-color: transparent;
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
+	[data-focused='true'] {
+		animation: none;
+	}
+}
+
 /* An animation nobody asked for is not worth a headache. */
 @media (prefers-reduced-motion: reduce) {
 	.update-enter {

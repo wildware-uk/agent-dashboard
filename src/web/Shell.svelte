@@ -19,6 +19,7 @@
 	import { resolve } from '$app/paths';
 	import Board from './Board.svelte';
 	import Composer from './Composer.svelte';
+	import NotificationBell from './NotificationBell.svelte';
 	import NotifyToggle from './NotifyToggle.svelte';
 	import RightRail from './RightRail.svelte';
 	import Sidebar from './Sidebar.svelte';
@@ -28,6 +29,7 @@
 	import { ownerActions, type OwnerActions } from './actions';
 	import { Presence } from './presence.svelte';
 	import { Push } from './push.svelte';
+	import { Notifications } from './notifications.svelte';
 	import { Requests } from './requests.svelte';
 	import { Tasks } from './tasks.svelte';
 	import { Threads } from './threads.svelte';
@@ -126,6 +128,22 @@
 		 * reason every other store here is.
 		 */
 		push = new Push(),
+		/**
+		 * What the owner has been told about (migration 021).
+		 *
+		 * Owned here because the bell is in the header, above every view, and
+		 * because a notification is aimed at the owner rather than at the project
+		 * on screen — the same reason `requests` lives here.
+		 */
+		notifications = new Notifications(),
+		/**
+		 * What a notification points at, from `?focus=` (migration 021).
+		 *
+		 * Clicking one has to land on the card or the reply itself; a route that
+		 * dropped its owner at the top of a project with fifty cards under it is
+		 * the thing they asked me to fix.
+		 */
+		focus = null,
 		media,
 		/**
 		 * The owner's write calls (design §7), handed down to the sidebar and to
@@ -150,6 +168,8 @@
 		agentNames?: Record<string, string>;
 		feed?: Timeline;
 		presence?: Presence;
+		notifications?: Notifications;
+		focus?: string | null;
 		tasks?: Tasks;
 		threads?: Threads;
 		requests?: Requests;
@@ -228,11 +248,15 @@
 		// a card, because a card is mounted and unmounted as the feed moves and the
 		// conversation must not be refetched every time one scrolls past.
 		threads.start();
+		// The bell. Started here for the same reason the queue is: it is the
+		// owner's, not the project's, and it sits above every view.
+		notifications.start();
 		return () => {
 			feed.stop();
 			presence.stop();
 			requests.stop();
 			threads.stop();
+			notifications.stop();
 		};
 	});
 
@@ -495,6 +519,13 @@
 				not "what the dashboard contains". It renders nothing at all on a
 				deployment with no VAPID keypair, or in a browser without the APIs.
 			-->
+			<!--
+				Everything the owner has been told about, and a way back to each of
+				them (migration 021). Before this, a push that arrived while the phone
+				was asleep was the only copy there had ever been.
+			-->
+			<NotificationBell {notifications} />
+
 			<NotifyToggle {push} />
 
 			<Theme />
@@ -629,6 +660,7 @@
 						{actions}
 						{threads}
 						{onlineIds}
+						{focus}
 					/>
 				</div>
 			{:else}

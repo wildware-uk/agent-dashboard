@@ -20,6 +20,7 @@ import { assertBodyLimitAllowsUploads, assertClientAddressTrustworthy, loadConfi
 import {
 	startMediaSweeper,
 	startPresenceSweeper,
+	startNotificationRecorder,
 	startRequestPusher,
 	startRequestSweeper
 } from '$domain';
@@ -58,6 +59,13 @@ if (!building) startRequestSweeper();
 // on the publishing path, and a push service that refuses is logged rather than
 // thrown — a notification is a nudge, and the request itself is already stored.
 if (!building) startRequestPusher();
+
+// The same events, written down (migration 021). A push reaches a phone in a
+// pocket, but only if it is awake, permitted and delivered — so what the owner
+// was told about is recorded as well, and the app shows the list whether any
+// push landed or not. Failures are logged: the update, the reply and the
+// request have all already happened by the time this runs.
+if (!building) startNotificationRecorder();
 
 // Uploads happen before the update that references them, so an agent that
 // crashes in between leaves bytes on disk that nothing will ever point at. This

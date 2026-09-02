@@ -49,6 +49,8 @@ export type {
 	MediaStatus,
 	Message,
 	MessageDelivery,
+	Notification,
+	NotificationKind,
 	Project,
 	BoardColumn,
 	ProjectBoard,
@@ -169,6 +171,14 @@ export {
 } from './messages';
 export { advanceReadCursor, getReadCursor, readCursorSeq } from './read-cursors';
 export { deliveredMessageIds, listDeliveries, recordDelivery } from './deliveries';
+export {
+	countUnseenNotifications,
+	insertNotification,
+	listNotifications,
+	markNotificationsSeen,
+	type NewNotification,
+	type NotificationQuery
+} from './notifications';
 export {
 	listAcknowledgements,
 	upsertAcknowledgement,
