@@ -87,6 +87,11 @@ function workFrames(frames: Frame[]): Frame[] {
 	return frames.filter((frame) => frame.event === 'work');
 }
 
+/** The message bodies one `message` frame carries. */
+function bodiesOf(frame: Frame | undefined): string[] {
+	return ((frame?.data?.messages ?? []) as { body: string }[]).map((message) => message.body);
+}
+
 /** The counts off a `work` frame, in the order a heartbeat reports them. */
 function counts(frame: Frame): [number, number, number] {
 	return [
@@ -495,5 +500,67 @@ describe('subscribing to everything', () => {
 		const { response } = connect(mcp, mcp.token, `?project=*,${project.slug}`);
 
 		expect(response.status).toBe(400);
+	});
+});
+
+/**
+ * The complaint that would not go away: "it sends them all every time I send
+ * one".
+ *
+ * The message frame used to carry the *unread set*, recomputed from the read
+ * cursor on every rise — and the cursor only moves when the agent calls
+ * `get_messages`. So a second message re-announced the first, a third
+ * re-announced both, and an owner typing five lines interrupted the agent
+ * fifteen times with five things.
+ *
+ * The bridge learned to remember what it had said, which fixed it for a bridge
+ * running today's code. This is the same rule one layer down, where every
+ * client gets it: a long-lived session started days ago is still holding the
+ * process it was launched with, and the fix has to reach that one too.
+ */
+describe('saying each message once', () => {
+	it('does not re-announce a message the agent has already been told about', async () => {
+		const mcp = mcpHarness();
+		const { project } = createProject(mcp.h, { name: 'Dashboard' });
+		const stream = connect(mcp, mcp.token, `?project=${project.slug}`);
+		await stream.take(3);
+
+		postMessage(mcp.h, { project: project.slug, author: { kind: 'human' }, body: 'first' });
+		const afterFirst = await stream.take(5);
+		expect(bodiesOf(afterFirst.filter((frame) => frame.event === 'message').at(-1))).toEqual([
+			'first'
+		]);
+
+		// Still unread — nothing has called `get_messages` — so the unread set now
+		// holds both, and the naive frame would carry both.
+		postMessage(mcp.h, { project: project.slug, author: { kind: 'human' }, body: 'second' });
+		const afterSecond = await stream.take(7);
+		stream.abort.abort();
+
+		const messages = afterSecond.filter((frame) => frame.event === 'message');
+		expect(bodiesOf(messages.at(-1))).toEqual(['second']);
+		// Two arrivals, two frames, two announcements in total.
+		expect(messages.flatMap((frame) => bodiesOf(frame))).toEqual(['first', 'second']);
+	});
+
+	it('still opens a fresh connection with what is waiting', async () => {
+		const mcp = mcpHarness();
+		const { project } = createProject(mcp.h, { name: 'Dashboard' });
+		postMessage(mcp.h, {
+			project: project.slug,
+			author: { kind: 'human' },
+			body: 'while you were out'
+		});
+
+		// A reconnect is a new connection and knows nothing of what the last one
+		// said, which is the right way round: the alternative is an agent that
+		// reconnects into silence with an inbox it never hears about.
+		const stream = connect(mcp, mcp.token, `?project=${project.slug}`);
+		const frames = await stream.take(4);
+		stream.abort.abort();
+
+		expect(bodiesOf(frames.find((frame) => frame.event === 'message'))).toEqual([
+			'while you were out'
+		]);
 	});
 });

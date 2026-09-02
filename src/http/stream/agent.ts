@@ -79,6 +79,16 @@ export const MESSAGE_EVENT = 'message';
 /** How many unread messages one frame will describe. */
 export const MESSAGE_LIMIT = 5;
 
+/**
+ * How many message ids one connection remembers having sent.
+ *
+ * Bounded so a connection held open for days cannot grow without limit, and
+ * generous enough that nothing repeats in practice: the oldest id dropped is the
+ * one an agent is least likely to be told about again, because the read cursor
+ * has long since passed it.
+ */
+export const ANNOUNCED_MAX = 500;
+
 /** The query parameter an agent subscribes with: `?project=a,b`. */
 export const PROJECT_PARAM = 'project';
 
@@ -215,14 +225,33 @@ function scopedWork(
 	};
 }
 
-/** One unread message, with enough around it to be acted on without a lookup. */
+/**
+ * One unread message, with enough around it to be acted on without a lookup.
+ *
+ * **Only what this connection has not already sent.** `unreadMessagesInScope`
+ * answers with the unread *set*, recomputed from the read cursor — and that
+ * cursor only moves when the agent calls `get_messages`. So a second message
+ * would carry the first again, a third would carry both, and an owner typing
+ * five lines interrupted an agent fifteen times about five things. That is the
+ * complaint that would not go away, and it is fixed here rather than only in the
+ * bridge because a session launched days ago is still running the bridge it
+ * started with: a server that never repeats itself reaches every client, old
+ * code included.
+ *
+ * `sent` is per connection, so a reconnecting agent still opens with whatever is
+ * waiting — silence into a full inbox would be the worse failure.
+ */
 function messageFrame(
 	ctx: DomainContext,
 	agentId: string,
-	subscribed: readonly string[] | null | undefined
+	subscribed: readonly string[] | null | undefined,
+	sent: Set<string>
 ): string {
-	const messages = unreadMessagesInScope(ctx, agentId, MESSAGE_LIMIT, subscribed);
+	const unread = unreadMessagesInScope(ctx, agentId, MESSAGE_LIMIT, subscribed);
+	const messages = unread.filter((message) => !sent.has(message.id));
 	if (messages.length === 0) return '';
+
+	for (const message of messages) remember(sent, message.id);
 
 	const body = JSON.stringify({
 		type: MESSAGE_EVENT,
@@ -242,6 +271,15 @@ function messageFrame(
 		})
 	});
 	return `event: ${MESSAGE_EVENT}\ndata: ${body}\n\n`;
+}
+
+/** Note an id as sent, dropping the oldest once the set is full. */
+function remember(sent: Set<string>, id: string): void {
+	sent.add(id);
+	if (sent.size <= ANNOUNCED_MAX) return;
+	// `Set` keeps insertion order, so this drops what was said longest ago.
+	const oldest = sent.values().next().value;
+	if (oldest !== undefined) sent.delete(oldest);
 }
 
 function same(left: WorkCounts, right: WorkCounts): boolean {
@@ -354,11 +392,14 @@ export function createAgentStreamHandler(
 				// the agent's first piece of work happens to arrive.
 				write(`${retryFrame(retryMs)}${commentFrame('connected')}`);
 
+				/** What this connection has already announced, so it says nothing twice. */
+				const sent = new Set<string>();
+
 				// The current counts before any event, so a reconnecting agent is
 				// correct without a replay to merge.
 				let last = scopedWork(ctx, agentId, subscribed);
 				write(workFrame(last, ctx.now()));
-				if (last.unreadMessages > 0) write(messageFrame(ctx, agentId, subscribed));
+				if (last.unreadMessages > 0) write(messageFrame(ctx, agentId, subscribed, sent));
 
 				unsubscribe = bus.subscribe((published: AppEvent) => {
 					if (!WATCHED.includes(published.type)) return;
@@ -381,7 +422,7 @@ export function createAgentStreamHandler(
 					// The messages themselves, but only when there are more than there
 					// were: a count that fell is the agent reading its own inbox, and
 					// re-sending what it just read would be the same interruption twice.
-					if (rose) write(messageFrame(ctx, agentId, subscribed));
+					if (rose) write(messageFrame(ctx, agentId, subscribed, sent));
 				});
 
 				if (heartbeatMs > 0) {
