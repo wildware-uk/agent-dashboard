@@ -165,24 +165,24 @@ export function postMessage(ctx: DomainContext, input: PostMessageInput): Messag
 		throw notFound(`no such message: ${input.answers}`);
 	}
 
-	const updateId = input.updateId ?? answered?.updateId ?? null;
-	const taskId = input.taskId ?? answered?.taskId ?? null;
-	// Answering a message takes its thread. When that message *is* the head of a
-	// thread — one of the owner's feed posts, which anchors to nothing — the
-	// answer goes underneath it rather than beside it as a second post: naming a
-	// post and being filed next to it is the one reading nobody wants.
-	const replyTo = input.replyTo ?? (answered ? (answered.replyTo ?? threadHead(answered)) : null);
-	if (updateId !== null && taskId !== null) {
-		throw invalid('a message hangs off an update or a task, not both');
-	}
-	if (replyTo !== null && (updateId !== null || taskId !== null)) {
+	// Only a caller that named *both* is refused. An anchor inherited from the
+	// message being answered is this function's own doing, and refusing it would
+	// refuse the ordinary case: answering the owner inside a card's thread.
+	if (input.replyTo != null && (input.updateId != null || input.taskId != null)) {
 		throw invalid('a reply answers a message, or hangs off an update or a task, not both');
 	}
 
-	// Resolved before anything is written, so a reply cannot be filed against a
-	// post that is not there.
-	const target = replyTo === null ? null : findMessageById(ctx.db, replyTo);
-	if (replyTo !== null && !target) throw notFound(`no such message: ${replyTo}`);
+	// The message being replied to, resolved before anything is written, so a
+	// reply cannot be filed against a post that is not there.
+	const named = input.replyTo ?? null;
+	const target = named === null ? null : findMessageById(ctx.db, named);
+	if (named !== null && !target) throw notFound(`no such message: ${named}`);
+
+	const updateId = input.updateId ?? answered?.updateId ?? target?.updateId ?? null;
+	const taskId = input.taskId ?? answered?.taskId ?? target?.taskId ?? null;
+	if (updateId !== null && taskId !== null) {
+		throw invalid('a message hangs off an update or a task, not both');
+	}
 
 	/**
 	 * Answering a reply files the answer under the same post.
@@ -197,14 +197,46 @@ export function postMessage(ctx: DomainContext, input: PostMessageInput): Messag
 	 * there is still nothing to render recursively, and the conversation is one
 	 * list under the post it belongs to rather than a tree.
 	 */
-	const parent = target?.replyTo ? findMessageById(ctx.db, target.replyTo) : target;
-	const anchor = parent?.id ?? null;
+	/**
+	 * **Replying to a message that lives in a card's thread keeps that thread.**
+	 *
+	 * The bug this fixes made the owner's own report: "agents post messages, I
+	 * click the notification, and it doesn't take me to the message, nor can I
+	 * find it anywhere on the dashboard." They were right, and it was worse than
+	 * a broken link — the message was rendered nowhere at all.
+	 *
+	 * The owner replies *inside* a card's thread, so their line carries that
+	 * card's `update_id`. An agent answering it named it as `reply_to`, and
+	 * flattening then treated it as the head of a feed thread: the answer got
+	 * `reply_to` and no `update_id`, which put it in no thread the browser reads.
+	 * `listThread` filters by the card, feed posts are messages with no
+	 * `reply_to`, and replies-under-a-post are only collected for posts. So it
+	 * existed, notified, and appeared nowhere.
+	 *
+	 * A message that is already in a card's or a task's thread is answered by
+	 * *joining* that thread and naming what it answers (migration 020), which is
+	 * exactly what the owner asked for two features ago. Flattening still applies
+	 * where it was meant to: under one of their own feed posts, which anchors to
+	 * nothing else.
+	 */
+	const inThread = Boolean(target && (target.updateId !== null || target.taskId !== null));
+	const parent = inThread
+		? null
+		: target?.replyTo
+			? findMessageById(ctx.db, target.replyTo)
+			: target;
+	// Answering a message takes its thread. When that message *is* the head of a
+	// thread — one of the owner's feed posts, which anchors to nothing — the
+	// answer goes underneath it rather than beside it as a second post: naming a
+	// post and being filed next to it is the one reading nobody wants.
+	const anchor =
+		parent?.id ?? (answered && !inThread ? (answered.replyTo ?? threadHead(answered)) : null);
 
 	// The named project first, so an unknown slug is refused before anything else,
 	// and then the anchor's. A request that says both and disagrees is refused
 	// rather than quietly resolved: silently preferring one would file the message
 	// somewhere the caller did not ask for and report success.
-	const named = input.project ? resolveProject(ctx, input.project).id : null;
+	const namedProject = input.project ? resolveProject(ctx, input.project).id : null;
 	// A reply belongs to whatever its post belonged to, which is the same rule an
 	// update or a task anchor keeps.
 	// A reply belongs to whatever its post belonged to, and an answer to whatever
@@ -213,10 +245,10 @@ export function postMessage(ctx: DomainContext, input: PostMessageInput): Messag
 	const anchored = parent
 		? parent.projectId
 		: (anchorProject(ctx, { updateId, taskId }) ?? answered?.projectId ?? null);
-	if (anchored !== null && named !== null && anchored !== named) {
+	if (anchored !== null && namedProject !== null && anchored !== namedProject) {
 		throw invalid('that update, task or message belongs to a different project');
 	}
-	const projectId = anchored ?? named;
+	const projectId = anchored ?? namedProject;
 
 	// Checked before the insert, so a message is never posted without the images
 	// it was written about.
@@ -232,12 +264,17 @@ export function postMessage(ctx: DomainContext, input: PostMessageInput): Messag
 		throw invalid('that message is in a different thread');
 	}
 
+	// Answering a line in a card's thread is recorded as answering it — the label
+	// the thread renders — rather than as a `reply_to` that would move it out of
+	// the thread it was written in.
+	const answersId = answered?.id ?? (inThread ? (target?.id ?? null) : null);
+
 	const message = insertMessage(ctx.db, {
 		projectId,
 		updateId,
 		taskId,
 		replyTo: anchor,
-		answers: answered?.id ?? null,
+		answers: answersId,
 		author,
 		body,
 		createdAt: ctx.now()

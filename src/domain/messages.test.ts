@@ -866,3 +866,77 @@ describe('answering a comment', () => {
 		expect(said.answers).toBeNull();
 	});
 });
+
+/**
+ * The bug the owner found by using it: "agents post messages, I click the
+ * notification, and it doesn't take me to the message, nor can I find it
+ * anywhere on the dashboard."
+ *
+ * They were right, and it was worse than a broken link. The owner replies
+ * *inside* a card's thread, so their line carries that card's `updateId`. An
+ * agent answering it named it as `replyTo`, and the flattening rule — written
+ * for the owner's feed posts, which anchor to nothing — filed the answer with a
+ * `replyTo` and no `updateId`. Nothing renders that: a card's thread is read by
+ * `updateId`, feed posts are messages with no `replyTo`, and replies are only
+ * collected under posts. The message existed, notified, and appeared nowhere.
+ */
+describe('answering the owner inside a card’s thread', () => {
+	it('stays in that thread rather than vanishing out of every one', () => {
+		const update = postUpdate(h, { project: slug, agentId, body: 'shipped' });
+		const asked = postMessage(h, {
+			author: { kind: 'human' },
+			updateId: update.id,
+			body: 'does it handle empty input?'
+		});
+
+		const answer = postMessage(h, {
+			author: { kind: 'agent', agentId },
+			replyTo: asked.id,
+			body: 'it does now'
+		});
+
+		expect(answer.updateId).toBe(update.id);
+		expect(answer.replyTo).toBeNull();
+		// Labelled as answering them, which is what a thread renders (migration 020).
+		expect(answer.answers).toBe(asked.id);
+		expect(listThread(h, { updateId: update.id }).map((m) => m.id)).toEqual([asked.id, answer.id]);
+	});
+
+	it('does the same in a task’s thread', () => {
+		const task = insertTask(h.db, { projectId, title: 'look at it' });
+		const asked = postMessage(h, {
+			author: { kind: 'human' },
+			taskId: task.id,
+			body: 'how far have you got?'
+		});
+
+		const answer = postMessage(h, {
+			author: { kind: 'agent', agentId },
+			replyTo: asked.id,
+			body: 'halfway'
+		});
+
+		expect(answer.taskId).toBe(task.id);
+		expect(listThread(h, { taskId: task.id }).map((m) => m.id)).toEqual([asked.id, answer.id]);
+	});
+
+	it('still flattens under one of the owner’s own feed posts', () => {
+		const post = fromOwner('a post in the feed', { project: slug });
+		const first = postMessage(h, {
+			author: { kind: 'agent', agentId },
+			replyTo: post.id,
+			body: 'on it'
+		});
+
+		// Answering that reply files the answer under the post, one level deep,
+		// which is what flattening was for.
+		const second = postMessage(h, {
+			author: { kind: 'human' },
+			replyTo: first.id,
+			body: 'thanks'
+		});
+
+		expect(second.replyTo).toBe(post.id);
+		expect(second.updateId).toBeNull();
+	});
+});

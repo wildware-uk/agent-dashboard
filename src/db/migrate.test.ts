@@ -172,3 +172,79 @@ describe('a migration that rebuilds a table', () => {
 		).not.toThrow();
 	});
 });
+
+/**
+ * The repair migration (023).
+ *
+ * A reply written before the fix could carry `reply_to` and no thread of its
+ * own, which no view renders — the owner's report was "I cannot find it
+ * anywhere on the dashboard", and they were right. This puts those rows back
+ * into the thread they were written in.
+ */
+describe('rescuing replies that were rendered nowhere', () => {
+	/** A database migrated to just before the repair, so it can be replayed. */
+	function beforeTheRepair() {
+		const db = openDatabase({ file: ':memory:', migrate: false });
+		migrate(
+			db,
+			MIGRATIONS.filter((migration) => migration.version < 23)
+		);
+		db.prepare(
+			`INSERT INTO agents (id, name, token_hash, created_at) VALUES ('a1', 'scout', 'h', 1)`
+		).run();
+		db.prepare(
+			`INSERT INTO projects (id, slug, name, status, created_at, updated_at)
+			 VALUES ('p1', 'dash', 'Dash', 'active', 1, 1)`
+		).run();
+		db.prepare(
+			`INSERT INTO updates (id, project_id, agent_id, body, level, created_at)
+			 VALUES ('u1', 'p1', 'a1', 'shipped', 'info', 1)`
+		).run();
+		return db;
+	}
+
+	it('gives an orphaned reply the thread it was written in', () => {
+		const db = beforeTheRepair();
+		// The owner's line, inside a card's thread.
+		db.prepare(
+			`INSERT INTO messages (id, project_id, update_id, author, body, created_at)
+			 VALUES ('m1', 'p1', 'u1', 'human', 'does it work?', 2)`
+		).run();
+		// The agent's answer, as the old flattening wrote it: a reply to that line,
+		// with no thread of its own.
+		db.prepare(
+			`INSERT INTO messages (id, project_id, reply_to, author, body, created_at)
+			 VALUES ('m2', 'p1', 'm1', 'agent:a1', 'it does', 3)`
+		).run();
+
+		migrate(db);
+
+		const repaired = db
+			.prepare<[], { update_id: string | null; reply_to: string | null; answers: string | null }>(
+				`SELECT update_id, reply_to, answers FROM messages WHERE id = 'm2'`
+			)
+			.get();
+		expect(repaired).toEqual({ update_id: 'u1', reply_to: null, answers: 'm1' });
+	});
+
+	it('leaves a reply under one of the owner’s feed posts exactly as it was', () => {
+		const db = beforeTheRepair();
+		db.prepare(
+			`INSERT INTO messages (id, project_id, author, body, created_at)
+			 VALUES ('p-post', 'p1', 'human', 'a post', 2)`
+		).run();
+		db.prepare(
+			`INSERT INTO messages (id, project_id, reply_to, author, body, created_at)
+			 VALUES ('m3', 'p1', 'p-post', 'agent:a1', 'on it', 3)`
+		).run();
+
+		migrate(db);
+
+		const untouched = db
+			.prepare<[], { update_id: string | null; reply_to: string | null }>(
+				`SELECT update_id, reply_to FROM messages WHERE id = 'm3'`
+			)
+			.get();
+		expect(untouched).toEqual({ update_id: null, reply_to: 'p-post' });
+	});
+});
