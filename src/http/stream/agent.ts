@@ -43,6 +43,7 @@ import {
 	countUnreadMessagesInScope,
 	countWork,
 	findProject,
+	findRequest,
 	invalid,
 	isDomainError,
 	markMessagesDelivered,
@@ -77,6 +78,22 @@ export const WORK_EVENT = 'work';
  * dashboard thinks it has seen.
  */
 export const MESSAGE_EVENT = 'message';
+
+/**
+ * The answer frame: what the owner just said to a question this agent asked.
+ *
+ * Same reasoning as {@link MESSAGE_EVENT}, and the owner asked for it in the
+ * same words: a button they click should reach the agent down the channel that
+ * carries their typing, not as a count that says only "something changed, go
+ * and look". An agent parked in `await_request` was already woken by the event;
+ * an agent that asked and carried on was not, and had to notice a number.
+ *
+ * The answer rides on the frame rather than only its id, for the same reason a
+ * message body does: the point of a live channel is that the agent can act
+ * without a round trip first. `await_request` remains the authority — the row
+ * is — so an agent that wants the typed value re-reads it.
+ */
+export const ANSWER_EVENT = 'answer';
 
 /** How many unread messages one frame will describe. */
 export const MESSAGE_LIMIT = 5;
@@ -284,6 +301,40 @@ function messageFrame(
 	return `event: ${MESSAGE_EVENT}\ndata: ${body}\n\n`;
 }
 
+/**
+ * One settled request, as this agent's stream reports it.
+ *
+ * Everything the agent needs to act: which question, how it ended, and what the
+ * owner actually said. `state` covers all three endings — answered, timed out,
+ * dismissed — because an agent that heard nothing after a timeout would sit
+ * waiting on a prompt that is gone.
+ *
+ * Empty for a request belonging to somebody else, which is a bearer token doing
+ * its job rather than an error: the event is broadcast to every connection and
+ * only this agent's own requests are its business.
+ */
+function answerFrame(ctx: DomainContext, agentId: string, requestId: string): string {
+	const request = findRequest(ctx, requestId);
+	if (!request || request.agentId !== agentId) return '';
+
+	const project = request.projectId ? findProject(ctx, request.projectId) : null;
+	const body = JSON.stringify({
+		type: ANSWER_EVENT,
+		request_id: request.id,
+		state: request.state,
+		kind: request.kind,
+		question: request.question,
+		// The typed value as the owner gave it: a string, a boolean, a list, or a
+		// form's action and text. `null` when the request ended without one.
+		answer: request.answer ? request.answer.value : null,
+		project: project?.slug ?? null,
+		project_name: project?.name ?? null,
+		update_id: request.updateId,
+		answered_at: request.answeredAt === null ? null : new Date(request.answeredAt).toISOString()
+	});
+	return `event: ${ANSWER_EVENT}\ndata: ${body}\n\n`;
+}
+
 function same(left: WorkCounts, right: WorkCounts): boolean {
 	return (
 		left.unreadMessages === right.unreadMessages &&
@@ -414,6 +465,15 @@ export function createAgentStreamHandler(
 						// accumulated, so nothing is lost by skipping one.
 						return;
 					}
+					// The answer itself, before the counts: what the owner said is the
+					// news, and `pending_approvals` falling is only its shadow. Written
+					// even when the three counts have not moved — a request that timed
+					// out an hour ago and is answered now moves nothing, and the agent
+					// still has to be told.
+					if (published.type === 'request.answered') {
+						write(answerFrame(ctx, agentId, published.payload.requestId));
+					}
+
 					if (same(last, next)) return;
 					const rose = next.unreadMessages > last.unreadMessages;
 					last = next;

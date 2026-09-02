@@ -53,6 +53,14 @@ replying to a notification.
 | a message, with its text | `acknowledge({ state: 'thinking', message_id })`, then `get_messages` to read it properly and mark it read, then `post_message` to answer |
 | open tasks               | `list_tasks`, then `claim_task` for anything you are taking                                                                               |
 | waiting on you           | `await_request` with the `request_id` you are holding                                                                                     |
+| your owner answered      | act on it — the answer is in the line; `await_request` re-reads the typed value in full                                                   |
+
+An **answer** line is your owner settling one of your own `request_input` calls
+— a button clicked, a form submitted, a prompt dismissed. It arrives the instant
+they act, on the same channel as their messages, and it carries what they said,
+so you do not have to be parked in `await_request` to hear it. A line that says
+nobody answered, or that they dismissed it, is not permission: it means the
+question is closed unanswered.
 
 A message line carries the **text** but not the ids — a line of stdout has
 nowhere to put them. `get_messages` is where the `message_id`, the project and

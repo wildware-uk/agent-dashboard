@@ -9,12 +9,20 @@ export {
 	CHANNEL_NAME,
 	INSTRUCTIONS,
 	createChannelServer,
+	describeAnswer,
 	describeRise,
 	main,
 	readFrames,
 	runBridge
 } from './bridge';
-export type { BridgeOptions, ChannelMessage, MessageFrame, Work, WorkFrame } from './bridge';
+export type {
+	AnswerFrame,
+	BridgeOptions,
+	ChannelMessage,
+	MessageFrame,
+	Work,
+	WorkFrame
+} from './bridge';
 export {
 	CONNECTION_FILE,
 	LINE_MAX,

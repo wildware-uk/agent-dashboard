@@ -79,6 +79,29 @@ export type ChannelMessage = {
 /** What an `event: message` frame carries. */
 export type MessageFrame = { type: 'message'; messages: ChannelMessage[] };
 
+/**
+ * An `event: answer` frame: the owner settled a request this agent asked.
+ *
+ * The owner asked for this in as many words — a button they click should come
+ * down the same pipe as their typing. Before it, a settled request moved a
+ * count and nothing else, so an agent that asked and carried on working learned
+ * about the answer only when it next thought to look.
+ */
+export type AnswerFrame = {
+	type: 'answer';
+	request_id: string;
+	/** `answered`, `timeout` or `cancelled`: an ending, whichever it was. */
+	state: string;
+	kind: string;
+	question: string;
+	/** What the owner said, or `null` for an ending that carried no answer. */
+	answer: string | boolean | string[] | { action: string; text: string } | null;
+	project: string | null;
+	project_name: string | null;
+	update_id: string | null;
+	answered_at: string | null;
+};
+
 export const CHANNEL_NAME = 'agent-dashboard';
 
 /**
@@ -115,6 +138,11 @@ export const INSTRUCTIONS = [
 	'  to you, so somebody else may claim it first — a conflict means move on, not retry.',
 	'- pending_approvals above zero: one of your own request_input calls is still waiting on',
 	'  the owner; call await_request with its request_id.',
+	'- An answer event is your owner settling one of your request_input calls — a button they',
+	'  clicked, a form they submitted, a prompt they dismissed. It carries the answer itself',
+	'  with request_id and state on the tag, so you can act on it without asking again;',
+	'  await_request re-reads the row when you want the typed value in full. A state of',
+	'  "timeout" or "cancelled" is not permission: it means nobody answered.',
 	'',
 	'You are only told about projects this session is subscribed to, so anything that arrives',
 	'is your business.',
@@ -219,6 +247,42 @@ export function describeRise(previous: Work | null, next: Work): string | null {
 
 	if (parts.length === 0) return null;
 	return `Waiting for you on the dashboard: ${parts.join(', ')}.`;
+}
+
+/**
+ * One settled request as a sentence.
+ *
+ * The answer comes first and the question second, because the answer is what
+ * the agent is waiting to know and a notification is read in a glance. An
+ * ending with no answer says so plainly rather than implying consent: "nobody
+ * answered" and "yes" must never be mistakable for one another.
+ */
+export function describeAnswer(frame: AnswerFrame): string {
+	const question = frame.question.trim();
+
+	if (frame.state !== 'answered') {
+		const why =
+			frame.state === 'timeout'
+				? 'Nobody answered before your request timed out'
+				: 'Your owner dismissed your request without answering';
+		return `${why}: ${question}. That is not permission.`;
+	}
+
+	return `Your owner answered ${answerText(frame.answer)} — ${question}`;
+}
+
+/** The value itself, short enough to sit in one line of a notification. */
+function answerText(answer: AnswerFrame['answer']): string {
+	if (answer === null) return 'nothing';
+	if (typeof answer === 'boolean') return answer ? 'yes' : 'no';
+	if (Array.isArray(answer)) return answer.length === 0 ? 'nothing' : answer.join(', ');
+	if (typeof answer === 'object') {
+		// A form: the action is the decision, and the text is what it applies to.
+		// The text can be a whole drafted message, so it is left for the agent to
+		// read with await_request rather than pasted into a notification.
+		return `"${answer.action}" on ${answer.text.length} characters of text`;
+	}
+	return `"${answer}"`;
 }
 
 /** Split an SSE body into frames as the bytes arrive. */
@@ -331,6 +395,28 @@ export async function runBridge(options: BridgeOptions): Promise<void> {
 		}
 	};
 
+	/**
+	 * The owner's answer to a request, as one notification.
+	 *
+	 * Not deduplicated: a request settles exactly once, so there is no second
+	 * frame to suppress, and the ids the agent needs are on the tag.
+	 */
+	const announceAnswer = async (send: NonNullable<BridgeOptions['notify']>, frame: AnswerFrame) => {
+		const held = pendingCounts;
+		pendingCounts = null;
+
+		const attributes: Record<string, string> = {
+			request_id: frame.request_id,
+			state: frame.state
+		};
+		if (frame.project) attributes.project = frame.project;
+		if (frame.update_id) attributes.update_id = frame.update_id;
+		if (held) Object.assign(attributes, meta(held.work));
+
+		const where = frame.project_name ?? frame.project ?? 'the dashboard';
+		await send(`${describeAnswer(frame)} (${where})`, attributes);
+	};
+
 	/** Send the messages themselves, one notification each. */
 	const announce = async (send: NonNullable<BridgeOptions['notify']>, all: ChannelMessage[]) => {
 		const held = pendingCounts;
@@ -388,6 +474,14 @@ export async function runBridge(options: BridgeOptions): Promise<void> {
 			attempt = 0;
 
 			for await (const frame of readFrames(response.body)) {
+				if (frame.event === 'answer' && frame.data) {
+					try {
+						await announceAnswer(notify, JSON.parse(frame.data) as AnswerFrame);
+					} catch {
+						// A malformed frame must not drop a working connection.
+					}
+					continue;
+				}
 				if (frame.event === 'message' && frame.data) {
 					try {
 						const parsed = JSON.parse(frame.data) as MessageFrame;
