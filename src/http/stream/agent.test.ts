@@ -1,6 +1,9 @@
 import { describe, expect, it } from 'vitest';
 import {
+	answerRequest,
 	broadcastTask,
+	cancelRequest,
+	createRequest,
 	createTask,
 	deliveriesFor,
 	postMessage,
@@ -608,5 +611,96 @@ describe('saying each message once', () => {
 		const delivered = deliveriesFor(mcp.h, [message.id]);
 		expect(delivered).toHaveLength(1);
 		expect(delivered[0]).toMatchObject({ messageId: message.id, agentId: mcp.deps.agent.id });
+	});
+});
+
+/**
+ * Settled requests, down the same pipe as messages (the owner's ask: "form
+ * submissions such as clicking buttons or answering questions should go down
+ * the same instant delivery channel").
+ *
+ * Before this a settled request moved `pending_approvals` and nothing else, so
+ * an agent that asked a question and carried on working learned the answer only
+ * when it next thought to look at a number.
+ */
+describe('what the owner answered', () => {
+	it('pushes the answer itself, not just a count that moved', async () => {
+		const mcp = mcpHarness();
+		const { project } = createProject(mcp.h, { name: 'Dashboard' });
+		const { request } = createRequest(mcp.h, {
+			agentId: mcp.deps.agent.id,
+			kind: 'buttons',
+			question: 'Ship it?',
+			options: ['Ship', 'Hold'],
+			project: project.slug
+		});
+
+		const stream = connect(mcp, mcp.token, `?project=${project.slug}`);
+		await stream.take(3);
+
+		answerRequest(mcp.h, { requestId: request.id, value: 'Ship' });
+		const frames = await stream.take(5);
+		stream.abort.abort();
+
+		const answer = frames.find((frame) => frame.event === 'answer');
+		expect(answer?.data).toMatchObject({
+			request_id: request.id,
+			state: 'answered',
+			kind: 'buttons',
+			question: 'Ship it?',
+			answer: 'Ship',
+			project: project.slug
+		});
+	});
+
+	it('says an ending with no answer is an ending, not a yes', async () => {
+		const mcp = mcpHarness();
+		const { project } = createProject(mcp.h, { name: 'Dashboard' });
+		const { request } = createRequest(mcp.h, {
+			agentId: mcp.deps.agent.id,
+			kind: 'confirm',
+			question: 'Delete the branch?',
+			project: project.slug
+		});
+
+		const stream = connect(mcp, mcp.token, `?project=${project.slug}`);
+		await stream.take(3);
+
+		cancelRequest(mcp.h, request.id);
+		const frames = await stream.take(5);
+		stream.abort.abort();
+
+		const answer = frames.find((frame) => frame.event === 'answer');
+		expect(answer?.data).toMatchObject({ state: 'cancelled', answer: null });
+	});
+
+	it('keeps another agent’s answers off this stream', async () => {
+		const mcp = mcpHarness();
+		const { project } = createProject(mcp.h, { name: 'Dashboard' });
+		const other = mcp.mint('other-agent');
+		const { request } = createRequest(mcp.h, {
+			agentId: other.agentId,
+			kind: 'confirm',
+			question: 'Not your business',
+			project: project.slug
+		});
+
+		const stream = connect(mcp, mcp.token, `?project=${project.slug}`);
+		await stream.take(3);
+
+		answerRequest(mcp.h, { requestId: request.id, value: true });
+		// Nothing is expected from that, so something that *is* this agent's work
+		// follows it: waiting for that frame proves the stream was live and that
+		// the answer went past it unannounced, rather than merely being slow.
+		createTask(mcp.h, {
+			project: project.slug,
+			title: 'yours',
+			agentId: mcp.deps.agent.id
+		});
+		const frames = await stream.take(4);
+		stream.abort.abort();
+
+		expect(frames.some((frame) => frame.event === 'answer')).toBe(false);
+		expect(counts(workFrames(frames).at(-1)!)).toEqual([0, 1, 0]);
 	});
 });

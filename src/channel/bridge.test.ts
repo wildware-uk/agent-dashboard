@@ -5,10 +5,12 @@ import {
 	CHANNEL_NAME,
 	INSTRUCTIONS,
 	createChannelServer,
+	describeAnswer,
 	describeRise,
 	main,
 	readFrames,
 	runBridge,
+	type AnswerFrame,
 	type ChannelMessage,
 	type Work
 } from './index';
@@ -54,6 +56,24 @@ function messageFrame(...messages: Partial<ChannelMessage>[]): string {
 		...message
 	}));
 	return `event: message\ndata: ${JSON.stringify({ type: 'message', messages: full })}\n\n`;
+}
+
+/** An `event: answer` frame, as the dashboard sends one when a request settles. */
+function answerFrame(overrides: Partial<AnswerFrame> = {}): string {
+	const frame: AnswerFrame = {
+		type: 'answer',
+		request_id: 'r1',
+		state: 'answered',
+		kind: 'buttons',
+		question: 'Ship it?',
+		answer: 'Ship',
+		project: 'agent-dashboard',
+		project_name: 'Agent Dashboard',
+		update_id: null,
+		answered_at: '2026-09-02T00:00:00.000Z',
+		...overrides
+	};
+	return `event: answer\ndata: ${JSON.stringify(frame)}\n\n`;
 }
 
 function workFrame(counts: Partial<Work>): string {
@@ -497,5 +517,109 @@ describe('what main needs before it will start', () => {
 
 		expect(said).toContain('AGENT_DASHBOARD_URL');
 		expect(exitCode).toBe(1);
+	});
+});
+
+/**
+ * Answers, down the same pipe as messages.
+ *
+ * The owner's words: "form submissions such as clicking buttons or answering
+ * questions should go down the same instant delivery channel that replies and
+ * messages go down". Before this a settled request moved `pending_approvals`
+ * and nothing else — a number an agent had to notice, rather than an answer it
+ * could act on.
+ */
+describe('the owner answering a request', () => {
+	async function bridgeOver(body: ReadableStream<Uint8Array>) {
+		const notify = vi.fn().mockResolvedValue(undefined);
+		const abort = new AbortController();
+		const fetcher = vi.fn().mockResolvedValue(new Response(body, { status: 200 }));
+
+		await runBridge({
+			baseUrl: 'https://dash.test',
+			token: 'a-token',
+			projects: ['*'],
+			fetch: fetcher as unknown as typeof globalThis.fetch,
+			notify,
+			sleep: async () => abort.abort(),
+			signal: abort.signal
+		});
+
+		return notify;
+	}
+
+	it('pushes the answer with the ids the agent needs to act on it', async () => {
+		const notify = await bridgeOver(sse(answerFrame()));
+
+		expect(notify).toHaveBeenCalledTimes(1);
+		const [content, meta] = notify.mock.calls[0]!;
+		expect(content).toContain('Ship');
+		expect(content).toContain('Ship it?');
+		expect(meta).toMatchObject({ request_id: 'r1', state: 'answered' });
+	});
+
+	it('does not dress a timeout up as an answer', async () => {
+		const notify = await bridgeOver(
+			sse(answerFrame({ state: 'timeout', answer: null, kind: 'confirm' }))
+		);
+
+		const [content, meta] = notify.mock.calls[0]!;
+		expect(content).toContain('Nobody answered');
+		expect(content).toContain('not permission');
+		expect(meta).toMatchObject({ state: 'timeout' });
+	});
+
+	it('survives a malformed frame rather than dropping the connection', async () => {
+		const notify = await bridgeOver(
+			sse('event: answer\ndata: {not json\n\n', workFrame({ open_tasks: 1 }))
+		);
+
+		// The work frame after it still lands, which is the point.
+		expect(notify).toHaveBeenCalledTimes(1);
+		expect(notify.mock.calls[0]![0]).toContain('1 open task');
+	});
+});
+
+describe('putting one settled request into a sentence', () => {
+	const frame = (overrides: Partial<AnswerFrame>): AnswerFrame => ({
+		type: 'answer',
+		request_id: 'r1',
+		state: 'answered',
+		kind: 'confirm',
+		question: 'Ship it?',
+		answer: true,
+		project: null,
+		project_name: null,
+		update_id: null,
+		answered_at: null,
+		...overrides
+	});
+
+	it('leads with the answer, because that is what is being waited on', () => {
+		expect(describeAnswer(frame({}))).toBe('Your owner answered yes — Ship it?');
+	});
+
+	it('reads a rejection as a no rather than as silence', () => {
+		expect(describeAnswer(frame({ answer: false }))).toContain('no');
+	});
+
+	it('joins a multiple choice rather than printing an array', () => {
+		expect(describeAnswer(frame({ kind: 'multi_choice', answer: ['one', 'two'] }))).toContain(
+			'one, two'
+		);
+	});
+
+	it('summarises a form by its action, leaving the text to be read properly', () => {
+		const said = describeAnswer(
+			frame({ kind: 'form', answer: { action: 'Send', text: 'x'.repeat(400) } })
+		);
+
+		expect(said).toContain('"Send"');
+		expect(said).toContain('400 characters');
+		expect(said).not.toContain('xxxx');
+	});
+
+	it('says a dismissal is not permission', () => {
+		expect(describeAnswer(frame({ state: 'cancelled', answer: null }))).toContain('not permission');
 	});
 });

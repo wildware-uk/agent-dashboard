@@ -12830,6 +12830,11 @@ var require_limit = /* @__PURE__ */ __commonJSMin(((exports) => {
 	"  to you, so somebody else may claim it first — a conflict means move on, not retry.",
 	"- pending_approvals above zero: one of your own request_input calls is still waiting on",
 	"  the owner; call await_request with its request_id.",
+	"- An answer event is your owner settling one of your request_input calls — a button they",
+	"  clicked, a form they submitted, a prompt they dismissed. It carries the answer itself",
+	"  with request_id and state on the tag, so you can act on it without asking again;",
+	"  await_request re-reads the row when you want the typed value in full. A state of",
+	"  \"timeout\" or \"cancelled\" is not permission: it means nobody answered.",
 	"",
 	"You are only told about projects this session is subscribed to, so anything that arrives",
 	"is your business.",
@@ -12863,6 +12868,27 @@ function describeRise(previous, next) {
 	if (rose(previous?.pending_approvals ?? 0, next.pending_approvals) && next.pending_approvals > 0) parts.push(next.pending_approvals === 1 ? "1 request still waiting on your owner" : `${next.pending_approvals} requests still waiting on your owner`);
 	if (parts.length === 0) return null;
 	return `Waiting for you on the dashboard: ${parts.join(", ")}.`;
+}
+/**
+* One settled request as a sentence.
+*
+* The answer comes first and the question second, because the answer is what
+* the agent is waiting to know and a notification is read in a glance. An
+* ending with no answer says so plainly rather than implying consent: "nobody
+* answered" and "yes" must never be mistakable for one another.
+*/
+function describeAnswer(frame) {
+	const question = frame.question.trim();
+	if (frame.state !== "answered") return `${frame.state === "timeout" ? "Nobody answered before your request timed out" : "Your owner dismissed your request without answering"}: ${question}. That is not permission.`;
+	return `Your owner answered ${answerText(frame.answer)} — ${question}`;
+}
+/** The value itself, short enough to sit in one line of a notification. */
+function answerText(answer) {
+	if (answer === null) return "nothing";
+	if (typeof answer === "boolean") return answer ? "yes" : "no";
+	if (Array.isArray(answer)) return answer.length === 0 ? "nothing" : answer.join(", ");
+	if (typeof answer === "object") return `"${answer.action}" on ${answer.text.length} characters of text`;
+	return `"${answer}"`;
 }
 /** Split an SSE body into frames as the bytes arrive. */
 async function* readFrames(body) {
@@ -12947,6 +12973,25 @@ async function runBridge(options) {
 			if (oldest !== void 0) announced.delete(oldest);
 		}
 	};
+	/**
+	* The owner's answer to a request, as one notification.
+	*
+	* Not deduplicated: a request settles exactly once, so there is no second
+	* frame to suppress, and the ids the agent needs are on the tag.
+	*/
+	const announceAnswer = async (send, frame) => {
+		const held = pendingCounts;
+		pendingCounts = null;
+		const attributes = {
+			request_id: frame.request_id,
+			state: frame.state
+		};
+		if (frame.project) attributes.project = frame.project;
+		if (frame.update_id) attributes.update_id = frame.update_id;
+		if (held) Object.assign(attributes, meta(held.work));
+		const where = frame.project_name ?? frame.project ?? "the dashboard";
+		await send(`${describeAnswer(frame)} (${where})`, attributes);
+	};
 	/** Send the messages themselves, one notification each. */
 	const announce = async (send, all) => {
 		const held = pendingCounts;
@@ -12987,6 +13032,12 @@ async function runBridge(options) {
 			log("connected");
 			attempt = 0;
 			for await (const frame of readFrames(response.body)) {
+				if (frame.event === "answer" && frame.data) {
+					try {
+						await announceAnswer(notify, JSON.parse(frame.data));
+					} catch {}
+					continue;
+				}
 				if (frame.event === "message" && frame.data) {
 					try {
 						await announce(notify, JSON.parse(frame.data).messages ?? []);
