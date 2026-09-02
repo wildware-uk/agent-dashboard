@@ -15,15 +15,23 @@
  *   agent is online (`src/web/`). An animation still running against an agent
  *   that died an hour ago is worse than no acknowledgement at all, because it
  *   is a lie the owner has no way to check.
+ * - `read` — "I have seen this." Also a fact about the past, and the smallest
+ *   thing an agent can honestly say.
  * - `done` — "this is finished." A fact about the past, so it stays put whether
  *   or not the agent is still there.
  *
  * ## What it deliberately is not
  *
- * It is not a message. There is no body, and there is no second state that
- * means "I read it but I am not doing it" — an agent with something to say has
+ * It is not a message. There is no body — an agent with something to say has
  * `post_message`, and a status vocabulary that grows past the point where a
  * glance decodes it has stopped being a glance.
+ *
+ * `read` is the one word that has been added since, and it was added because
+ * two states were not being used as designed: agents reach for `thinking` and
+ * leave it there, because `done` sounds like a claim about the *work* and they
+ * are reluctant to make it about a message. So they said nothing at all, which
+ * is the silence this whole feature exists to end. "I have seen this" is the
+ * smaller, truer thing, and an agent will say it.
  *
  * It is also not a task state. `complete_task` is what finishes work; a `done`
  * acknowledgement on a task says "I have dealt with what you asked me here",
@@ -42,8 +50,8 @@ import {
 import type { DomainContext } from './context';
 import { invalid, notFound } from './errors';
 
-/** The two things an agent may say. Nothing here accepts anything else. */
-export const ACK_STATES: readonly AckState[] = ['thinking', 'done'];
+/** The three things an agent may say. Nothing here accepts anything else. */
+export const ACK_STATES: readonly AckState[] = ['thinking', 'read', 'done'];
 
 export type AcknowledgeInput = {
 	/** From the bearer token, never an argument on the wire (design §5). */

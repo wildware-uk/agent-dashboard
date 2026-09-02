@@ -3,10 +3,13 @@
 	 * What an agent has said about one message or task, without words
 	 * (migration 013).
 	 *
-	 * Two things only, because the point is that it decodes at a glance:
+	 * Three things, each of which decodes at a glance:
 	 *
 	 * - **done** — a tick. A fact about the past, so it stays whether or not the
 	 *   agent that left it is still running.
+	 * - **read** — a hollow tick. Also a fact about the past, and the smallest
+	 *   honest thing an agent can say. It exists because agents would not say
+	 *   `done` about a message and so said nothing at all.
 	 * - **thinking** — an animated "… is thinking…". A claim about *now*, which
 	 *   is why it is rendered only while that agent is online. An animation still
 	 *   running against an agent that died an hour ago is worse than nothing: it
@@ -30,8 +33,8 @@
 		 * Ids of the agents beating right now.
 		 *
 		 * Empty means nobody is online, which is the honest default for a
-		 * component rendered without presence: `done` still shows, `thinking`
-		 * does not.
+		 * component rendered without presence: `done` and `read` still show,
+		 * `thinking` does not.
 		 */
 		onlineIds = []
 	}: {
@@ -41,7 +44,7 @@
 	} = $props();
 
 	const shown = $derived(
-		acks.filter((ack) => ack.state === 'done' || onlineIds.includes(ack.agentId))
+		acks.filter((ack) => ack.state !== 'thinking' || onlineIds.includes(ack.agentId))
 	);
 
 	const nameOf = (agentId: string) => agentLabel(agentId, agentNames[agentId]);
@@ -70,6 +73,26 @@
 						<path d="M3 8.5l3.5 3.5L13 4.5" />
 					</svg>
 					<span class="text-content-muted">{nameOf(ack.agentId)} marked this done</span>
+				{:else if ack.state === 'read'}
+					<!--
+						A hollow tick against the solid one: the same shape, so the two read
+						as steps of one thing rather than as two unrelated badges, and a
+						muted colour because "seen it" is smaller news than "finished".
+					-->
+					<svg
+						data-ack-read
+						class="size-3.5 shrink-0 text-content-muted"
+						viewBox="0 0 16 16"
+						fill="none"
+						stroke="currentColor"
+						stroke-width="1.5"
+						stroke-linecap="round"
+						stroke-linejoin="round"
+						aria-hidden="true"
+					>
+						<path d="M3 8.5l3.5 3.5L13 4.5" />
+					</svg>
+					<span class="text-content-muted">{nameOf(ack.agentId)} has read this</span>
 				{:else}
 					<span data-ack-thinking class="flex items-center gap-1 text-content-muted">
 						{nameOf(ack.agentId)} is thinking<!--

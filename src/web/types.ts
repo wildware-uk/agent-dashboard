@@ -290,10 +290,10 @@ export type SnapshotResponse = {
  * (migration 013).
  *
  * `thinking` is a claim about *now*, so the dashboard renders it only while
- * that agent is online; `done` is a fact about the past and stays whatever
- * happened to the agent afterwards.
+ * that agent is online; `read` and `done` are facts about the past and stay
+ * whatever happened to the agent afterwards.
  */
-export type AckState = 'thinking' | 'done';
+export type AckState = 'thinking' | 'read' | 'done';
 
 export type AckView = {
 	id: string;

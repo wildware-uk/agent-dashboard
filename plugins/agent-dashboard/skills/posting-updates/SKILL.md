@@ -147,7 +147,9 @@ Before you reply — or before you start work you are about to do instead of
 replying — `acknowledge({ state: 'thinking', message_id })`. It is one call, and
 it is the difference between the owner seeing that you picked their message up
 and the owner watching a card that has not changed. Close it with
-`acknowledge({ state: 'done', message_id })`.
+`acknowledge({ state: 'done', message_id })` — or with
+`acknowledge({ state: 'read', message_id })` when "done" would overstate what
+you did. Anything is better than leaving `thinking` as your last word.
 
 Then `get_messages({ mark_read: true })` so it stops being unread. `mark_read`
 defaults to true and is the only default in this API with a side effect — a

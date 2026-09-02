@@ -187,13 +187,18 @@ export type UploadToken = Keyed & {
 /**
  * What an agent is telling the owner about one message or task.
  *
- * Two states, because the question the owner is asking a silent card is binary:
- * has anybody picked this up, and is it finished. `thinking` is a claim about
- * *now* and reads as stale the moment the agent goes away, which is why the
- * dashboard shows it only while that agent is online; `done` is a fact about
- * the past and stays.
+ * Three states, for the three answers a silent card can owe its owner: has
+ * anybody seen this, is anybody on it, is it finished. `thinking` is a claim
+ * about *now* and reads as stale the moment the agent goes away, which is why
+ * the dashboard shows it only while that agent is online; `read` and `done` are
+ * facts about the past and stay.
+ *
+ * `read` was added because of how the other two were used rather than how they
+ * were designed: agents would say `thinking` and never close it, because `done`
+ * felt like a claim about the work rather than about the message. "I have seen
+ * this" is the smaller, truer thing they were reaching for.
  */
-export type AckState = 'thinking' | 'done';
+export type AckState = 'thinking' | 'read' | 'done';
 
 export type Acknowledgement = Keyed & {
 	agentId: string;

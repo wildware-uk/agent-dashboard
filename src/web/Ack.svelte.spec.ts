@@ -99,3 +99,29 @@ describe('nothing said', () => {
 			.not.toHaveTextContent('01M0XN8Y9TJMEYSN5T6Y54T4A3');
 	});
 });
+
+/**
+ * "Read" (the owner's ask): agents were reluctant to say `done` about a
+ * message, so they said nothing. The smallest honest word gets its own badge.
+ */
+describe('has read this', () => {
+	it('shows a read acknowledgement whether or not the agent is still online', async () => {
+		const screen = render(Ack, {
+			acks: [anAck({ id: 'a1', agentId: 'a1', state: 'read' })],
+			agentNames: { a1: 'scout' },
+			onlineIds: []
+		});
+
+		await expect.element(screen.getByText('scout has read this')).toBeVisible();
+		expect(document.querySelector('[data-ack-read]')).not.toBeNull();
+	});
+
+	it('is not the tick, so "seen it" cannot be misread as "finished"', async () => {
+		render(Ack, {
+			acks: [anAck({ id: 'a1', agentId: 'a1', state: 'read' })],
+			agentNames: { a1: 'scout' }
+		});
+
+		expect(document.querySelector('[data-ack-done]')).toBeNull();
+	});
+});
