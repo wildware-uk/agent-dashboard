@@ -139,3 +139,37 @@ describe('on the all-projects view', () => {
 		expect(document.querySelector('[data-composer] select')).toBeNull();
 	});
 });
+
+/**
+ * Cmd as well as Ctrl (#feedback: "allow CMD + Enter to also post").
+ *
+ * Both have always been accepted; the placeholder only named one, which is the
+ * same bug as far as anyone using it is concerned — a control nobody knows about
+ * does not exist.
+ */
+describe('the send chord', () => {
+	it('posts on Cmd+Enter', async () => {
+		const { acts, screen } = mount();
+		const field = screen.getByRole('textbox');
+
+		await field.fill('a thought');
+		field.element().dispatchEvent(
+			new KeyboardEvent('keydown', {
+				key: 'Enter',
+				metaKey: true,
+				bubbles: true,
+				cancelable: true
+			})
+		);
+
+		await expect.poll(() => acts.calls.length).toBe(1);
+	});
+
+	it('says both in the box, so neither has to be guessed', async () => {
+		mount();
+
+		const placeholder = box().getAttribute('placeholder') ?? '';
+		expect(placeholder).toContain('Cmd');
+		expect(placeholder).toContain('Ctrl');
+	});
+});

@@ -102,7 +102,10 @@
 	}
 
 	/**
-	 * Ctrl/Cmd+Enter sends; plain Enter is a newline.
+	 * Cmd+Enter or Ctrl+Enter sends; plain Enter is a newline.
+	 *
+	 * Both, always: the same person uses a Mac and a Linux box, and a control
+	 * that works on one of their machines is a control they stop trusting.
 	 *
 	 * A reply is markdown and often several lines, so Enter must not submit — but
 	 * a keyboard-driven owner should not have to reach for the mouse either.
@@ -177,7 +180,7 @@
 					bind:value={draft}
 					{onkeydown}
 					rows="3"
-					placeholder="Markdown. Ctrl+Enter sends."
+					placeholder="Markdown. Cmd/Ctrl+Enter sends."
 					class="w-full rounded border border-border-subtle bg-surface px-2 py-1.5 text-sm text-content"
 				></textarea>
 			</label>

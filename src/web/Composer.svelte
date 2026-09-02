@@ -69,7 +69,7 @@
 	}
 
 	/**
-	 * Ctrl/Cmd+Enter sends; plain Enter is a newline.
+	 * Cmd+Enter or Ctrl+Enter sends; plain Enter is a newline.
 	 *
 	 * The same way round as the reply box, and for the same reason: this is
 	 * markdown that often runs to a paragraph, and Enter submitting would cut
@@ -117,7 +117,7 @@
 				bind:value={text}
 				{onkeydown}
 				rows="2"
-				placeholder="Say something to your agents. Markdown. Ctrl+Enter posts."
+				placeholder="Say something to your agents. Markdown. Cmd/Ctrl+Enter posts."
 				class="w-full min-w-0 rounded border border-border-subtle bg-surface px-2 py-1.5 text-sm text-content"
 			></textarea>
 		</label>
