@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { Threads, type ThreadsOptions } from './threads.svelte';
-import { FakeStream, aMessage, fakeMessagesApi } from './testing';
+import { FakeStream, aMessage, anAck, fakeMessagesApi } from './testing';
 
 /**
  * The thread store, driven the way the server drives it: a read, then events.
@@ -179,5 +179,86 @@ describe('the connection', () => {
 
 		expect(store.for('u1')).toHaveLength(1);
 		expect(store.status).toBe('offline');
+	});
+});
+
+/**
+ * Acknowledgements (migration 013) ride in the same read as the messages, so
+ * the store's job is only to hand each message its own — and to hear the event
+ * that changes them, which is the half a store like this usually forgets.
+ */
+describe('what agents have said without words', () => {
+	it('hands each message its own acknowledgements', async () => {
+		api = fakeMessagesApi({
+			seq: 7,
+			messages: [onCard, onOther],
+			acks: [anAck({ id: 'ack1', messageId: 'm1', seq: 7, state: 'thinking' })]
+		});
+		const store = threads();
+		store.start();
+		await api.settle();
+
+		expect(store.acksFor('m1')).toMatchObject([{ state: 'thinking' }]);
+		expect(store.acksFor('m2')).toEqual([]);
+	});
+
+	it('refetches when an agent acknowledges something, with no reload', async () => {
+		const store = threads();
+		store.start();
+		await api.settle();
+		expect(store.acksFor('m1')).toEqual([]);
+
+		api.acknowledge(anAck({ id: 'ack1', messageId: 'm1', seq: 7, state: 'thinking' }));
+		stream.emit('ack.updated', {
+			seq: 7,
+			payload: {
+				ackId: 'ack1',
+				agentId: 'a1',
+				messageId: 'm1',
+				taskId: null,
+				state: 'thinking'
+			}
+		});
+		await api.settle();
+
+		expect(store.acksFor('m1')).toMatchObject([{ state: 'thinking' }]);
+	});
+
+	it('follows a revision rather than keeping both states', async () => {
+		api = fakeMessagesApi({
+			seq: 7,
+			messages: [onCard],
+			acks: [anAck({ id: 'ack1', messageId: 'm1', seq: 7, state: 'thinking' })]
+		});
+		const store = threads();
+		store.start();
+		await api.settle();
+
+		api.acknowledge(anAck({ id: 'ack1', messageId: 'm1', seq: 8, state: 'done' }));
+		stream.emit('ack.updated', {
+			seq: 8,
+			payload: { ackId: 'ack1', agentId: 'a1', messageId: 'm1', taskId: null, state: 'done' }
+		});
+		await api.settle();
+
+		expect(store.acksFor('m1')).toMatchObject([{ state: 'done' }]);
+	});
+
+	it('drops an acknowledgement the server has stopped sending', async () => {
+		api = fakeMessagesApi({
+			seq: 7,
+			messages: [onCard],
+			acks: [anAck({ id: 'ack1', messageId: 'm1', seq: 7 })]
+		});
+		const store = threads();
+		store.start();
+		await api.settle();
+
+		// A document with no acks is the server saying there are none, not saying
+		// nothing about them.
+		api = fakeMessagesApi({ seq: 8, messages: [onCard] });
+		store.hydrate(api.snapshot());
+
+		expect(store.acksFor('m1')).toEqual([]);
 	});
 });

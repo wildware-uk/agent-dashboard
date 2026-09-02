@@ -1,5 +1,12 @@
 import { describe, expect, it } from 'vitest';
-import { DirectLink, EVENT_TYPES, SharedStream, type StreamMessage } from './stream';
+import {
+	DirectLink,
+	EVENT_TYPES,
+	SharedStream,
+	type Link,
+	type LinkHandlers,
+	type StreamMessage
+} from './stream';
 import { Presence } from './presence.svelte';
 import { Timeline } from './timeline.svelte';
 import { FakeStream, aLiveAgent, aProject, anUpdate, fakeAgentsApi, fakeApi } from './testing';
@@ -179,6 +186,29 @@ describe('when a consumer unmounts', () => {
 
 		expect(opened).toEqual(['/api/stream', '/api/stream?last_event_id=12']);
 	});
+
+	/**
+	 * A restart rewinds the server, and the cursor has to rewind with it.
+	 *
+	 * `seq` lives in the server's memory and is never persisted, so a redeployed
+	 * process issues 1, 2, 3 again. A hub that only ever raised its cursor would
+	 * keep asking to resume from a seq that server has not reached — answered
+	 * with `resync` every single time, on every reconnect, for as long as the tab
+	 * stayed open.
+	 */
+	it('rewinds to the seq a resync states, so a restarted server is resumable', () => {
+		const { stream, streams, opened } = hub();
+		const first = stream.subscribe(consumer(['update.created', 'resync']).spec);
+		streams[0].emit('update.created', { seq: 41 });
+
+		// The server came back with its bus at zero and said so.
+		streams[0].emit('resync', { seq: 0 });
+		first.close();
+
+		stream.subscribe(consumer().spec);
+
+		expect(opened).toEqual(['/api/stream', '/api/stream']);
+	});
 });
 
 describe('joining a stream that is already running', () => {
@@ -346,5 +376,85 @@ describe('the two stores the shell mounts', () => {
 
 		expect(timelineApi.calls).toEqual(['/api/snapshot?limit=50']);
 		expect(agentsApi.calls).toEqual(['/api/snapshot/agents']);
+	});
+});
+
+/**
+ * Waking a tab that may have been asleep (design §4).
+ *
+ * The bug: a backgrounded tab can lose its connection without the page ever
+ * being run to hear about it, so `EventSource` never notices and never
+ * reconnects. It wakes believing it is connected and stays silent until somebody
+ * reloads.
+ */
+describe('revive', () => {
+	function hub() {
+		const link = {
+			connected: true,
+			starts: 0,
+			stops: 0,
+			handlers: null as LinkHandlers | null,
+			start(handlers: LinkHandlers) {
+				this.starts += 1;
+				this.handlers = handlers;
+			},
+			stop() {
+				this.stops += 1;
+			}
+		};
+		const stream = new SharedStream(link as unknown as Link);
+		const seen: string[] = [];
+		stream.subscribe({
+			types: ['update.created', 'resync'],
+			listener: (message) => seen.push(message.type)
+		});
+		return { link, stream, seen };
+	}
+
+	it('tells every store to refetch, using the frame they already handle', () => {
+		const { stream, seen } = hub();
+		seen.length = 0;
+
+		stream.revive();
+
+		expect(seen).toEqual(['resync']);
+	});
+
+	it('replaces the socket when asked, resuming rather than starting over', () => {
+		const { link, stream } = hub();
+		const before = link.starts;
+
+		stream.revive({ reconnect: true });
+
+		expect(link.stops).toBe(1);
+		expect(link.starts).toBe(before + 1);
+	});
+
+	it('leaves a healthy socket alone when it is only catching up', () => {
+		const { link, stream } = hub();
+		const before = link.starts;
+
+		stream.revive();
+
+		expect(link.stops).toBe(0);
+		expect(link.starts).toBe(before);
+	});
+
+	it('does nothing at all when no store is listening', () => {
+		const link = { connected: true, start() {}, stop() {} };
+		const stream = new SharedStream(link as unknown as Link);
+
+		expect(() => stream.revive({ reconnect: true })).not.toThrow();
+	});
+
+	it('carries the tab’s cursor, so the refetch knows where it had got to', () => {
+		const { link, stream } = hub();
+		link.handlers?.frame({ type: 'update.created', data: '{}', seq: 41 });
+		const seen: string[] = [];
+		stream.subscribe({ types: ['resync'], listener: (message) => seen.push(message.lastEventId) });
+
+		stream.revive();
+
+		expect(seen).toEqual(['41']);
 	});
 });

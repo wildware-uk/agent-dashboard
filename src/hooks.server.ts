@@ -17,7 +17,12 @@
  */
 import { building } from '$app/environment';
 import { assertBodyLimitAllowsUploads, assertClientAddressTrustworthy, loadConfig } from '$config';
-import { startMediaSweeper, startPresenceSweeper, startRequestSweeper } from '$domain';
+import {
+	startMediaSweeper,
+	startPresenceSweeper,
+	startRequestPusher,
+	startRequestSweeper
+} from '$domain';
 import { startDerivativeWorker } from '$media';
 
 assertClientAddressTrustworthy(process.env);
@@ -44,6 +49,15 @@ if (!building) startPresenceSweeper();
 // nobody is holding out of the banner. Same shape as above: its own database
 // handle per tick, failures logged rather than thrown.
 if (!building) startRequestSweeper();
+
+// A request is the one thing that can happen while nobody is looking at the
+// dashboard: the agent has stopped, and only the owner can start it again. This
+// subscribes to `request.created` and sends a Web Push notification, which is
+// the only channel that reaches a closed tab or a phone in a pocket (design §7).
+// It is a no-op unless a VAPID keypair is configured, it never awaits anything
+// on the publishing path, and a push service that refuses is logged rather than
+// thrown — a notification is a nudge, and the request itself is already stored.
+if (!building) startRequestPusher();
 
 // Uploads happen before the update that references them, so an agent that
 // crashes in between leaves bytes on disk that nothing will ever point at. This

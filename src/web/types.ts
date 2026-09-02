@@ -15,7 +15,33 @@
 /** The four card colours (design §7). */
 export type UpdateLevel = 'info' | 'success' | 'warn' | 'error';
 
+/** Whether an update can wait. A different axis from its level (design §7). */
+export type UpdatePriority = 'low' | 'medium' | 'high';
+
 export type ProjectStatus = 'active' | 'archived';
+
+/**
+ * Per-project styling (design §7).
+ *
+ * The two colours are `#rrggbb` literals — the server refuses anything else, and
+ * `./theme.ts` refuses it again before writing a `style` attribute. Everything
+ * else a themed page needs (readable text, borders, raised surfaces) is derived
+ * from the background rather than stated here.
+ */
+export type ProjectTheme = {
+	background?: string;
+	accent?: string;
+	/** A media id, served from this deployment. Never an external URL. */
+	logoMediaId?: string;
+	/** Show the logo instead of the name. The name becomes the image's alt text. */
+	logoReplacesName?: boolean;
+};
+
+/** One column of a project's task board (design §7). */
+export type BoardColumn = { title: string; states: TaskState[] };
+
+/** How the owner wants a project's tasks laid out, or `null` for the default. */
+export type ProjectBoard = { columns: BoardColumn[] };
 
 /** A project as the sidebar renders it. */
 export type ProjectView = {
@@ -28,6 +54,10 @@ export type ProjectView = {
 	pinned: boolean;
 	createdAt: number;
 	updatedAt: number;
+	/** The project's own styling, or `null` for the dashboard's (design §7). */
+	theme?: ProjectTheme | null;
+	/** The board's columns, or `null` for the default three (design §7). */
+	board?: ProjectBoard | null;
 };
 
 /** Media a card can carry (design §3, §6). */
@@ -82,9 +112,36 @@ export type UpdateView = {
 	title: string | null;
 	body: string;
 	level: UpdateLevel;
+	/** How much this needs the owner now (design §7). `medium` unless said. */
+	priority?: UpdatePriority;
 	pinned: boolean;
 	createdAt: number;
 	deletedAt: number | null;
+	/**
+	 * When the posting agent last corrected it (design §3).
+	 *
+	 * Optional for the same reason `media` below is: a card renders without it,
+	 * and a spec that builds one from three fields should not have to say "never
+	 * edited" to do so.
+	 */
+	editedAt?: number | null;
+	/**
+	 * The public link on this card, if the owner made one (design §7, §8).
+	 *
+	 * Present only when the card is shared. Never the token itself: only its HMAC
+	 * is stored, so the URL exists once, in the response to the call that minted
+	 * it (`src/domain/shares.ts`).
+	 */
+	/** The task this update is progress on, if any (design §7). */
+	taskId?: string | null;
+	/**
+	 * When the owner last read this card's thread (migration 015).
+	 *
+	 * `null` or absent means never, which is what keeps a card in "Recent
+	 * replies" while its conversation is unread.
+	 */
+	repliesSeenAt?: number | null;
+	share?: { views: number; sharedAt: number };
 	/**
 	 * The media grid's contents, in upload order (design §7).
 	 *
@@ -97,27 +154,36 @@ export type UpdateView = {
 };
 
 /**
- * The five shapes an owner request takes (design §5).
+ * The shapes an owner request takes (design §5).
  *
  * Re-declared here rather than imported from `$domain`, for the reason at the
  * top of this file: this module ships to the browser. `src/web/requests.test.ts`
  * pins the list against the server's own.
  */
-export type RequestKind = 'text' | 'confirm' | 'buttons' | 'choice' | 'multi_choice';
+export type RequestKind = 'text' | 'confirm' | 'buttons' | 'choice' | 'multi_choice' | 'form';
+
+/** A `form` answer: the action taken, and the text as the owner left it. */
+export type RequestFormValue = { action: string; text: string };
 
 /** The kind-specific knobs a control reads: how to render, and what to enforce. */
 export type RequestConfig = {
 	placeholder?: string;
 	multiline?: boolean;
+	/** The starting text for `text` and `form`; the pre-picked option otherwise. */
 	default?: string;
-	/** `multi_choice`: fewest selections. `text`: shortest answer. */
+	/** `multi_choice`: fewest selections. `text` and `form`: shortest answer. */
 	min?: number;
-	/** `multi_choice`: most selections. `text`: longest answer. */
+	/** `multi_choice`: most selections. `text` and `form`: longest answer. */
 	max?: number;
+	/** `form`: what to call the editable field. */
+	label?: string;
 };
 
 /** What the owner said, typed by kind. */
-export type RequestAnswer = { kind: RequestKind; value: string | boolean | string[] };
+export type RequestAnswer = {
+	kind: RequestKind;
+	value: string | boolean | string[] | RequestFormValue;
+};
 
 /** How a request ended, or that it has not. */
 export type RequestState = 'pending' | 'answered' | 'timeout' | 'cancelled';
@@ -143,6 +209,29 @@ export type RequestView = {
 	expiresAt: number;
 	answeredAt: number | null;
 	answer: RequestAnswer | null;
+};
+
+/**
+ * One card as a public share link publishes it (design §7, §8).
+ *
+ * Deliberately not `UpdateView`. It is a separate, smaller shape so that a field
+ * added to the dashboard's card cannot start being published to anyone holding a
+ * link — anything that appears here is a decision somebody had to type. No ids
+ * that address anything, no agent id, no project slug, and no thread.
+ */
+export type SharedCardView = {
+	update: {
+		id: string;
+		title: string | null;
+		/** Markdown, authored by an agent, therefore untrusted (design §8). */
+		body: string;
+		level: UpdateLevel;
+		createdAt: number;
+		editedAt: number | null;
+	};
+	agentName: string;
+	projectName: string | null;
+	media: MediaView[];
 };
 
 /** `GET /api/snapshot/requests`: everything waiting on the owner right now. */
@@ -171,6 +260,12 @@ export type SnapshotResponse = {
 	seq: number;
 	at: string;
 	projects?: ProjectView[];
+	/**
+	 * Updates per project id that landed since the owner last opened it — the
+	 * sidebar's "new" badge. Absent from the updates-only endpoint, and a project
+	 * with nothing new is absent from the map rather than zero.
+	 */
+	unseen?: Record<string, number>;
 	updates: UpdatesPage;
 	/**
 	 * Agent id to display name, for every agent this deployment knows — the
@@ -184,6 +279,32 @@ export type SnapshotResponse = {
 	 * refetch responses carry the timeline alone.
 	 */
 	messages?: MessageView[];
+	/** The acknowledgements on those messages, in the same document as them. */
+	acks?: AckView[];
+};
+
+/**
+ * What an agent is saying about a message or a task, without words
+ * (migration 013).
+ *
+ * `thinking` is a claim about *now*, so the dashboard renders it only while
+ * that agent is online; `done` is a fact about the past and stays whatever
+ * happened to the agent afterwards.
+ */
+export type AckState = 'thinking' | 'done';
+
+export type AckView = {
+	id: string;
+	seq: number;
+	agentId: string;
+	/** Exactly one of these two is set. */
+	messageId: string | null;
+	taskId: string | null;
+	state: AckState;
+	/** When the agent first said anything about this thing. */
+	createdAt: number;
+	/** When it last changed what it was saying. */
+	updatedAt: number;
 };
 
 /** Where a task is in its life (design §3). */
@@ -210,6 +331,14 @@ export type TaskView = {
 	claimedAt: number | null;
 	doneAt: number | null;
 	result: string | null;
+	/**
+	 * When the owner sent this out to the project's agents, or `null`.
+	 *
+	 * Unassigned work is nobody's and notifies nobody; this is the owner offering
+	 * it to whoever gets there first, which is a different thing and looks
+	 * different on the board.
+	 */
+	broadcastAt?: number | null;
 };
 
 /** `GET /api/snapshot/tasks`. */
@@ -218,6 +347,8 @@ export type TasksSnapshot = {
 	seq: number;
 	at: string;
 	tasks: TaskView[];
+	/** What agents have said about these tasks (migration 013). */
+	acks?: AckView[];
 };
 
 /**
@@ -235,6 +366,14 @@ export type MessageView = {
 	projectId: string | null;
 	updateId: string | null;
 	taskId: string | null;
+	/**
+	 * The owner's own feed post this answers (migration 014).
+	 *
+	 * A message with no `updateId`, no `taskId` and no `replyTo` is a post: the
+	 * owner wrote it straight into the timeline, and it renders as a card of its
+	 * own rather than inside somebody else's thread.
+	 */
+	replyTo?: string | null;
 	author: string;
 	body: string;
 	createdAt: number;
@@ -247,4 +386,6 @@ export type MessagesSnapshot = {
 	at: string;
 	/** Oldest first: a conversation is read downwards. */
 	messages: MessageView[];
+	/** The acknowledgements on those messages (migration 013). */
+	acks?: AckView[];
 };

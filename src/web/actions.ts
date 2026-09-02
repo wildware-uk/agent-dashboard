@@ -19,6 +19,8 @@ import type {
 	MessageView,
 	ProjectStatus,
 	ProjectView,
+	RequestFormValue,
+	TaskState,
 	RequestView,
 	TaskView,
 	UpdateView
@@ -46,6 +48,13 @@ export type NewTask = {
 	title: string;
 	body?: string | null;
 	agentId?: string | null;
+	/**
+	 * Hand it to the project's agents as it is created.
+	 *
+	 * What the board's composer sends: no assignee, offered to everybody, first
+	 * to claim takes it. Refused alongside `agentId`.
+	 */
+	broadcast?: boolean;
 };
 
 /**
@@ -58,6 +67,14 @@ export type NewTask = {
 export type TaskPatch = {
 	agentId?: string | null;
 	state?: 'cancelled';
+	/**
+	 * Offer this task to the project's agents, or take it back off the wire.
+	 *
+	 * Not an assignment: an assignment names who must do it, this says whoever
+	 * gets there first. The server refuses more than one of the three at a time,
+	 * so a caller sends exactly one field.
+	 */
+	broadcast?: boolean;
 };
 
 /**
@@ -74,6 +91,13 @@ export type NewMessage = {
 	update?: string;
 	task?: string;
 	project?: string;
+	/**
+	 * The owner's own feed post being replied to (migration 014).
+	 *
+	 * A post anchors to nothing else — it is the thing being discussed — so a
+	 * reply names it directly. Exactly one anchor, or none for a project note.
+	 */
+	replyTo?: string;
 };
 
 /** The fields the owner may change about a project (design §7). */
@@ -83,6 +107,23 @@ export type ProjectPatch = {
 	slug?: string;
 	status?: ProjectStatus;
 	pinned?: boolean;
+	/**
+	 * Per-project styling (design §7). Merged field by field with what the project
+	 * already has; `null` clears the whole theme.
+	 */
+	theme?: {
+		background?: string | null;
+		accent?: string | null;
+		logoMediaId?: string | null;
+		logoReplacesName?: boolean | null;
+	} | null;
+	/**
+	 * The task board's columns (design §7).
+	 *
+	 * Replaced wholesale rather than merged: a board is an ordered list and the
+	 * caller always sends the arrangement it wants. `null` restores the default.
+	 */
+	board?: { columns: { title: string; states: TaskState[] }[] } | null;
 };
 
 /**
@@ -113,6 +154,20 @@ export type OwnerActions = {
 	deleteUpdate(id: string): Promise<UpdateView>;
 	createTask(input: NewTask): Promise<TaskView>;
 	patchTask(id: string, patch: TaskPatch): Promise<TaskView>;
+	/**
+	 * Record that the owner has opened a project, clearing its "new" badge.
+	 *
+	 * Fire-and-forget from the caller's point of view — the badge is a
+	 * convenience, and a failed stamp costs a count that clears on the next
+	 * visit rather than anything the owner has to redo.
+	 */
+	markProjectSeen(reference: string): Promise<ProjectView>;
+	/**
+	 * Record that the owner has read one card's thread (migration 015).
+	 *
+	 * What lets a card leave "Recent replies" and drop back into its day.
+	 */
+	markRepliesSeen(id: string): Promise<UpdateView>;
 	postMessage(input: NewMessage): Promise<MessageView>;
 	/**
 	 * Answer an agent's request (design §5).
@@ -121,7 +176,20 @@ export type OwnerActions = {
 	 * a list — and is checked against the request server-side. The browser does
 	 * not get to decide what a valid answer is, so nothing here reshapes it.
 	 */
-	answerRequest(id: string, value: string | boolean | string[]): Promise<RequestView>;
+	answerRequest(
+		id: string,
+		value: string | boolean | string[] | RequestFormValue
+	): Promise<RequestView>;
+	/**
+	 * Publish one card and return the link (design §7, §8).
+	 *
+	 * The URL comes back exactly once, from this call. The server keeps only an
+	 * HMAC of the token, so nothing can hand it over again — sharing a card that
+	 * is already shared mints a new link and retires the old one.
+	 */
+	shareUpdate(id: string): Promise<{ url: string }>;
+	/** Stop the link working. `revoked` is false if there was nothing live. */
+	revokeShare(id: string): Promise<{ revoked: boolean }>;
 	/** Dismiss it without answering: the agent is told `cancelled`. */
 	dismissRequest(id: string): Promise<RequestView>;
 };
@@ -162,6 +230,27 @@ export function ownerActions(request: Requester = defaultRequest): OwnerActions 
 		return payload?.[key] as never;
 	}
 
+	/**
+	 * The same request, returning the whole body.
+	 *
+	 * {@link send} plucks one row out by key, which is right for every endpoint
+	 * that answers with a row. The share endpoints do not: one answers with a URL
+	 * that exists nowhere else, the other with whether anything was live.
+	 */
+	async function json<Result>(url: string, method: string): Promise<Result> {
+		let response: Response;
+		try {
+			response = await request(url, { method, headers: { accept: 'application/json' } });
+		} catch {
+			throw new ActionError('unreachable', 'Could not reach the server. Try again.', 0);
+		}
+
+		const payload = await readJson(response);
+		if (!response.ok) throw failure(response.status, payload);
+
+		return payload as Result;
+	}
+
 	return {
 		createProject: (input) => send('project', '/api/projects', 'POST', input),
 		patchProject: (reference, patch) =>
@@ -171,10 +260,19 @@ export function ownerActions(request: Requester = defaultRequest): OwnerActions 
 		deleteUpdate: (id) => send('update', `/api/updates/${encodeURIComponent(id)}`, 'DELETE'),
 		createTask: (input) => send('task', '/api/tasks', 'POST', input),
 		patchTask: (id, patch) => send('task', `/api/tasks/${encodeURIComponent(id)}`, 'PATCH', patch),
+		markProjectSeen: (reference) =>
+			send('project', `/api/projects/${encodeURIComponent(reference)}/seen`, 'POST'),
+		markRepliesSeen: (id) =>
+			send('update', `/api/updates/${encodeURIComponent(id)}/replies-seen`, 'POST'),
 		postMessage: (input) => send('message', '/api/messages', 'POST', input),
 		answerRequest: (id, value) =>
 			send('request', `/api/requests/${encodeURIComponent(id)}/answer`, 'POST', { value }),
-		dismissRequest: (id) => send('request', `/api/requests/${encodeURIComponent(id)}`, 'DELETE')
+		dismissRequest: (id) => send('request', `/api/requests/${encodeURIComponent(id)}`, 'DELETE'),
+		// Not through `send`: these two answer with their own shapes rather than
+		// with a row, because a link is not a row and "was one live" is not one
+		// either.
+		shareUpdate: (id) => json(`/api/updates/${encodeURIComponent(id)}/share`, 'POST'),
+		revokeShare: (id) => json(`/api/updates/${encodeURIComponent(id)}/share`, 'DELETE')
 	};
 }
 

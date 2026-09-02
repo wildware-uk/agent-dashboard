@@ -18,11 +18,14 @@
 	 * disabled (design §8). An agent replying with `<script>` gets a `<script>`
 	 * on the screen, not one in the owner's browser.
 	 */
+	import Ack from './Ack.svelte';
 	import Markdown from './Markdown.svelte';
 	import { actionMessage } from './actions';
 	import { agentLabel } from './avatar';
-	import { timeLabel } from './days';
-	import type { MessageView } from './types';
+	import { onMount } from 'svelte';
+	import { absoluteLabel, relativeLabel } from './days';
+	import { clock } from './clock.svelte';
+	import type { AckView, MessageView } from './types';
 
 	let {
 		/** The thread, oldest first. Empty is the common case. */
@@ -30,11 +33,23 @@
 		/** Post a reply. Resolves when the server has it; rejects with a message. */
 		onreply,
 		/** Agent id to display name, as the shell resolves it for the cards. */
-		agentNames = {}
+		agentNames = {},
+		/**
+		 * What agents have said about each message, by message id (migration 013).
+		 *
+		 * This is what stops a reply sitting there looking unread: the tick or the
+		 * "is thinking…" goes under the line it answers, not somewhere else on the
+		 * card.
+		 */
+		acks = {},
+		/** Ids of the agents beating right now, so a stale "thinking" is not shown. */
+		onlineIds = []
 	}: {
 		messages?: MessageView[];
 		onreply: (body: string) => Promise<void>;
 		agentNames?: Record<string, string>;
+		acks?: Record<string, AckView[]>;
+		onlineIds?: string[];
 	} = $props();
 
 	let open = $state(false);
@@ -98,22 +113,51 @@
 			void send();
 		}
 	}
+
+	/** The page's one ticking clock, so "4m ago" keeps up (design §7). */
+	const ticking = clock();
+	onMount(() => ticking.hold());
 </script>
 
 <section data-thread class="flex min-w-0 flex-col gap-2" aria-label="Replies">
 	{#if messages.length > 0}
-		<ol class="flex min-w-0 flex-col gap-2 border-l-2 border-border-subtle pl-3">
+		<!--
+			Each reply is its own box rather than a run of paragraphs down one shared
+			rail (#feedback: "more visual clarity between replies").
+			
+			The rail was cheap and read badly: two replies of three lines each ran
+			together into six lines with a name buried in the middle, and the longer
+			a thread got the worse it was. A surface of its own gives every reply a
+			top and a bottom, which is what the eye is actually looking for.
+
+			The owner's replies carry an accent rail and the agents' do not — the
+			same signal `PostCard` uses for a post they wrote, so "mine" means one
+			thing everywhere on the page rather than one thing per component.
+		-->
+		<ol class="flex min-w-0 flex-col gap-1.5">
 			{#each messages as message (message.id)}
-				<li data-message class="flex min-w-0 flex-col gap-0.5">
+				<li
+					data-message
+					data-mine={message.author === 'human' ? 'true' : undefined}
+					class="flex min-w-0 flex-col gap-1 rounded-md border border-border-subtle bg-surface px-2.5 py-1.5 {message.author ===
+					'human'
+						? 'border-l-2 border-l-accent'
+						: ''}"
+				>
 					<p class="flex flex-wrap items-baseline gap-x-2 text-xs">
 						<span data-message-author class="font-medium text-content">
 							{speaker(message.author)}
 						</span>
-						<time class="text-content-muted" datetime={new Date(message.createdAt).toISOString()}>
-							{timeLabel(message.createdAt)}
+						<time
+							class="ml-auto text-content-muted"
+							datetime={new Date(message.createdAt).toISOString()}
+							title={absoluteLabel(message.createdAt)}
+						>
+							{relativeLabel(message.createdAt, ticking.now)}
 						</time>
 					</p>
 					<Markdown body={message.body} />
+					<Ack acks={acks[message.id] ?? []} {agentNames} {onlineIds} />
 				</li>
 			{/each}
 		</ol>

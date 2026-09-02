@@ -4,6 +4,7 @@ import { insertAgent } from './agents';
 import { insertProject } from './projects';
 import { insertSession } from './sessions';
 import {
+	editUpdate,
 	findUpdateById,
 	insertUpdate,
 	listUpdates,
@@ -130,5 +131,55 @@ describe('setUpdatePinned', () => {
 		expect(setUpdatePinned(db, update.id, true)).toMatchObject({ pinned: true });
 		expect(setUpdatePinned(db, update.id, false)).toMatchObject({ pinned: false });
 		expect(setUpdatePinned(db, 'nope', true)).toBeUndefined();
+	});
+});
+
+describe('editUpdate', () => {
+	const post = (over: Record<string, unknown> = {}) =>
+		insertUpdate(db, { projectId, agentId, body: 'deploying', ...over });
+
+	it('writes only the fields the edit names, and always the stamp', () => {
+		const update = post({ title: 'release', level: 'warn' });
+
+		const edited = editUpdate(db, update.id, { body: 'deployed', editedAt: 7000 });
+
+		expect(edited).toMatchObject({
+			body: 'deployed',
+			title: 'release',
+			level: 'warn',
+			editedAt: 7000
+		});
+	});
+
+	it('clears a title when the edit passes null', () => {
+		const update = post({ title: 'release' });
+
+		expect(editUpdate(db, update.id, { title: null, editedAt: 1 })?.title).toBeNull();
+	});
+
+	it('leaves created_at and pinned where they were', () => {
+		const update = post({ createdAt: 500 });
+		setUpdatePinned(db, update.id, true);
+
+		expect(editUpdate(db, update.id, { body: 'x', editedAt: 9000 })).toMatchObject({
+			createdAt: 500,
+			pinned: true
+		});
+	});
+
+	it('will not touch a soft-deleted row', () => {
+		const update = post();
+		softDeleteUpdate(db, update.id);
+
+		expect(editUpdate(db, update.id, { body: 'back', editedAt: 1 })).toBeUndefined();
+		expect(findUpdateById(db, update.id)?.body).toBe('deploying');
+	});
+
+	it('says nothing happened for an id that is not there', () => {
+		expect(editUpdate(db, 'missing', { body: 'x', editedAt: 1 })).toBeUndefined();
+	});
+
+	it('starts every update unedited', () => {
+		expect(post().editedAt).toBeNull();
 	});
 });

@@ -182,6 +182,24 @@ function fakeServer(page: Page) {
 	 * presence against its own clock — a fixed timestamp would be expired before
 	 * the rail ever painted it.
 	 */
+	/**
+	 * The snapshot endpoints this shell reads that these tests do not drive.
+	 *
+	 * `**\/api/snapshot**` catches every one of them, so a document shaped like the
+	 * timeline's would reach the request store and the task store as *their*
+	 * answer — and a store handed a payload with its list missing has an undefined
+	 * list, which is a crash in whichever component reads it next. The shell reads
+	 * the request queue itself now (the sidebar's counts), so that crash is no
+	 * longer contained to one region: it takes the page.
+	 *
+	 * Empty is the honest answer here. A test that wants a request or a task on
+	 * screen drives the real server, in `requests.e2e.ts` and `smoke.e2e.ts`.
+	 */
+	const emptyList = (route: Route, key: 'requests' | 'tasks') => {
+		const body = JSON.stringify({ seq, at: new Date().toISOString(), [key]: [] });
+		return route.fulfill({ status: 200, contentType: 'application/json', body });
+	};
+
 	const agents = (route: Route) => {
 		const now = Date.now();
 		const body = JSON.stringify({
@@ -205,7 +223,10 @@ function fakeServer(page: Page) {
 		async install() {
 			await page.route('**/api/snapshot**', (route) => {
 				const path = new URL(route.request().url()).pathname;
-				return path.startsWith('/api/snapshot/agents') ? agents(route) : snapshot(route);
+				if (path.startsWith('/api/snapshot/agents')) return agents(route);
+				if (path.startsWith('/api/snapshot/requests')) return emptyList(route, 'requests');
+				if (path.startsWith('/api/snapshot/tasks')) return emptyList(route, 'tasks');
+				return snapshot(route);
 			});
 			await page.route('**/api/stream**', async (route) => {
 				// Each connection reads the script from the start, so one scripted
@@ -453,5 +474,54 @@ test.describe('the authenticated shell', () => {
 			expect(surface).not.toBe('rgba(0, 0, 0, 0)');
 			expect(await page.evaluate(() => getComputedStyle(document.body).color)).not.toBe(surface);
 		});
+	});
+});
+
+/**
+ * Mobile Safari's focus zoom (#feedback: "stop the site zooming in on mobile").
+ *
+ * iOS zooms the page in whenever a focused form control has a font-size under
+ * 16px, and every control here is `text-sm` — so tapping the composer shoved
+ * the dashboard sideways and the owner had to pinch back out. The fix is a
+ * `pointer: coarse` rule in `app.css`, which is why this runs in a touch
+ * context: without `hasTouch` the media query does not match and the assertion
+ * would pass against desktop CSS while the phone stayed broken.
+ */
+test.describe('on a touch screen', () => {
+	test.use({ viewport: { width: 375, height: 667 }, hasTouch: true, isMobile: true });
+
+	test('gives every box a font iOS will not zoom in on', async ({ page }) => {
+		const server = fakeServer(page);
+		await server.install();
+		server.setUpdates([{ id: 'u1', seq: 1, body: 'a phone-sized update' }]);
+
+		await signIn(page);
+
+		// Every control, not just the composer: the zoom happens on whichever one
+		// is tapped, so one at 14px is enough to bring it back.
+		const sizes = await page.evaluate(() =>
+			[...document.querySelectorAll('input, select, textarea')].map((element) =>
+				Number.parseFloat(getComputedStyle(element).fontSize)
+			)
+		);
+
+		expect(sizes.length).toBeGreaterThan(0);
+		expect(Math.min(...sizes)).toBeGreaterThanOrEqual(16);
+	});
+
+	test('keeps pinch-to-zoom, which is the fix people reach for and should not', async ({
+		page
+	}) => {
+		const server = fakeServer(page);
+		await server.install();
+		await signIn(page);
+
+		// `maximum-scale=1` and `user-scalable=no` also stop the auto-zoom, by
+		// taking zoom away from everyone who needs it to read the screen at all.
+		const viewport = await page.evaluate(
+			() => document.querySelector('meta[name="viewport"]')?.getAttribute('content') ?? ''
+		);
+
+		expect(viewport).not.toMatch(/maximum-scale|user-scalable/);
 	});
 });

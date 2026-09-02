@@ -2,7 +2,7 @@ import { render } from 'vitest-browser-svelte';
 import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import TimelineView from './Timeline.svelte';
 import { Timeline } from './timeline.svelte';
-import { FakeStream, anUpdate, fakeActions, fakeApi } from './testing';
+import { FakeStream, aMessage, anAck, aRequest, anUpdate, fakeActions, fakeApi } from './testing';
 
 /**
  * The live behaviour of the centre column, in a real browser with a real
@@ -239,5 +239,390 @@ describe('pinned updates', () => {
 
 		const cards = document.querySelectorAll('[data-update-id]');
 		expect(document.querySelectorAll('[data-update-actions]')).toHaveLength(cards.length);
+	});
+});
+
+/**
+ * Requests at the top of the feed (design §7).
+ *
+ * They are handed in already scoped — the shell decides which of the owner's
+ * requests belong on this feed — so what these specs pin down is placement and
+ * nothing else: above the pinned section, above the day groups, and never
+ * rendered without an action client to answer them with.
+ */
+describe('requests waiting on the owner', () => {
+	const acts = () => fakeActions().actions;
+
+	it('puts them above the pinned section and the day groups', async () => {
+		mount(
+			[
+				anUpdate({ id: 'pinned', seq: 4, createdAt: day, pinned: true }),
+				anUpdate({ id: 'plain', seq: 3, createdAt: day })
+			],
+			{ requests: [aRequest({ id: 'r1', question: 'Push to main?' })], actions: acts() }
+		);
+
+		const headings = [...document.querySelectorAll('section h2')].map((h) => h.textContent?.trim());
+		expect(headings).toEqual(['Waiting on you', 'Pinned', 'Today']);
+	});
+
+	it('renders one card per request, in the order it was given them', async () => {
+		mount(updates(1), {
+			requests: [
+				aRequest({ id: 'r1', seq: 1, question: 'Push to main?' }),
+				aRequest({ id: 'r2', seq: 2, question: 'Which branch?' })
+			],
+			actions: acts()
+		});
+
+		const rendered = [...document.querySelectorAll('[data-request-id]')].map((card) =>
+			card.getAttribute('data-request-id')
+		);
+		expect(rendered).toEqual(['r1', 'r2']);
+	});
+
+	it('counts them once there is more than one, so none is missed', async () => {
+		const { screen } = mount(updates(1), {
+			requests: [aRequest({ id: 'r1', seq: 1 }), aRequest({ id: 'r2', seq: 2 })],
+			actions: acts()
+		});
+
+		await expect.element(screen.getByTestId('request-count')).toHaveTextContent('(2)');
+	});
+
+	it('leaves the count off when only one agent is blocked', async () => {
+		const { screen } = mount(updates(1), { requests: [aRequest()], actions: acts() });
+
+		await expect.element(screen.getByTestId('request-count')).not.toBeInTheDocument();
+	});
+
+	it('names the project on the card when the shell supplies one', async () => {
+		const { screen } = mount(updates(1), {
+			requests: [aRequest({ projectId: 'p2' })],
+			projectNames: { p2: 'Mega Merge' },
+			actions: acts()
+		});
+
+		await expect.element(screen.getByTestId('request-project')).toHaveTextContent('Mega Merge');
+	});
+
+	it('renders none of them without an action client to answer with', async () => {
+		const { screen } = mount(updates(1), { requests: [aRequest()] });
+
+		await expect.element(screen.getByTestId('request-section')).not.toBeInTheDocument();
+	});
+
+	it('is not an empty feed just because there are no updates yet', async () => {
+		const { screen } = mount([], { requests: [aRequest()], actions: acts() });
+
+		await expect.element(screen.getByTestId('request-card')).toBeInTheDocument();
+		await expect.element(screen.getByText(/Nothing here yet/)).not.toBeInTheDocument();
+	});
+});
+
+/**
+ * Cards with a conversation on them, lifted to the top (design §7).
+ *
+ * The same shape as pinning, and for the same reason: reordering a card inside
+ * its own day group would put it at the top of Tuesday and nowhere near the top
+ * of the feed.
+ */
+describe('recent replies', () => {
+	const threadsFor = (byUpdate: Record<string, ReturnType<typeof aMessage>[]>) => ({
+		for: (updateId: string) => byUpdate[updateId] ?? [],
+		forTask: () => []
+	});
+
+	it('lifts a replied-to card above the day groups', async () => {
+		mount(
+			[
+				anUpdate({ id: 'chatty', seq: 2, createdAt: older, body: 'an older card' }),
+				anUpdate({ id: 'fresh', seq: 3, createdAt: day, body: 'a newer card' })
+			],
+			{
+				threads: threadsFor({ chatty: [aMessage({ updateId: 'chatty', createdAt: day })] })
+			}
+		);
+
+		const headings = [...document.querySelectorAll('section h2')].map((h) => h.textContent?.trim());
+		expect(headings).toEqual(['Recent replies', 'Today']);
+
+		const rendered = [...document.querySelectorAll('[data-update-id]')].map((card) =>
+			card.getAttribute('data-update-id')
+		);
+		// Lifted once, and gone from the day group it would otherwise sit in.
+		expect(rendered).toEqual(['chatty', 'fresh']);
+	});
+
+	it('orders by the newest reply, not by the card', async () => {
+		mount(
+			[
+				anUpdate({ id: 'first', seq: 3, createdAt: day }),
+				anUpdate({ id: 'second', seq: 2, createdAt: day })
+			],
+			{
+				threads: threadsFor({
+					first: [aMessage({ updateId: 'first', createdAt: day })],
+					second: [aMessage({ updateId: 'second', createdAt: day + 1_000 })]
+				})
+			}
+		);
+
+		const lifted = [
+			...document.querySelectorAll('[data-testid="replied-section"] [data-update-id]')
+		];
+		expect(lifted.map((card) => card.getAttribute('data-update-id'))).toEqual(['second', 'first']);
+	});
+
+	it('leaves a pinned card where pinning already put it', async () => {
+		mount([anUpdate({ id: 'pinned', seq: 3, createdAt: day, pinned: true })], {
+			threads: threadsFor({ pinned: [aMessage({ updateId: 'pinned', createdAt: day })] })
+		});
+
+		const headings = [...document.querySelectorAll('section h2')].map((h) => h.textContent?.trim());
+		expect(headings).toEqual(['Pinned']);
+		expect(document.querySelectorAll('[data-update-id="pinned"]')).toHaveLength(1);
+	});
+
+	it('caps the section rather than becoming most of the feed', async () => {
+		const items = Array.from({ length: 8 }, (_, index) =>
+			anUpdate({ id: `u${index}`, seq: 8 - index, createdAt: day })
+		);
+		const byUpdate = Object.fromEntries(
+			items.map((item, index) => [
+				item.id,
+				[aMessage({ updateId: item.id, createdAt: day + index })]
+			])
+		);
+
+		mount(items, { threads: threadsFor(byUpdate) });
+
+		expect(
+			document.querySelectorAll('[data-testid="replied-section"] [data-update-id]')
+		).toHaveLength(5);
+	});
+
+	it('offers no section when nothing has been replied to', async () => {
+		mount(updates(2), { threads: threadsFor({}) });
+
+		expect(document.querySelector('[data-testid="replied-section"]')).toBeNull();
+	});
+
+	it('offers no section at all without a thread store', async () => {
+		mount(updates(2));
+
+		expect(document.querySelector('[data-testid="replied-section"]')).toBeNull();
+	});
+});
+
+/**
+ * The owner's own posts, as cards in the feed (migration 014).
+ *
+ * They interleave with the agents' updates by time rather than sitting in a
+ * section of their own: "have a look at this" and the update that answers it
+ * belong next to each other, and a second timeline above the first is a second
+ * thing to read.
+ */
+describe('what the owner posted', () => {
+	const source = (
+		posts: ReturnType<typeof aMessage>[],
+		replies: ReturnType<typeof aMessage>[] = []
+	) => ({
+		for: () => [],
+		forTask: () => [],
+		posts: () => posts,
+		repliesTo: (id: string) => replies.filter((reply) => reply.replyTo === id)
+	});
+
+	const post = (over: Record<string, unknown> = {}) =>
+		aMessage({
+			id: 'post1',
+			updateId: null,
+			taskId: null,
+			replyTo: null,
+			author: 'human',
+			body: 'have a look at the migration',
+			createdAt: day,
+			...over
+		});
+
+	it('renders a post as a card, attributed to the owner', async () => {
+		const { screen } = mount([anUpdate({ id: 'u1', seq: 2, createdAt: day })], {
+			threads: source([post()])
+		});
+
+		await expect.element(screen.getByText('have a look at the migration')).toBeInTheDocument();
+		expect(document.querySelector('[data-post="post1"]')).not.toBeNull();
+		await expect.element(screen.getByText('You')).toBeInTheDocument();
+	});
+
+	it('interleaves it with the updates by time, newest first', async () => {
+		mount(
+			[
+				anUpdate({ id: 'older', seq: 1, createdAt: day - 2_000, body: 'an older card' }),
+				anUpdate({ id: 'newer', seq: 2, createdAt: day, body: 'a newer card' })
+			],
+			{ threads: source([post({ createdAt: day - 1_000 })]) }
+		);
+
+		const order = [...document.querySelectorAll('[data-update-id], [data-post]')].map(
+			(card) => card.getAttribute('data-update-id') ?? card.getAttribute('data-post')
+		);
+		expect(order).toEqual(['newer', 'post1', 'older']);
+	});
+
+	it('shows the replies under it', async () => {
+		const { screen } = mount([], {
+			threads: source(
+				[post()],
+				[aMessage({ id: 'r1', replyTo: 'post1', author: 'agent:a1', body: 'on it' })]
+			),
+			agentNames: { a1: 'scout' }
+		});
+
+		await expect.element(screen.getByText('on it')).toBeInTheDocument();
+	});
+
+	it('renders nothing extra when the owner has posted nothing', async () => {
+		mount([anUpdate({ id: 'u1', seq: 2, createdAt: day })], { threads: source([]) });
+
+		expect(document.querySelector('[data-post]')).toBeNull();
+	});
+});
+
+/**
+ * Marking a conversation read (migration 015).
+ *
+ * Without it "Recent replies" only ever grew, and the cards riding above the
+ * timeline became the ones that had been ignored the longest.
+ */
+describe('finishing with a conversation', () => {
+	const chatty = () => anUpdate({ id: 'chatty', seq: 2, createdAt: day, body: 'a card' });
+	const threadsFor = (byUpdate: Record<string, ReturnType<typeof aMessage>[]>) => ({
+		for: (updateId: string) => byUpdate[updateId] ?? [],
+		forTask: () => []
+	});
+
+	it('offers a way to be done with one, and calls it with that card', async () => {
+		const acts = fakeActions();
+		const { screen } = mount([chatty()], {
+			threads: threadsFor({ chatty: [aMessage({ updateId: 'chatty', createdAt: day })] }),
+			actions: acts.actions
+		});
+
+		await screen.getByTestId('mark-replies-read').click();
+
+		expect(acts.calls).toEqual([{ name: 'markRepliesSeen', args: ['chatty'] }]);
+	});
+
+	it('marks the whole section read in one click', async () => {
+		const acts = fakeActions();
+		const items = [
+			anUpdate({ id: 'a', seq: 3, createdAt: day }),
+			anUpdate({ id: 'b', seq: 2, createdAt: day })
+		];
+		const { screen } = mount(items, {
+			threads: threadsFor({
+				a: [aMessage({ updateId: 'a', createdAt: day })],
+				b: [aMessage({ updateId: 'b', createdAt: day + 1 })]
+			}),
+			actions: acts.actions
+		});
+
+		await screen.getByTestId('mark-all-replies-read').click();
+
+		expect(acts.calls.map((call) => call.args[0]).sort()).toEqual(['a', 'b']);
+	});
+
+	it('drops a card back into its day once the owner has read it', async () => {
+		const read = anUpdate({ id: 'chatty', seq: 2, createdAt: day, repliesSeenAt: day + 5_000 });
+
+		mount([read], {
+			threads: threadsFor({ chatty: [aMessage({ updateId: 'chatty', createdAt: day + 1_000 })] })
+		});
+
+		expect(document.querySelector('[data-testid="replied-section"]')).toBeNull();
+		const headings = [...document.querySelectorAll('section h2')].map((h) => h.textContent?.trim());
+		expect(headings).toEqual(['Today']);
+	});
+
+	it('lifts it again when a newer reply lands', async () => {
+		const read = anUpdate({ id: 'chatty', seq: 2, createdAt: day, repliesSeenAt: day });
+
+		mount([read], {
+			threads: threadsFor({ chatty: [aMessage({ updateId: 'chatty', createdAt: day + 9_000 })] })
+		});
+
+		expect(document.querySelector('[data-testid="replied-section"]')).not.toBeNull();
+	});
+
+	it('offers no dismissal at all without a server behind it', async () => {
+		mount([chatty()], {
+			threads: threadsFor({ chatty: [aMessage({ updateId: 'chatty', createdAt: day })] })
+		});
+
+		expect(document.querySelector('[data-testid="mark-replies-read"]')).toBeNull();
+		expect(document.querySelector('[data-testid="mark-all-replies-read"]')).toBeNull();
+	});
+});
+
+/**
+ * Acknowledging what the owner posted (#feedback: "allow agents to acknowledge
+ * user posted messages, just like they can comments").
+ *
+ * The tool already accepted a post's id — an owner post *is* a message — but
+ * the card never rendered the answer, so an agent could say "on it" into a void.
+ */
+describe('an agent acknowledging a post', () => {
+	const post = () =>
+		aMessage({
+			id: 'post1',
+			updateId: null,
+			taskId: null,
+			replyTo: null,
+			author: 'human',
+			body: 'have a look at the migration',
+			createdAt: day
+		});
+
+	it('shows the tick on the post itself, under what the owner said', async () => {
+		const { screen } = mount([], {
+			threads: {
+				for: () => [],
+				forTask: () => [],
+				posts: () => [post()],
+				repliesTo: () => [],
+				acksFor: (id: string) =>
+					id === 'post1' ? [anAck({ messageId: 'post1', state: 'done', agentId: 'a1' })] : []
+			},
+			agentNames: { a1: 'scout' }
+		});
+
+		await expect.element(screen.getByText('scout marked this done')).toBeInTheDocument();
+		expect(document.querySelector('[data-post="post1"] [data-ack]')).not.toBeNull();
+	});
+
+	it('animates a live "thinking" while that agent is online', async () => {
+		const { screen } = mount([], {
+			threads: {
+				for: () => [],
+				forTask: () => [],
+				posts: () => [post()],
+				repliesTo: () => [],
+				acksFor: () => [anAck({ messageId: 'post1', state: 'thinking', agentId: 'a1' })]
+			},
+			agentNames: { a1: 'scout' },
+			onlineIds: ['a1']
+		});
+
+		await expect.element(screen.getByText(/scout is thinking/)).toBeInTheDocument();
+	});
+
+	it('leaves the post plain when nobody has acknowledged it', async () => {
+		mount([], {
+			threads: { for: () => [], forTask: () => [], posts: () => [post()], repliesTo: () => [] }
+		});
+
+		expect(document.querySelector('[data-post="post1"] [data-ack]')).toBeNull();
 	});
 });

@@ -20,10 +20,12 @@
  */
 import {
 	isDomainError,
+	type Acknowledgement,
 	type Message,
 	type OwnerRequest,
 	type Project,
 	type RequestResult,
+	type RequestValue,
 	type Task,
 	type Update
 } from '$domain';
@@ -166,10 +168,17 @@ export function requestResult(result: RequestResult): CallToolResult {
 }
 
 /** The answer as a sentence, so the model reads it before it parses anything. */
-function describe(value: string | boolean | string[]): string {
+function describe(value: RequestValue): string {
 	if (typeof value === 'boolean') return value ? 'yes.' : 'no.';
 	if (Array.isArray(value)) {
 		return value.length === 0 ? 'nothing.' : value.map((item) => JSON.stringify(item)).join(', ');
+	}
+	// A form: the action, and whether the text still says what the agent drafted.
+	// The text itself is in `response`, which is where an agent must read it —
+	// this line is the summary, and repeating a whole Slack message in it would
+	// bury the decision the owner actually took.
+	if (typeof value === 'object') {
+		return `${JSON.stringify(value.action)} on text of ${value.text.length} characters.`;
 	}
 	return JSON.stringify(value);
 }
@@ -183,6 +192,8 @@ export type ProjectView = {
 	pinned: boolean;
 	created_at: string;
 	updated_at: string;
+	/** Per-project styling (design §7), or `null` for the dashboard's own. */
+	theme: { background?: string; accent?: string; logo_media_id?: string } | null;
 };
 
 /** A project as a tool reports it. `slug` is what `post_update` takes back. */
@@ -195,7 +206,18 @@ export function projectView(project: Project): ProjectView {
 		status: project.status,
 		pinned: project.pinned,
 		created_at: iso(project.createdAt),
-		updated_at: iso(project.updatedAt)
+		updated_at: iso(project.updatedAt),
+		theme: themeView(project.theme)
+	};
+}
+
+/** snake_case on the wire, like every other field an agent reads back. */
+function themeView(theme: Project['theme']): ProjectView['theme'] {
+	if (!theme) return null;
+	return {
+		...(theme.background ? { background: theme.background } : {}),
+		...(theme.accent ? { accent: theme.accent } : {}),
+		...(theme.logoMediaId ? { logo_media_id: theme.logoMediaId } : {})
 	};
 }
 
@@ -215,6 +237,10 @@ export type UpdateView = {
 	 */
 	body_chars: number;
 	created_at: string;
+	/** When the agent last corrected it, or `null` if it never has (design §3). */
+	edited_at: string | null;
+	/** The task this is progress on, or `null` (design §7). */
+	task_id: string | null;
 };
 
 export function updateView(update: Update): UpdateView {
@@ -227,7 +253,9 @@ export function updateView(update: Update): UpdateView {
 		level: update.level,
 		pinned: update.pinned,
 		body_chars: update.body.length,
-		created_at: iso(update.createdAt)
+		created_at: iso(update.createdAt),
+		edited_at: update.editedAt === null ? null : iso(update.editedAt),
+		task_id: update.taskId
 	};
 }
 
@@ -251,6 +279,15 @@ export type TaskView = {
 	done_at: string | null;
 	/** What the claimant reported when it finished, or `null` while it has not. */
 	result: string | null;
+	/**
+	 * True when the owner offered this task to the project's agents rather than
+	 * to one of them.
+	 *
+	 * A boolean rather than the timestamp behind it: an agent's only decision is
+	 * whether to reach for the task, and *when* it was offered is the owner's
+	 * question, not the fleet's.
+	 */
+	broadcast: boolean;
 };
 
 /** A task as a tool reports it. `id` is what `claim_task` takes back. */
@@ -265,7 +302,8 @@ export function taskView(task: Task): TaskView {
 		created_at: iso(task.createdAt),
 		claimed_at: task.claimedAt === null ? null : iso(task.claimedAt),
 		done_at: task.doneAt === null ? null : iso(task.doneAt),
-		result: task.result
+		result: task.result,
+		broadcast: task.broadcastAt !== null
 	};
 }
 
@@ -274,6 +312,8 @@ export type MessageView = {
 	project_id: string | null;
 	update_id: string | null;
 	task_id: string | null;
+	/** The owner's post this answers, for a reply on a feed post (migration 014). */
+	reply_to: string | null;
 	/** The literal `human`, or `agent:<agent_id>` (design §3). */
 	author: string;
 	/** Markdown, as it was written. */
@@ -293,8 +333,33 @@ export function messageView(message: Message): MessageView {
 		project_id: message.projectId,
 		update_id: message.updateId,
 		task_id: message.taskId,
+		reply_to: message.replyTo,
 		author: message.author,
 		body: message.body,
 		created_at: iso(message.createdAt)
+	};
+}
+
+/** An acknowledgement as a tool reports it (migration 013). */
+export type AckView = {
+	id: string;
+	/** Exactly one of these two is set: the thing that was acknowledged. */
+	message_id: string | null;
+	task_id: string | null;
+	state: string;
+	/** When the agent first said anything about this thing. */
+	created_at: string;
+	/** When it last changed what it was saying. Equal to `created_at` until it does. */
+	updated_at: string;
+};
+
+export function ackView(ack: Acknowledgement): AckView {
+	return {
+		id: ack.id,
+		message_id: ack.messageId,
+		task_id: ack.taskId,
+		state: ack.state,
+		created_at: iso(ack.createdAt),
+		updated_at: iso(ack.updatedAt)
 	};
 }

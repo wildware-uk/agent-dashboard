@@ -17,7 +17,10 @@ export const CONFIG_VARS = [
 	'PUBLIC_BASE_URL',
 	'MAX_IMAGE_BYTES',
 	'MAX_VIDEO_BYTES',
-	'HOLD_S'
+	'HOLD_S',
+	'VAPID_PUBLIC_KEY',
+	'VAPID_PRIVATE_KEY',
+	'VAPID_SUBJECT'
 ] as const;
 
 export type ConfigVar = (typeof CONFIG_VARS)[number];
@@ -32,45 +35,102 @@ const secret = (name: string) =>
 		.string({ error: `${name} is required` })
 		.min(MIN_SECRET_LENGTH, `${name} must be at least ${MIN_SECRET_LENGTH} characters`);
 
-const schema = z.object({
-	/** Root of the runtime data directory: SQLite file plus `media/`. */
-	DATA_DIR: z.string().min(1).default('data'),
+const schema = z
+	.object({
+		/** Root of the runtime data directory: SQLite file plus `media/`. */
+		DATA_DIR: z.string().min(1).default('data'),
 
-	/** argon2id hash of the owner's password. `.env.example` has the one-liner. */
-	ADMIN_PASSWORD_HASH: z
-		.string({ error: 'ADMIN_PASSWORD_HASH is required' })
-		.startsWith('$argon2id$', 'ADMIN_PASSWORD_HASH must be an argon2id hash'),
+		/** argon2id hash of the owner's password. `.env.example` has the one-liner. */
+		ADMIN_PASSWORD_HASH: z
+			.string({ error: 'ADMIN_PASSWORD_HASH is required' })
+			.startsWith('$argon2id$', 'ADMIN_PASSWORD_HASH must be an argon2id hash'),
 
-	/** Signs the owner's session cookie. */
-	SESSION_SECRET: secret('SESSION_SECRET'),
+		/** Signs the owner's session cookie. */
+		SESSION_SECRET: secret('SESSION_SECRET'),
 
-	/** HMAC key for agent tokens and upload tokens. */
-	TOKEN_SECRET: secret('TOKEN_SECRET'),
+		/** HMAC key for agent tokens and upload tokens. */
+		TOKEN_SECRET: secret('TOKEN_SECRET'),
 
-	/** Absolute public origin, used to build upload and media URLs for agents. */
-	PUBLIC_BASE_URL: z
-		.string()
-		.default('http://localhost:5173')
-		.refine((value) => /^https?:\/\/[^/]+/.test(value), {
-			error: 'PUBLIC_BASE_URL must be an absolute http(s) URL'
-		})
-		.transform((value) => value.replace(/\/+$/, '')),
+		/** Absolute public origin, used to build upload and media URLs for agents. */
+		PUBLIC_BASE_URL: z
+			.string()
+			.default('http://localhost:5173')
+			.refine((value) => /^https?:\/\/[^/]+/.test(value), {
+				error: 'PUBLIC_BASE_URL must be an absolute http(s) URL'
+			})
+			.transform((value) => value.replace(/\/+$/, '')),
 
-	/** Upload cap for images (design §6). */
-	MAX_IMAGE_BYTES: bytes(10 * 1024 * 1024),
+		/** Upload cap for images (design §6). */
+		MAX_IMAGE_BYTES: bytes(10 * 1024 * 1024),
 
-	/** Upload cap for video (design §6). */
-	MAX_VIDEO_BYTES: bytes(200 * 1024 * 1024),
+		/** Upload cap for video (design §6). */
+		MAX_VIDEO_BYTES: bytes(200 * 1024 * 1024),
 
-	/**
-	 * How long `request_input` parks on the event bus before handing the agent a
-	 * `pending` result to resume on. Must stay under the 60 second tool timeout
-	 * common to MCP clients (design §5).
-	 */
-	HOLD_S: z.coerce.number().int().min(1).max(59).default(55)
-});
+		/**
+		 * How long `request_input` parks on the event bus before handing the agent a
+		 * `pending` result to resume on. Must stay under the 60 second tool timeout
+		 * common to MCP clients (design §5).
+		 */
+		HOLD_S: z.coerce.number().int().min(1).max(59).default(55),
+
+		/**
+		 * The VAPID keypair that lets a push service accept a notification from this
+		 * deployment (design §7). Optional: without it, push is simply off — the
+		 * dashboard works exactly as it did, and the browser is never offered a
+		 * subscription it could not use.
+		 *
+		 * Generate a pair with `agent-dashboard vapid-keys`. Changing the public key
+		 * invalidates every subscription already stored, because a subscription is
+		 * bound to the key it was created against.
+		 */
+		VAPID_PUBLIC_KEY: z.string().min(1).optional(),
+		VAPID_PRIVATE_KEY: z.string().min(1).optional(),
+
+		/**
+		 * Who a push service should complain to about this deployment, as a `mailto:`
+		 * or an `https://` URL. Defaults to `PUBLIC_BASE_URL`, which is a real address
+		 * for this deployment and is the value most operators would type anyway.
+		 */
+		VAPID_SUBJECT: z
+			.string()
+			.optional()
+			.refine((value) => value === undefined || /^(mailto:|https:\/\/)/.test(value), {
+				error: 'VAPID_SUBJECT must be a mailto: address or an https:// URL'
+			})
+	})
+	.superRefine((config, ctx) => {
+		// One key without the other cannot sign anything, and silently disabling push
+		// because half of it is present would hide a typo in a deployment that plainly
+		// meant to switch it on.
+		const half =
+			(config.VAPID_PUBLIC_KEY === undefined) !== (config.VAPID_PRIVATE_KEY === undefined);
+		if (half) {
+			ctx.addIssue({
+				code: 'custom',
+				message: 'VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY must be set together, or neither'
+			});
+		}
+	});
 
 export type Config = z.output<typeof schema>;
+
+/** The three values a push send needs, or `null` when push is not configured. */
+export type PushConfig = { publicKey: string; privateKey: string; subject: string };
+
+/**
+ * Push settings, or `null`.
+ *
+ * One place decides whether push is on, so a route, the sender and the browser
+ * cannot disagree about it: it is on exactly when a keypair is configured.
+ */
+export function pushConfig(config: Config): PushConfig | null {
+	if (!config.VAPID_PUBLIC_KEY || !config.VAPID_PRIVATE_KEY) return null;
+	return {
+		publicKey: config.VAPID_PUBLIC_KEY,
+		privateKey: config.VAPID_PRIVATE_KEY,
+		subject: config.VAPID_SUBJECT ?? config.PUBLIC_BASE_URL
+	};
+}
 
 /** Environment as Node hands it to us: every value a string, or absent. */
 export type RawEnv = Partial<Record<string, string | undefined>>;

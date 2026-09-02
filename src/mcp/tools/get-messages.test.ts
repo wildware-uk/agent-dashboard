@@ -126,6 +126,8 @@ describe('get_messages', () => {
 			'created_at',
 			'id',
 			'project_id',
+			// Migration 014: the owner's own feed post this answers, if any.
+			'reply_to',
 			'task_id',
 			'update_id'
 		]);

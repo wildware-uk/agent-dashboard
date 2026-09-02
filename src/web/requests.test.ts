@@ -212,7 +212,7 @@ describe('the wire format the banner reads', () => {
 	 * and a kind added or renamed there fails here rather than in a browser.
 	 */
 	it('names exactly the kinds the server offers', () => {
-		const mine: RequestKind[] = ['text', 'confirm', 'buttons', 'choice', 'multi_choice'];
+		const mine: RequestKind[] = ['text', 'confirm', 'buttons', 'choice', 'multi_choice', 'form'];
 
 		expect([...mine].sort()).toEqual([...REQUEST_KINDS].sort());
 	});

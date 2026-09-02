@@ -2,7 +2,12 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { claimTask, createProject, createTask, listTasks } from '$domain';
 import { harness, type Harness } from '$domain/testing';
 import { SESSION_COOKIE, signSession } from '../auth';
-import { createTaskHandler, patchTaskHandler, type OwnerHandler } from './actions';
+import {
+	createTaskHandler,
+	markProjectSeenHandler,
+	patchTaskHandler,
+	type OwnerHandler
+} from './actions';
 
 /**
  * The owner's half of the control plane (design §7): putting work on a project,
@@ -188,5 +193,148 @@ describe('reassigning and cancelling a task', () => {
 		});
 		expect(guarded.response.status).toBe(401);
 		expect(listTasks(h)[0].state).toBe('todo');
+	});
+});
+
+describe('sending a task to a project’s agents', () => {
+	it('stamps it, answers 200, and publishes task.updated', async () => {
+		const task = createTask(h, { project: 'agent-dashboard', title: 'anybody?' });
+
+		const { response, body } = await call(patchTaskHandler, {
+			method: 'PATCH',
+			params: { id: task.id },
+			body: { broadcast: true }
+		});
+
+		expect(response.status).toBe(200);
+		expect(body.task.broadcastAt).not.toBeNull();
+		expect(h.eventNames()).toContain('task.updated');
+	});
+
+	it('takes it back off the wire', async () => {
+		const task = createTask(h, { project: 'agent-dashboard', title: 'never mind' });
+		await call(patchTaskHandler, {
+			method: 'PATCH',
+			params: { id: task.id },
+			body: { broadcast: true }
+		});
+
+		const { body } = await call(patchTaskHandler, {
+			method: 'PATCH',
+			params: { id: task.id },
+			body: { broadcast: false }
+		});
+
+		expect(body.task.broadcastAt).toBeNull();
+	});
+
+	it('answers 409 for work somebody is already holding', async () => {
+		const task = createTask(h, { project: 'agent-dashboard', title: 'taken' });
+		claimTask(h, { taskId: task.id, agentId });
+
+		const { response, body } = await call(patchTaskHandler, {
+			method: 'PATCH',
+			params: { id: task.id },
+			body: { broadcast: true }
+		});
+
+		expect(response.status).toBe(409);
+		expect(body.error).toBe('conflict');
+	});
+
+	it('refuses a patch that broadcasts and reassigns at once, rather than picking an order', async () => {
+		const task = createTask(h, { project: 'agent-dashboard', title: 'both' });
+
+		const { response } = await call(patchTaskHandler, {
+			method: 'PATCH',
+			params: { id: task.id },
+			body: { broadcast: true, agentId }
+		});
+
+		expect(response.status).toBe(400);
+		expect(listTasks(h, {})[0].broadcastAt).toBeNull();
+	});
+
+	it('refuses a broadcast that is not a boolean', async () => {
+		const task = createTask(h, { project: 'agent-dashboard', title: 'nope' });
+
+		const { response } = await call(patchTaskHandler, {
+			method: 'PATCH',
+			params: { id: task.id },
+			body: { broadcast: 'yes' }
+		});
+
+		expect(response.status).toBe(400);
+	});
+});
+
+describe('marking a project seen', () => {
+	it('stamps it and answers the project', async () => {
+		const { response, body } = await call(markProjectSeenHandler, {
+			params: { reference: 'agent-dashboard' }
+		});
+
+		expect(response.status).toBe(200);
+		expect(body.project.ownerSeenAt).not.toBeNull();
+	});
+
+	it('answers 404 for a project that is not there', async () => {
+		const { response } = await call(markProjectSeenHandler, { params: { reference: 'nope' } });
+
+		expect(response.status).toBe(404);
+	});
+
+	it('refuses a caller with no session: what the owner has read is not public', async () => {
+		const { response } = await call(markProjectSeenHandler, {
+			params: { reference: 'agent-dashboard' },
+			cookie: null
+		});
+
+		expect(response.status).toBe(401);
+	});
+});
+
+/**
+ * The board's one-line composer, over HTTP: one request, offered to everybody.
+ */
+describe('handing work to a project in one request', () => {
+	it('creates it already broadcast, with no assignee', async () => {
+		const { response, body } = await call(createTaskHandler, {
+			body: { project: 'agent-dashboard', title: 'somebody look at this', broadcast: true }
+		});
+
+		expect(response.status).toBe(201);
+		expect(body.task.broadcastAt).not.toBeNull();
+		expect(body.task.agentId).toBeNull();
+	});
+
+	it('carries the brief when the owner typed more than a line', async () => {
+		const { body } = await call(createTaskHandler, {
+			body: {
+				project: 'agent-dashboard',
+				title: 'fix the flaky test',
+				body: 'only on CI, around midnight',
+				broadcast: true
+			}
+		});
+
+		expect(body.task.body).toBe('only on CI, around midnight');
+	});
+
+	it('refuses to assign and broadcast at once', async () => {
+		const { response } = await call(createTaskHandler, {
+			body: { project: 'agent-dashboard', title: 'both', agentId, broadcast: true }
+		});
+
+		expect(response.status).toBe(400);
+		expect(listTasks(h, {})).toEqual([]);
+	});
+
+	it('refuses a broadcast that is not a boolean', async () => {
+		const { response } = await call(createTaskHandler, {
+			body: { project: 'agent-dashboard', title: 'nope', broadcast: 'yes' }
+		});
+
+		expect(response.status).toBe(400);
 	});
 });

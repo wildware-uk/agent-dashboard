@@ -29,6 +29,7 @@ export type {
 } from './bus';
 export type { ReplayMiss, ReplayResult } from './ring';
 export type {
+	AckState,
 	AppEvent,
 	EventName,
 	EventOf,

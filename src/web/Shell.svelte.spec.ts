@@ -1,16 +1,21 @@
 import { render } from 'vitest-browser-svelte';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import Shell from './Shell.svelte';
 import { Presence } from './presence.svelte';
 import { Timeline } from './timeline.svelte';
+import { Tasks } from './tasks.svelte';
 import {
 	FakeStream,
 	aLiveAgent,
 	aMedia,
 	aProject,
+	aTask,
+	anAck,
+	aMessage,
 	anUpdate,
 	fakeAgentsApi,
-	fakeApi
+	fakeApi,
+	fakeTasksApi
 } from './testing';
 
 /**
@@ -242,5 +247,211 @@ describe('the mobile drawer', () => {
 		(link as HTMLElement).click();
 
 		await expect.element(screen.getByRole('dialog')).not.toBeInTheDocument();
+	});
+});
+
+/**
+ * Per-project styling in the header (design §7).
+ *
+ * The wordmark case is the one with an accessibility trap in it: a logo standing
+ * in for the name must not take the name out of the accessible tree with it.
+ */
+describe('a project’s own styling', () => {
+	function mountThemed(theme: Record<string, unknown> | null) {
+		const project = aProject({ slug: 'dash', name: 'Mega Merge', theme });
+		const api = fakeApi({ seq: 4, projects: [project], items: [anUpdate({ body: 'hello' })] });
+		const feed = new Timeline({
+			fetch: api.fetch,
+			openStream: () => new FakeStream(),
+			schedule: (run) => api.queue.push(run)
+		});
+		return render(Shell, { snapshot: api.snapshot(), project: 'dash', feed });
+	}
+
+	it('writes the project’s colours as custom properties on the shell', async () => {
+		mountThemed({ background: '#101820', accent: '#ffb300' });
+
+		const shell = document.querySelector('[data-themed="true"]') as HTMLElement;
+		expect(shell.style.getPropertyValue('--surface')).toBe('#101820');
+		expect(shell.style.getPropertyValue('--accent')).toBe('#ffb300');
+		// Derived, not asked for: whatever the background is, the text is readable.
+		expect(shell.style.getPropertyValue('--content')).not.toBe('');
+	});
+
+	it('marks nothing themed for a project without one', async () => {
+		mountThemed(null);
+
+		expect(document.querySelector('[data-themed="true"]')).toBeNull();
+	});
+
+	it('shows a logo beside the name, decoratively', async () => {
+		const screen = mountThemed({ logoMediaId: 'm1' });
+
+		const logo = screen.getByTestId('project-logo').element();
+		expect(logo.getAttribute('alt')).toBe('');
+		await expect.element(screen.getByRole('heading', { name: 'Mega Merge' })).toBeInTheDocument();
+	});
+
+	it('lets the logo stand in for the name, keeping the name as its alt text', async () => {
+		const screen = mountThemed({ logoMediaId: 'm1', logoReplacesName: true });
+
+		const logo = screen.getByTestId('project-logo').element();
+		expect(logo.getAttribute('alt')).toBe('Mega Merge');
+		expect(logo.getAttribute('data-wordmark')).toBe('true');
+		// The heading goes, but the name has not left the page.
+		await expect
+			.element(screen.getByRole('heading', { name: 'Mega Merge' }))
+			.not.toBeInTheDocument();
+	});
+
+	it('keeps the heading when the flag arrives without a logo', async () => {
+		// The server refuses this pairing, so it can only come from a stale payload
+		// — and a header with neither a logo nor a title would have no name at all.
+		const screen = mountThemed({ logoReplacesName: true });
+
+		await expect.element(screen.getByRole('heading', { name: 'Mega Merge' })).toBeInTheDocument();
+	});
+});
+
+/**
+ * The two views of one project (design §7).
+ *
+ * The feed is "what happened" and the board is "what is being worked on". They
+ * are two ways of looking at one project rather than two halves of one screen,
+ * so each gets the whole centre column and the owner picks.
+ */
+describe('the feed and the board', () => {
+	function withBoard(view: 'feed' | 'board' = 'feed') {
+		const api = fakeApi({ seq: 4, projects: [aProject()], items: [anUpdate({ body: 'hello' })] });
+		const stream = new FakeStream();
+		const feed = new Timeline({
+			fetch: api.fetch,
+			openStream: () => stream,
+			schedule: (run) => api.queue.push(run)
+		});
+		const taskApi = fakeTasksApi({ tasks: [aTask({ id: 't7', state: 'todo', title: 'Queued' })] });
+		const tasks = new Tasks({ fetch: taskApi.fetch, openStream: () => new FakeStream() });
+		const remember = { view: () => null, set: vi.fn() };
+
+		return {
+			remember,
+			screen: render(Shell, {
+				snapshot: api.snapshot(),
+				project: 'agent-dashboard',
+				feed,
+				tasks,
+				view,
+				remember
+			})
+		};
+	}
+
+	it('opens on the feed, with the board one tab away', async () => {
+		const { screen } = withBoard();
+
+		await expect.element(screen.getByLabelText('Update timeline')).toBeInTheDocument();
+		expect(document.querySelector('[data-testid="board"]')).toBeNull();
+		await expect.element(screen.getByTestId('tab-feed')).toHaveAttribute('aria-selected', 'true');
+	});
+
+	it('swaps the whole column for the board, and says which tab is on', async () => {
+		const { screen, remember } = withBoard();
+
+		await screen.getByTestId('tab-board').click();
+
+		await expect.element(screen.getByTestId('board')).toBeInTheDocument();
+		// The feed is not underneath it: the board is a view, not a strip.
+		expect(document.querySelector('[data-timeline]')).toBeNull();
+		await expect.element(screen.getByTestId('tab-board')).toHaveAttribute('aria-selected', 'true');
+		expect(remember.set).toHaveBeenCalledWith('board');
+	});
+
+	it('opens straight onto the board when that is what this browser last chose', async () => {
+		const { screen } = withBoard('board');
+
+		await expect.element(screen.getByTestId('board')).toBeInTheDocument();
+	});
+
+	it('goes back to the feed when a card on the board is picked, having filtered it', async () => {
+		const { screen } = withBoard('board');
+
+		await screen.getByTestId('board-task').click();
+
+		// Filtering a feed nobody is looking at is a click that appeared to do
+		// nothing, so the tab follows the filter.
+		await expect.element(screen.getByLabelText('Update timeline')).toBeInTheDocument();
+		await expect.element(screen.getByTestId('tab-feed')).toHaveAttribute('aria-selected', 'true');
+	});
+});
+
+/**
+ * Acknowledgements survive the server render (migration 013).
+ *
+ * This is the regression the feature actually shipped with: the store held the
+ * acknowledgements and the component rendered them, and the shell forwarded the
+ * snapshot's messages to the thread store **without** its acks — so a tick was
+ * missing at first paint and appeared on the next refetch, which reads as the
+ * agent having only just answered something it answered an hour ago.
+ */
+describe('what agents have said, at first paint', () => {
+	function mountWithAcks() {
+		const update = anUpdate({ id: 'u1', body: 'shipped it' });
+		const api = fakeApi({
+			seq: 9,
+			projects: [aProject()],
+			items: [update],
+			messages: [aMessage({ id: 'm1', updateId: 'u1', body: 'have a look' })],
+			acks: [anAck({ id: 'k1', messageId: 'm1', state: 'done', agentId: 'a1' })],
+			agentNames: { a1: 'scout' }
+		});
+		const stream = new FakeStream();
+		const feed = new Timeline({
+			fetch: api.fetch,
+			openStream: () => stream,
+			schedule: (run) => api.queue.push(run)
+		});
+		return { api, screen: render(Shell, { snapshot: api.snapshot(), feed }) };
+	}
+
+	it('renders the tick from the server render, without waiting for a refetch', async () => {
+		const { screen } = mountWithAcks();
+
+		await expect.element(screen.getByText('scout marked this done')).toBeInTheDocument();
+	});
+});
+
+/**
+ * Where the composer lives (design §7).
+ *
+ * It was built on the board tab and that was the wrong place: the feed is the
+ * screen the owner actually watches, and a composer they had to change tabs to
+ * reach is one they would not use.
+ */
+describe('posting to the feed', () => {
+	it('puts the composer at the top of the feed, inside the timeline panel', async () => {
+		const { screen } = mount();
+
+		await expect.element(screen.getByLabelText('Post to the feed')).toBeInTheDocument();
+		const panel = document.querySelector('#panel-feed');
+		expect(panel?.querySelector('[data-composer]')).not.toBeNull();
+	});
+
+	it('puts it above the timeline rather than inside the scroller', async () => {
+		mount();
+
+		// Inside the scroller it would leave the screen on a long day, which is
+		// exactly when handing something over is most likely.
+		const scroller = document.querySelector('[data-timeline]');
+		expect(scroller?.querySelector('[data-composer]')).toBeNull();
+		expect(document.querySelector('[data-composer]')).not.toBeNull();
+	});
+
+	it('is not on the board tab, which is for looking at work rather than filing it', async () => {
+		const { screen } = mount();
+
+		await screen.getByTestId('tab-board').click();
+
+		await expect.element(screen.getByRole('tabpanel')).toBeInTheDocument();
+		expect(document.querySelector('[data-composer]')).toBeNull();
 	});
 });

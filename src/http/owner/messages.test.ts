@@ -181,3 +181,63 @@ describe('GET /api/messages', () => {
 		expect(response.headers.get('cache-control')).toBe('no-store');
 	});
 });
+
+/**
+ * The owner's own feed posts and the replies under them (migration 014).
+ *
+ * A post is what the composer at the top of the feed sends: a message with no
+ * anchor at all. Everything about it goes through the same endpoint as a reply,
+ * which is the point — nothing new had to be built for the owner to be heard.
+ */
+describe('posting to the feed and replying under it', () => {
+	it('posts with no anchor, which is what makes it a card', async () => {
+		const { status, body } = await call(postMessageHandler, {
+			body: { project: slug, body: 'have a look at the migration' }
+		});
+
+		expect(status).toBe(201);
+		expect(body.message).toMatchObject({ updateId: null, taskId: null, replyTo: null });
+	});
+
+	it('files a reply under the post it names', async () => {
+		const post = await call(postMessageHandler, { body: { project: slug, body: 'a thought' } });
+		const postId = (post.body.message as { id: string }).id;
+
+		const { status, body } = await call(postMessageHandler, {
+			body: { replyTo: postId, body: 'on it' }
+		});
+
+		expect(status).toBe(201);
+		expect(body.message).toMatchObject({ replyTo: postId });
+	});
+
+	it('answers 404 for a reply to a post that is not there', async () => {
+		const { status } = await call(postMessageHandler, {
+			body: { replyTo: 'nope', body: 'hello?' }
+		});
+
+		expect(status).toBe(404);
+	});
+
+	it('refuses a reply that also names an update', async () => {
+		const post = await call(postMessageHandler, { body: { project: slug, body: 'a thought' } });
+		const postId = (post.body.message as { id: string }).id;
+		const { status } = await call(postMessageHandler, {
+			body: { replyTo: postId, update: updateId, body: 'both' }
+		});
+
+		expect(status).toBe(400);
+	});
+
+	it('carries the anchor back on the thread read, so a card can group its replies', async () => {
+		const post = await call(postMessageHandler, { body: { project: slug, body: 'a thought' } });
+		const postId = (post.body.message as { id: string }).id;
+		await call(postMessageHandler, { body: { replyTo: postId, body: 'on it' } });
+
+		const { body } = await call(listMessagesHandler, { query: { project: slug } });
+
+		const messages = body.messages as { id: string; replyTo: string | null }[];
+		expect(messages.find((message) => message.id === postId)?.replyTo).toBeNull();
+		expect(messages.filter((message) => message.replyTo === postId)).toHaveLength(1);
+	});
+});

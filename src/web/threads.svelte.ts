@@ -28,7 +28,7 @@
  * no optimistic insert to reconcile, and no path where the tab that replied
  * disagrees with the tab that watched.
  */
-import type { MessageView, MessagesSnapshot } from './types';
+import type { AckView, MessageView, MessagesSnapshot } from './types';
 import type { Fetcher } from './timeline.svelte';
 import {
 	DirectLink,
@@ -48,6 +48,25 @@ import {
 export type ThreadSource = {
 	for(updateId: string): MessageView[];
 	/**
+	 * The owner's own posts, oldest first (migration 014).
+	 *
+	 * A message anchored to nothing — no update, no task, and not a reply — is
+	 * something they wrote straight into the feed, and it renders as a card of
+	 * its own rather than inside somebody else's thread.
+	 */
+	posts?(): MessageView[];
+	/** The replies under one post. */
+	repliesTo?(messageId: string): MessageView[];
+	/**
+	 * What agents have said about one message, newest claim last.
+	 *
+	 * Usually empty, occasionally one, and more than one only when several agents
+	 * answered the same thing — which is why it is a list rather than a state.
+	 */
+	acksFor?(messageId: string): AckView[];
+	/** The same, for a task. */
+	acksForTask?(taskId: string): AckView[];
+	/**
 	 * The conversation on a task rather than an update.
 	 *
 	 * A task is the other thing an agent and its owner talk about, and the panel
@@ -57,7 +76,15 @@ export type ThreadSource = {
 };
 
 /** The events that change a thread. */
-const WATCHED = ['message.created', 'resync'] as const;
+const WATCHED = [
+	'message.created',
+	// An agent saying "seen it" or "done" (migration 013). Watched here rather
+	// than in a store of its own because an acknowledgement has no life apart
+	// from the message it is on: it arrives in the same read, and a second store
+	// would be a second cursor to keep in step for one field.
+	'ack.updated',
+	'resync'
+] as const;
 
 /** How much the store knows about its connection. */
 export type ThreadsStatus = 'idle' | 'live' | 'offline';
@@ -77,6 +104,14 @@ export type ThreadsOptions = {
 export class Threads {
 	/** Every message on this page, oldest first, across every thread. */
 	messages = $state<MessageView[]>([]);
+	/**
+	 * What agents have said about those messages without words (migration 013).
+	 *
+	 * Held beside the messages rather than on them: an acknowledgement belongs to
+	 * an agent, and one message can carry several. Which of them a card shows is
+	 * the card's decision.
+	 */
+	acks = $state<AckView[]>([]);
 	/** The newest event seq this state accounts for. */
 	seq = $state(0);
 	status = $state<ThreadsStatus>('idle');
@@ -120,6 +155,32 @@ export class Threads {
 	/** One task's thread, for the panel that renders tasks (design §7). */
 	forTask(taskId: string): MessageView[] {
 		return this.messages.filter((message) => message.taskId === taskId);
+	}
+
+	/** The owner's own feed posts, oldest first (migration 014). */
+	posts(): MessageView[] {
+		return this.messages.filter(
+			(message) =>
+				message.updateId === null &&
+				message.taskId === null &&
+				!message.replyTo &&
+				message.author === 'human'
+		);
+	}
+
+	/** The replies under one post, oldest first. */
+	repliesTo(messageId: string): MessageView[] {
+		return this.messages.filter((message) => message.replyTo === messageId);
+	}
+
+	/** What agents have said about one message (migration 013). */
+	acksFor(messageId: string): AckView[] {
+		return this.acks.filter((ack) => ack.messageId === messageId);
+	}
+
+	/** The same, for a task. */
+	acksForTask(taskId: string): AckView[] {
+		return this.acks.filter((ack) => ack.taskId === taskId);
 	}
 
 	/** Adopt a snapshot read elsewhere, without asking for another. */
@@ -232,7 +293,16 @@ export class Threads {
 
 	private apply(snapshot: MessagesSnapshot): void {
 		this.messages = snapshot.messages;
-		this.seq = Math.max(this.seq, snapshot.seq);
+		// Defaulted rather than merged: a document that carried messages and no
+		// acknowledgements is saying there are none, and folding the old list in
+		// would leave a tick on a message whose acknowledgement has gone.
+		this.acks = snapshot.acks ?? [];
+		// Adopted, not raised to the greater of the two: the server's stamp says
+		// where the stream *is*, and a seq below the one held means the deployment
+		// restarted — its bus counts from zero and is never persisted. Keeping the
+		// larger figure would make every event the new process publishes look like a
+		// replay and drop it, silently, until somebody reloaded the page.
+		this.seq = snapshot.seq;
 	}
 
 	private receive(event: StreamMessage): void {

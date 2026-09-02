@@ -16,7 +16,10 @@ export const TABLES = [
 	'tasks',
 	'messages',
 	'read_cursors',
-	'approvals'
+	'approvals',
+	'push_subscriptions',
+	'update_shares',
+	'acknowledgements'
 ] as const;
 
 export type TableName = (typeof TABLES)[number];

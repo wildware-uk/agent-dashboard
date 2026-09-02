@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { renderMarkdown } from './markdown';
+import { EXCERPT_MAX_LENGTH, excerpt, renderMarkdown } from './markdown';
 
 /**
  * The security test of this slice (design §8). Every case below is something an
@@ -93,5 +93,74 @@ describe('wide content', () => {
 
 	it('leaves prose alone', () => {
 		expect(renderMarkdown('just a sentence')).not.toContain('md-scroll');
+	});
+});
+
+/**
+ * The plain-text opening a link preview carries (design §7).
+ *
+ * The rule that matters is the last one: whatever this cannot flatten, it must
+ * never emit as markup — an unfurled link is text in somebody else's app.
+ */
+describe('excerpt', () => {
+	it('keeps a plain body as it is', () => {
+		expect(excerpt('The release went out at 14:02.')).toBe('The release went out at 14:02.');
+	});
+
+	it('drops heading hashes, bullets and quote markers', () => {
+		expect(excerpt('## Deployed\n- one\n- two\n> a note')).toBe('Deployed one two a note');
+	});
+
+	it('unwraps emphasis without eating the words', () => {
+		expect(excerpt('**done** and _dusted_ and ~~gone~~')).toBe('done and dusted and gone');
+	});
+
+	it('keeps a link’s text and drops its address', () => {
+		expect(excerpt('see [the run](https://ci.example.com/1234) for detail')).toBe(
+			'see the run for detail'
+		);
+	});
+
+	it('keeps an image’s alt text and leaves no stray punctuation', () => {
+		expect(excerpt('before ![a screenshot](/media/x/thumb-640) after')).toBe(
+			'before a screenshot after'
+		);
+	});
+
+	it('drops a fenced code block rather than showing its fence', () => {
+		expect(excerpt('Ran it:\n```sh\nnpm test\n```\nAll green.')).toBe('Ran it: All green.');
+	});
+
+	it('keeps inline code as its contents', () => {
+		expect(excerpt('run `npm test` first')).toBe('run npm test first');
+	});
+
+	it('collapses the whitespace a multi-line body is full of', () => {
+		expect(excerpt('one\n\n\ntwo   three')).toBe('one two three');
+	});
+
+	it('emits no markup, whatever it was given', () => {
+		const flattened = excerpt('<script>alert(1)</script> [x](javascript:alert(1)) **b**');
+
+		expect(flattened).not.toContain('<');
+		expect(flattened).not.toContain('](');
+	});
+
+	it('cuts long bodies at a word, and says it cut', () => {
+		const flattened = excerpt(`${'word '.repeat(80)}end`);
+
+		expect(flattened.length).toBeLessThanOrEqual(EXCERPT_MAX_LENGTH + 1);
+		expect(flattened.endsWith('…')).toBe(true);
+		expect(flattened).not.toMatch(/wor…$/);
+	});
+
+	it('cuts mid-token when there is no word boundary worth using', () => {
+		const flattened = excerpt('x'.repeat(400));
+
+		expect(flattened).toBe(`${'x'.repeat(EXCERPT_MAX_LENGTH)}…`);
+	});
+
+	it('has nothing to say about an empty body', () => {
+		expect(excerpt('   \n  ')).toBe('');
 	});
 });

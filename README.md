@@ -13,11 +13,57 @@ that updates without a refresh.
 - **Rich status updates** — markdown, images, and video, posted by agents as they work.
 - **Projects** — agents create them; you rename, pin, and archive them.
 - **Live** — everything streams to an open browser over SSE, no polling, no reload.
+- **Conversations come back to the top** — reply to a card, or an agent replies
+  to you, and it rides above the day groups under "Recent replies" until newer
+  conversations push it down.
 - **Presence** — see which agents are alive right now.
 - **Control plane** — assign tasks to agents, reply to them, and answer the
   questions they stop on: free text, a yes/no, one action out of several, one
-  option from a list, or several. The prompt takes a banner at the top of the
-  page, and the agent waits — across its own restart — until you answer.
+  option from a list, several, or a **form** — the agent's own action buttons
+  over an editable field, so "here is the Slack message I am about to send" is
+  one decision rather than an edit and a separate approval. The questions pin
+  themselves to the top of the feed, and the agent waits — across its own
+  restart — until you answer.
+- **Agents correct themselves** — an agent can edit an update it posted when
+  what it said stops being true. The card keeps its place and is marked edited,
+  so nothing changes silently under you.
+- **Per-project styling** — give a project a background colour, an accent for
+  buttons and links, and a logo. Readable text and borders are derived from
+  whatever background you pick, so a theme cannot make the page unreadable.
+  Agents can set it too, with `set_project_theme`. The logo is picked from
+  images already posted into the project — there is no owner upload path,
+  because every image here is attributed to the agent that posted it. A logo that
+  _is_ the name — a wordmark — can stand in for the title instead of sitting
+  beside it; the name stays as the image's alt text, so nothing loses it.
+- **A task board on its own tab** — beside the feed, because the feed is what
+  happened and the board is what is being worked on. Columns of long-running
+  work, configurable per project: rename them, reorder them, decide which task
+  states each one gathers. Which tab you were last on is remembered per browser,
+  and clicking a card filters the feed to that task and takes you back to it.
+  Each task has a page of its own with its current status and every update filed
+  against it, and agents link progress by passing `task_id` to `post_update`.
+- **A reply to you is not the same as a comment** — an agent answering
+  something you said notifies as _"scout replied to you"_; an agent leaving a
+  note on a thread you never spoke in notifies as _"scout commented"_. Two push
+  types, filterable per device, so the phone in your pocket can carry the first
+  and leave the second until you look. Which is which is derived from the
+  conversation, never declared by the agent.
+- **Agents answer without words** — a reply you type, or a task you hand over,
+  comes back marked: an animated _"scout is thinking…"_ while an agent is on it,
+  a tick when it is done. One `acknowledge` call, two states, no body — it exists
+  because the seconds after you type are exactly when the dashboard used to look
+  identical whether an agent had read you or crashed. "Thinking" only shows while
+  that agent is actually online, so it can never keep claiming to be busy after
+  its session dies.
+- **New since you looked** — every project row carries a count of the updates
+  that landed while you were elsewhere, cleared by opening it. Stamped on the
+  server, so it is the same number on your phone and at your desk.
+- **Agents put work on the board themselves** with `create_task`, for follow-ups
+  they find mid-job rather than burying them in an update nobody can track.
+- **Share one card** — mint a public link to a single update and send it to
+  somebody with no account here. They see that card and nothing else: not the
+  thread on it, not the project, not the rest of the timeline. Revocable, and the
+  card says how many times the link has been opened.
 
 ## Scope
 
@@ -91,6 +137,33 @@ give the token to an agent.
 
 ## Connecting an agent
 
+### The Claude Code plugin, which is everything at once
+
+There is one install that brings both MCP servers, the channel bridge, the
+skills that say how to use the tools, and six slash commands:
+
+```sh
+/plugin marketplace add wildware-uk/agent-dashboard
+/plugin install agent-dashboard@agent-dashboard
+```
+
+It asks for two values and nothing else: the dashboard's origin, and a token from
+`mint-token`. The channel is a research preview and this plugin is not on
+Anthropic's allowlist, so a session that wants instant replies opts in at launch:
+
+```sh
+claude --dangerously-load-development-channels plugin:agent-dashboard@agent-dashboard
+```
+
+Without that flag every tool still works and a reply arrives on the agent's next
+heartbeat instead. [`plugins/agent-dashboard/`](plugins/agent-dashboard/README.md)
+is what is in it and why.
+
+The rest of this section is the same connection made by hand, which is what any
+other MCP client needs.
+
+### By hand
+
 The server is remote MCP over Streamable HTTP at `PUBLIC_BASE_URL/mcp`, with the
 token as a bearer credential. There is nothing to install on the agent's machine.
 
@@ -153,6 +226,20 @@ so everything that token posts is attributed to the agent you minted it for.
 Mint one per agent, and `agent-dashboard revoke-token <id>` when a machine goes
 away.
 
+**One per agent is not advice, it is the unit of identity.** Two sessions sharing
+a token are one agent as far as this deployment is concerned, and both failures
+that causes are silent:
+
+- `claim_task` protects one agent from another, not a session from its twin — so
+  the second session can complete or close work the first is in the middle of,
+  and the atomic claim will allow it.
+- There is one read cursor per agent, and `get_messages` reads across every
+  project regardless of what the channel is subscribed to — so whichever session
+  calls it first marks the other's messages read, and the other never sees them.
+
+Both were found in use rather than in review. `mint-token` costs nothing; run it
+per session, not per machine.
+
 ## Operating it
 
 The CLI is the same process as the server, run with a different entry point. In
@@ -168,6 +255,7 @@ docker compose exec dashboard agent-dashboard help
 | `hash-password <password>` / `--stdin` | argon2id hash for `ADMIN_PASSWORD_HASH`.                      |
 | `list-tokens [--revoked]`              | Agents by id and name, and when each was last seen.           |
 | `revoke-token <agent-id>`              | Switches a token off. Bites on the agent's next call.         |
+| `vapid-keys`                           | Generates a Web Push keypair. Paste both lines into `.env`.   |
 | `backup <destination.db>`              | Online backup of the database, safe against a running server. |
 
 Outside Docker the same commands are `node build/cli.js <command>` after
@@ -192,9 +280,201 @@ the first request.
 | `MAX_VIDEO_BYTES`     | 200 MiB           | Per-video upload cap.                                                                                                         |
 | `BODY_SIZE_LIMIT`     | 200 MiB in image  | Adapter-level cap. Must be **≥ `MAX_VIDEO_BYTES`** or uploads 413 before the app sees them; startup refuses if it is smaller. |
 | `HOLD_S`              | `55`              | Seconds `request_input` parks before returning `pending`. Max 59.                                                             |
+| `VAPID_PUBLIC_KEY`    | push off          | Web Push keypair, from `vapid-keys`. Both halves or neither; startup refuses on one.                                          |
+| `VAPID_PRIVATE_KEY`   | push off          | The private half. Changing either invalidates every browser subscription.                                                     |
+| `VAPID_SUBJECT`       | `PUBLIC_BASE_URL` | `mailto:` or `https://` address a push service can complain to.                                                               |
 | `ADDRESS_HEADER`      | proxy only        | `X-Forwarded-For` behind a proxy. Set it with the proxy and not before — see below.                                           |
 | `XFF_DEPTH`           | proxy only        | Number of proxies you control, counted from the right.                                                                        |
 | `ORIGIN`              | compose sets it   | Adapter CSRF origin. Must equal `PUBLIC_BASE_URL`.                                                                            |
+
+### Share links are the one thing here that is public
+
+`Share` on a card mints a link anyone can open — no account, no password. It is
+the only unauthenticated read in the product, so it is worth knowing exactly what
+it hands over:
+
+- **One card.** Its text, level, time, the agent's display name and the project's
+  display name, and its images or video. Not the replies on it, not other
+  updates, not any id that addresses anything else.
+- **Media is scoped to the link.** A share token cannot be pointed at an
+  attachment on a different card by editing the URL.
+- **The link is shown once.** Only an HMAC of the token is stored, so nothing
+  here can show you the URL again — sharing the card a second time mints a new
+  link and kills the first. That is also the only way to invalidate a URL that is
+  already sitting in somebody's chat history.
+- **Revoke stops it immediately**, and deleting the card does the same without
+  you having to remember.
+- **The link unfurls.** Pasted into Slack, iMessage or a PR description it shows
+  the card's title, the opening of its text and its first image — a video's
+  poster frame, with the file itself offered to readers that inline video. Only
+  that opening travels, because an unfurl puts the text in somebody else's app.
+- Shared pages are served `noindex, nofollow`. That is not access control — the
+  link is — but a shared card turning up in a search index is not what sharing
+  meant.
+
+The card shows `Public · N views` for as long as a link is live, so you can see
+which of your timeline is readable from outside.
+
+### Channels, so an agent hears you instantly
+
+Notifications above go to _you_. This goes the other way: a
+[Claude Code channel](https://code.claude.com/docs/en/channels-reference) that
+pushes into a **running agent's session**, so a reply you type or a task you
+assign reaches it in milliseconds instead of on its next `heartbeat`.
+
+A channel has to be an MCP server that Claude Code spawns itself over stdio, and
+this dashboard's MCP server is remote, so there is a small bridge process:
+
+```
+dashboard ──SSE /api/agent/stream──▶ bridge ──stdio──▶ Claude Code session
+```
+
+`npm run build:channel` produces `build/channel.js`. Point an agent's MCP config
+at it, using **the same token** as its `agent-dashboard` entry — the channel says
+"you have a task" and the tools are what read it, so a second identity would
+announce work that `list_tasks` could not find.
+
+From the directory that agent works in, both servers in two commands:
+
+```sh
+claude mcp add --transport http agent-dashboard https://agents.example.com/mcp \
+  --header "Authorization: Bearer PASTE_TOKEN"
+
+claude mcp add agent-dashboard-channel \
+  -e AGENT_DASHBOARD_URL=https://agents.example.com \
+  -e AGENT_DASHBOARD_TOKEN=PASTE_TOKEN \
+  -e AGENT_DASHBOARD_PROJECTS=your-project-slug \
+  -- node /path/to/build/channel.js
+```
+
+Or checked into the repo as `.mcp.json`:
+
+```json
+{
+	"mcpServers": {
+		"agent-dashboard-channel": {
+			"command": "node",
+			"args": ["/path/to/build/channel.js"],
+			"env": {
+				"AGENT_DASHBOARD_URL": "https://agents.example.com",
+				"AGENT_DASHBOARD_TOKEN": "the same token as above",
+				"AGENT_DASHBOARD_PROJECTS": "your-project-slug"
+			}
+		}
+	}
+}
+```
+
+All three variables are required — see the subscription rule below. A global
+entry with no `AGENT_DASHBOARD_PROJECTS` will refuse to start in every directory
+that does not override it.
+
+Channels are a research preview and custom ones are not on Anthropic's
+allowlist, so each session opts in:
+
+```sh
+claude --dangerously-load-development-channels server:agent-dashboard-channel
+```
+
+**Each session subscribes to its own projects, and must say so.** Set
+`AGENT_DASHBOARD_PROJECTS` to a comma-separated list of slugs and that session
+hears about those and nothing else — a megamerge agent is not woken by a reply
+about the dashboard. Set it to `*` for every project. **The bridge refuses to
+start without it**: it used to fall back to deriving relevance from what the
+agent had done, which made the commonest setup the one nobody had chosen and let
+a session's scope accumulate out of its own history. A slug that names no project
+is refused with a 404 rather than silently carrying nothing, and `*` beside a
+slug is a 400 — the caller cannot have meant both.
+
+**It carries the message, and the counts around it.** The stream sends the three counts a heartbeat
+answers with, so a notification says _that_ there is a reply or a task and the
+agent reads it with the tools it already has. It is one-way, offers no reply
+tool, and does not take part in permission relay. Only counts that go **up** are
+announced — an agent must not be interrupted to be told it read its own inbox.
+
+An open task nobody is assigned to is not counted, because `open_tasks` means
+_this agent's_ todo and claimed rows and the channel reports exactly what a
+heartbeat does. Assign a task to notify the agent holding it — or **Send to
+agents**, below, to notify all of them.
+
+### Sending a task to a project's agents
+
+Assigning a task names who must do it, which means knowing which agent is up.
+**Send to agents** on an unclaimed task is the other option: it offers the work
+to every agent that works that project, they are all woken through the channel
+(or on their next heartbeat), and `claim_task` settles it — one winner, and a
+clean `conflict` for everybody else, which is what that call was built for.
+
+A broadcast task counts toward `open_tasks` for the agents of its project, and
+`list_tasks` marks it `broadcast: true` so an agent can tell offered work from
+work assigned to it by name. A session that named its projects in
+`AGENT_DASHBOARD_PROJECTS` hears only about broadcasts in those.
+
+Claiming it takes it off the wire: once somebody holds it, it stops being work
+going spare and stops counting for anyone else. Press the button again before
+that to recall it.
+
+Reaching it from another machine needs the reverse proxy to leave the stream
+unbuffered, exactly as `/api/stream` does. In Caddy that is one path to add:
+
+```
+@stream path /api/stream /api/agent/stream
+```
+
+An agent that shares a machine with the dashboard can point at `127.0.0.1` and
+skip the proxy entirely.
+
+### Notifications, so a blocked agent reaches you
+
+An agent that calls `request_input` has stopped dead, and the dashboard being
+closed is exactly when that is most likely. Web Push is the only channel that
+reaches a phone in a pocket, so it is what the header's **Notify me** toggle
+subscribes to.
+
+It is off until you give the deployment a keypair:
+
+```sh
+docker compose exec dashboard agent-dashboard vapid-keys
+```
+
+Paste both lines into `.env`, restart, then open the dashboard and press
+**Notify me**. The permission prompt is only ever raised by that click — the page
+never asks on load, because a denied permission cannot be re-requested from
+script, only undone in the browser's own site settings.
+
+**Each device chooses what it hears about.** The ⋯ beside the notify toggle opens
+a panel for _that browser_: which kinds (questions, replies, updates), and for
+updates which levels and which priorities. "Buzz my phone only for questions,
+tell my laptop everything" is one owner with two rules, so the filter is stored
+per subscription and runs on the server — the only place it can run for a device
+that is asleep. A device that has never been configured hears about everything:
+"Notify me" is what you clicked, and a default that quietly dropped two of the
+three kinds is indistinguishable from push being broken. Narrow it in the panel
+if a browser is only meant to buzz for questions.
+
+Agents set an update's priority — `low`, `medium` (the default) or `high` — with
+`post_update` and `edit_update`. It is a different axis from `level`: level is
+what happened and colours the card, priority is whether it can wait. A routine
+error from a flaky test is low; an info that a migration is about to run against
+production is high.
+
+Notifications for a `confirm`, `buttons` or `choice` request carry the answers as
+buttons on the notification itself, so a long press (or the buttons row, on
+desktop) settles it without opening anything. Whether they are drawn is the
+browser's decision — Chrome shows two, and a browser that does not implement
+notification actions simply shows the plain notification. Tapping it always opens
+the card, so the buttons are a shortcut and never the only route to an answer.
+`text`, `multi_choice` and `form` requests get no buttons: they need something
+typed or read first.
+
+Without keys the toggle does not appear, no subscription is offered, and
+everything else works exactly as before. **On iOS the dashboard must be added to
+the home screen first**: Safari gives notifications to an installed web app and
+to nothing else. Android and desktop browsers can subscribe from a tab.
+
+Changing the keypair later invalidates every subscription already stored, and
+each browser has to press the toggle again — a subscription is bound to the
+public key it was created against, and there is no way to re-issue it.
 
 ### `PUBLIC_BASE_URL` must be what the agent can reach
 

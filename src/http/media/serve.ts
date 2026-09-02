@@ -48,6 +48,17 @@ export type MediaRequestEvent = {
 export type MediaHandlerOptions = {
 	/** Defaults to the process-wide db, bus and clock. Tests pass a harness. */
 	context?: () => DomainContext;
+	/**
+	 * Who may read these bytes. Defaults to the owner's session.
+	 *
+	 * The seam exists for share links (design §7): a public visitor holds a token
+	 * that grants one card, and the check is "does this token cover this media
+	 * id" rather than "is this the owner". Everything below it — the sniffed
+	 * content type, the immutable cache, the range handling, the hardening
+	 * headers — is identical, and duplicating it for the public route is exactly
+	 * how the two would drift apart.
+	 */
+	authorise?: (event: MediaRequestEvent) => boolean | Promise<boolean>;
 	/** Media settings, injectable so tests need no environment. */
 	settings?: () => MediaSettings | null;
 	/** Session secrets, injectable so tests need no environment. */
@@ -65,10 +76,22 @@ function notFound(): Response {
 
 /** Build the `GET` handler for the media route. */
 export function createMediaHandler(options: MediaHandlerOptions = {}): MediaHandler {
-	const { context: getContext = context, settings: getSettings = mediaConfig, config } = options;
+	const {
+		context: getContext = context,
+		settings: getSettings = mediaConfig,
+		config,
+		authorise
+	} = options;
 
 	return async (event) => {
-		if (!ownerAuthenticated(event, config)) return unauthenticatedResponse();
+		if (authorise) {
+			// A share link either covers this media or it does not, and a visitor
+			// must not be able to tell a wrong token from a right token aimed at
+			// somebody else's card: both are 404, never 401.
+			if (!(await authorise(event))) return notFound();
+		} else if (!ownerAuthenticated(event, config)) {
+			return unauthenticatedResponse();
+		}
 
 		const settings = getSettings();
 		if (!settings) {

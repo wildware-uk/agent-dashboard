@@ -213,3 +213,42 @@ describe('the shipped documentation', () => {
 		for (const name of Object.keys(COMMANDS)) expect(readme).toContain(name);
 	});
 });
+
+/**
+ * `vapid-keys` (design §7).
+ *
+ * The pair is generated rather than typed because every browser subscription is
+ * bound to the public half: a mistyped key is not a startup error, it is
+ * notifications that silently never arrive.
+ */
+describe('vapid-keys', () => {
+	it('prints both halves as .env lines, ready to paste', async () => {
+		const cli = harness();
+
+		expect(await cli.run('vapid-keys')).toBe(0);
+		expect(cli.out[0]).toMatch(/^VAPID_PUBLIC_KEY=[A-Za-z0-9_-]{20,}$/);
+		expect(cli.out[1]).toMatch(/^VAPID_PRIVATE_KEY=[A-Za-z0-9_-]{20,}$/);
+	});
+
+	it('generates a different pair every time, so two deployments never share one', async () => {
+		const first = harness();
+		const second = harness();
+		await first.run('vapid-keys');
+		await second.run('vapid-keys');
+
+		expect(first.out[0]).not.toBe(second.out[0]);
+	});
+
+	it('says what changing them costs, because it cannot be undone', async () => {
+		const cli = harness();
+		await cli.run('vapid-keys');
+
+		expect(cli.out.join('\n')).toMatch(/invalidates every/);
+	});
+
+	it('needs no database, so it can be run before the dashboard exists', async () => {
+		const cli = harness({});
+
+		expect(await cli.run('vapid-keys')).toBe(0);
+	});
+});

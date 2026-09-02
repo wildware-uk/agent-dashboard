@@ -15,8 +15,9 @@ describe('the project sidebar', () => {
 	it('puts pinned projects first, whatever order it was handed', async () => {
 		render(Sidebar, { projects });
 
-		// "All projects" is the first link; the pinned project leads the list.
-		expect(names()).toEqual(['All projects', 'Pinned Beta', 'Alpha']);
+		// "All projects" and "Tasks" are the fixed destinations; the pinned project
+		// leads the list of projects under them.
+		expect(names()).toEqual(['All projects', 'Tasks', 'Pinned Beta', 'Alpha']);
 	});
 
 	it('hides archived projects behind a toggle', async () => {
@@ -106,5 +107,139 @@ describe('the owner controls in the sidebar', () => {
 		await screen.getByRole('button', { name: 'Unarchive project' }).click();
 
 		expect(api.calls).toEqual([{ name: 'patchProject', args: ['old', { status: 'active' }] }]);
+	});
+});
+
+/**
+ * The waiting badge (design §7).
+ *
+ * This is what pays for moving requests out of the always-on banner and into
+ * one project's feed: a blocked agent in a project the owner is not looking at
+ * is a number on the row that navigates to it.
+ */
+describe('agents waiting on the owner', () => {
+	const badges = () =>
+		[...document.querySelectorAll('nav a')].map((link) => ({
+			row: link.querySelector('span')?.textContent?.trim(),
+			count: link.querySelector('[data-testid="request-badge"] [aria-hidden]')?.textContent?.trim()
+		}));
+
+	it('puts the count on the project it is waiting in', async () => {
+		render(Sidebar, { projects, requestCounts: { p1: 3 } });
+
+		expect(badges()).toEqual([
+			{ row: 'All projects', count: undefined },
+			{ row: 'Tasks', count: undefined },
+			{ row: 'Pinned', count: undefined },
+			{ row: 'Alpha', count: '3' }
+		]);
+	});
+
+	it('puts the total on "All projects", which is where an unfiled request lives', async () => {
+		const screen = render(Sidebar, { projects, requestCounts: { p1: 1 }, totalRequests: 2 });
+
+		const all = screen.getByRole('link', { name: /All projects/ }).element();
+		expect(all.querySelector('[data-testid="request-badge"] [aria-hidden]')?.textContent).toBe('2');
+	});
+
+	it('says what the number means rather than leaving a bare digit', async () => {
+		const screen = render(Sidebar, { projects, requestCounts: { p1: 3 } });
+
+		await expect.element(screen.getByText('3 waiting on you')).toBeInTheDocument();
+	});
+
+	it('badges an archived project too, once it is revealed', async () => {
+		const screen = render(Sidebar, { projects, requestCounts: { p3: 1 } });
+
+		await screen.getByRole('button', { name: /Archived/ }).click();
+
+		const old = screen.getByRole('link', { name: /Old/ }).element();
+		expect(old.querySelector('[data-testid="request-badge"]')).not.toBeNull();
+	});
+
+	it('shows no badge at all when nothing is waiting', async () => {
+		render(Sidebar, { projects, requestCounts: {}, totalRequests: 0 });
+
+		expect(document.querySelectorAll('[data-testid="request-badge"]')).toHaveLength(0);
+	});
+});
+
+/**
+ * Tasks are the long-running half of the product, and until this link they
+ * lived only in a rail that is `xl:block` — invisible below 1280px.
+ */
+describe('getting to the tasks', () => {
+	it('offers a way there from every width', async () => {
+		const screen = render(Sidebar, { projects });
+
+		const link = screen.getByTestId('tasks-link').element();
+		expect(link.getAttribute('href')).toBe('/tasks');
+	});
+
+	it('counts what is outstanding, not what has ever existed', async () => {
+		const screen = render(Sidebar, { projects, openTasks: 4 });
+
+		await expect.element(screen.getByTestId('open-tasks')).toHaveTextContent('4');
+	});
+
+	it('says nothing when there is nothing outstanding', async () => {
+		const screen = render(Sidebar, { projects, openTasks: 0 });
+
+		await expect.element(screen.getByTestId('open-tasks')).not.toBeInTheDocument();
+	});
+});
+
+/**
+ * The "new since you last looked" badge.
+ *
+ * A different question from the amber one, and the test that matters is that
+ * they stay different: a row carrying both must show both, or "an agent is
+ * blocked on you" and "three things happened" collapse into one number that
+ * means neither.
+ */
+describe('what is new in a project', () => {
+	const unseenOn = (name: string) =>
+		[...document.querySelectorAll('nav a')]
+			.find((link) => link.textContent?.includes(name))
+			?.querySelector('[data-testid="unseen-badge"] [aria-hidden]')
+			?.textContent?.trim();
+
+	it('puts the count on the project the updates landed in', async () => {
+		render(Sidebar, { projects, unseenCounts: { p1: 4 } });
+
+		expect(unseenOn('Alpha')).toBe('4');
+		expect(unseenOn('Beta')).toBeUndefined();
+	});
+
+	it('says what the number means rather than leaving a bare digit', async () => {
+		const screen = render(Sidebar, { projects, unseenCounts: { p1: 4 } });
+
+		await expect.element(screen.getByText('4 new since you last looked')).toBeInTheDocument();
+	});
+
+	it('shows both badges on a row that has earned both, and keeps them apart', async () => {
+		const screen = render(Sidebar, {
+			projects,
+			requestCounts: { p1: 1 },
+			unseenCounts: { p1: 4 }
+		});
+
+		const row = screen.getByRole('link', { name: /Alpha/ }).element();
+		expect(row.querySelector('[data-testid="request-badge"] [aria-hidden]')?.textContent).toBe('1');
+		expect(row.querySelector('[data-testid="unseen-badge"] [aria-hidden]')?.textContent).toBe('4');
+	});
+
+	it('badges an archived project too, once it is revealed', async () => {
+		const screen = render(Sidebar, { projects, unseenCounts: { p3: 2 } });
+
+		await screen.getByRole('button', { name: /Archived/ }).click();
+
+		expect(unseenOn('Old')).toBe('2');
+	});
+
+	it('shows nothing for a project that is caught up', async () => {
+		render(Sidebar, { projects, unseenCounts: {} });
+
+		expect(document.querySelector('[data-testid="unseen-badge"]')).toBeNull();
 	});
 });

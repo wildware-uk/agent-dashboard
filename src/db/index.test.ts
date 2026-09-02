@@ -39,7 +39,10 @@ describe('the $db surface', () => {
 			tasks: 'insertTask',
 			messages: 'insertMessage',
 			read_cursors: 'advanceReadCursor',
-			approvals: 'insertApproval'
+			approvals: 'insertApproval',
+			push_subscriptions: 'upsertPushSubscription',
+			update_shares: 'insertUpdateShare',
+			acknowledgements: 'upsertAcknowledgement'
 		};
 
 		for (const table of TABLES) {

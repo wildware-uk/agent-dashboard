@@ -14,8 +14,11 @@ export type MediaKind = 'image' | 'video';
 /** Lifecycle of a task (design §3). */
 export type TaskState = 'todo' | 'claimed' | 'done' | 'cancelled';
 
-/** The five shapes an owner request takes (design §5). */
-export type RequestKind = 'text' | 'confirm' | 'buttons' | 'choice' | 'multi_choice';
+/** What an agent is saying about a message or a task (migration 013). */
+export type AckState = 'thinking' | 'done';
+
+/** The shapes an owner request takes (design §5). */
+export type RequestKind = 'text' | 'confirm' | 'buttons' | 'choice' | 'multi_choice' | 'form';
 
 /**
  * How a pending request ended. `pending` is not an outcome, so it is absent.
@@ -69,6 +72,16 @@ export interface EventPayloads {
 	/** `author` is the literal `human` or `agent:<agent_id>` (design §3). */
 	'message.created': { messageId: string; projectId: string | null; author: string };
 	/**
+	 * An agent's read cursor moved, so its unread count fell (design §5).
+	 *
+	 * The only *read* that publishes, and it earns the exception: `unread_messages`
+	 * is state anything watching an agent has to track, and `get_messages` is the
+	 * one thing that lowers it. Without this the count changes in silence, every
+	 * listener keeps a stale figure, and the next real message looks like a fall
+	 * against it — which is exactly how a live channel went quiet.
+	 */
+	'messages.read': { agentId: string; cursor: number };
+	/**
 	 * An agent has stopped and is waiting on its owner (design §5).
 	 *
 	 * `kind` rides along because it decides which control the sticky banner
@@ -94,6 +107,25 @@ export interface EventPayloads {
 		agentId: string;
 		state: RequestOutcome;
 		settledAt: string;
+	};
+	/**
+	 * An agent has said something about a message or a task without saying it in
+	 * words: "I have this" or "this is done".
+	 *
+	 * One name for both states, and for a first acknowledgement and a revision
+	 * alike, because there is only ever one row per agent per thing — a browser
+	 * hearing this refetches and reconciles by id like every other subscriber,
+	 * and a second event name would be a distinction nothing acts on.
+	 *
+	 * `state` rides along so a subscriber can decide whether it cares before
+	 * refetching, exactly as `pinned` does on `update.updated`.
+	 */
+	'ack.updated': {
+		ackId: string;
+		agentId: string;
+		messageId: string | null;
+		taskId: string | null;
+		state: AckState;
 	};
 	/** Presence is derived from heartbeats, never stored as a flag (design §4). */
 	'agent.presence': { agentId: string; sessionId: string | null; online: boolean };

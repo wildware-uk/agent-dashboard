@@ -299,3 +299,91 @@ describe('a thread, as the owner’s browser reads it', () => {
 		]);
 	});
 });
+
+/**
+ * The owner's own feed posts, and replies to them (migration 014).
+ *
+ * A post anchors to nothing — it is the thing being discussed rather than a
+ * comment on something — so a reply names the post directly. One level deep, on
+ * purpose: threads of threads are a shape nobody asked for.
+ */
+describe('replying to a post', () => {
+	it('files the reply under the post, in the post’s project', () => {
+		const post = fromOwner('have a look at the migration', { project: slug });
+
+		const reply = postMessage(h, {
+			author: { kind: 'agent', agentId },
+			body: 'on it',
+			replyTo: post.id
+		});
+
+		expect(reply).toMatchObject({ replyTo: post.id, projectId, updateId: null, taskId: null });
+	});
+
+	it('leaves a post itself unanchored, which is what makes it a card', () => {
+		const post = fromOwner('a thought', { project: slug });
+
+		expect(post).toMatchObject({ replyTo: null, updateId: null, taskId: null, projectId });
+	});
+
+	it('refuses a reply to a reply, rather than nesting', () => {
+		const post = fromOwner('a thought', { project: slug });
+		const reply = postMessage(h, {
+			author: { kind: 'agent', agentId },
+			body: 'on it',
+			replyTo: post.id
+		});
+
+		expect(
+			refusalCode(() =>
+				postMessage(h, { author: { kind: 'human' }, body: 'and?', replyTo: reply.id })
+			)
+		).toBe('invalid_argument');
+	});
+
+	it('refuses a reply to a message that is not there', () => {
+		expect(
+			refusalCode(() => postMessage(h, { author: { kind: 'human' }, body: 'hi', replyTo: 'nope' }))
+		).toBe('not_found');
+	});
+
+	it('refuses a reply that also names an update or a task', () => {
+		const post = fromOwner('a thought', { project: slug });
+		const update = postUpdate(h, { project: slug, agentId, body: 'shipped' });
+
+		expect(
+			refusalCode(() =>
+				postMessage(h, {
+					author: { kind: 'human' },
+					body: 'both',
+					replyTo: post.id,
+					updateId: update.id
+				})
+			)
+		).toBe('invalid_argument');
+	});
+
+	it('refuses a reply filed against a project the post is not in', () => {
+		const post = fromOwner('a thought', { project: slug });
+		const other = createProject(h, { name: 'Elsewhere' }).project;
+
+		expect(
+			refusalCode(() =>
+				postMessage(h, {
+					author: { kind: 'human' },
+					body: 'wrong project',
+					replyTo: post.id,
+					project: other.slug
+				})
+			)
+		).toBe('invalid_argument');
+	});
+
+	it('reaches an agent the way any other message does', () => {
+		fromOwner('have a look at this', { project: slug });
+
+		// The unread count is what the heartbeat and the channel both report, so a
+		// post arriving with no anchor must still be work the agent hears about.
+		expect(countUnreadMessages(h, agentId)).toBe(1);
+	});
+});

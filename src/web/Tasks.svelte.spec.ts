@@ -7,7 +7,7 @@ import { describe, expect, it } from 'vitest';
 import Tasks from './Tasks.svelte';
 import { Tasks as TaskStore } from './tasks.svelte';
 import type { ThreadSource } from './threads.svelte';
-import { FakeStream, aMessage, aProject, aTask, fakeActions, fakeTasksApi } from './testing';
+import { FakeStream, aMessage, anAck, aProject, aTask, fakeActions, fakeTasksApi } from './testing';
 
 /**
  * The owner's task panel (design §7): a plain per-project list across todo,
@@ -24,9 +24,15 @@ function mount(
 		agentNames?: Record<string, string>;
 		seq?: number;
 		threads?: ThreadSource;
+		acks?: ReturnType<typeof anAck>[];
+		onlineIds?: string[];
 	} = {}
 ) {
-	const api = fakeTasksApi({ seq: options.seq ?? 4, tasks: options.tasks ?? [] });
+	const api = fakeTasksApi({
+		seq: options.seq ?? 4,
+		tasks: options.tasks ?? [],
+		acks: options.acks ?? []
+	});
 	const stream = new FakeStream();
 	const feed = new TaskStore({
 		project: options.project ?? null,
@@ -47,7 +53,8 @@ function mount(
 			projects: [aProject(), aProject({ id: 'p2', slug: 'other', name: 'Other' })],
 			agentNames: options.agentNames ?? { a1: 'scout' },
 			actions: acts.actions,
-			threads: options.threads
+			threads: options.threads,
+			onlineIds: options.onlineIds ?? []
 		})
 	};
 }
@@ -243,6 +250,68 @@ describe('steering a task the owner already created', () => {
 	});
 });
 
+/**
+ * Sending work to a project's agents (issue: "send a task via a channel to the
+ * agents of a specific project").
+ *
+ * Not an assignment, and the specs below are mostly about keeping the two
+ * apart: an assignment names who must do it, this says whoever gets there
+ * first, and the control only exists where a race is actually winnable.
+ */
+describe('sending a task to the project’s agents', () => {
+	it('offers it round, and says so once it has gone out', async () => {
+		const { api, acts, screen } = mount({ tasks: [aTask({ id: 't1', title: 'anybody' })] });
+		await api.settle();
+
+		await screen.getByRole('button', { name: /^Send task anybody/ }).click();
+
+		expect(acts.calls).toEqual([{ name: 'patchTask', args: ['t1', { broadcast: true }] }]);
+	});
+
+	it('takes it back off the wire', async () => {
+		const { api, acts, screen } = mount({
+			tasks: [aTask({ id: 't1', title: 'anybody', broadcastAt: 1 })]
+		});
+		await api.settle();
+
+		const button = screen.getByRole('button', { name: /^Recall task anybody/ });
+		await expect.element(button).toHaveAttribute('aria-pressed', 'true');
+		await button.click();
+
+		expect(acts.calls).toEqual([{ name: 'patchTask', args: ['t1', { broadcast: false }] }]);
+	});
+
+	it('is absent on work somebody already holds, which is a race nobody could win', async () => {
+		const { api, screen } = mount({
+			tasks: [aTask({ id: 't1', title: 'taken', state: 'claimed', agentId: 'a1' })]
+		});
+		await api.settle();
+
+		expect(screen.getByRole('button', { name: /Send task taken/ }).elements()).toHaveLength(0);
+	});
+
+	it('is absent on a task the owner aimed at one agent', async () => {
+		const { api, screen } = mount({
+			tasks: [aTask({ id: 't1', title: 'yours', agentId: 'a1' })],
+			agentNames: { a1: 'scout' }
+		});
+		await api.settle();
+
+		expect(screen.getByRole('button', { name: /Send task yours/ }).elements()).toHaveLength(0);
+	});
+
+	it('says what went wrong when the server refuses, and keeps the row', async () => {
+		const { api, acts, screen } = mount({ tasks: [aTask({ id: 't1', title: 'stuck' })] });
+		acts.fail(new Error('task is claimed'));
+		await api.settle();
+
+		await screen.getByRole('button', { name: /^Send task stuck/ }).click();
+
+		await expect.element(screen.getByText('task is claimed')).toBeInTheDocument();
+		await expect.element(screen.getByText('stuck')).toBeInTheDocument();
+	});
+});
+
 describe('on a phone', () => {
 	it('fits 360px without the panel scrolling sideways, and keeps 44px targets', async () => {
 		const { api, screen } = mount({
@@ -288,7 +357,9 @@ describe('the conversation on a task', () => {
 
 		await screen.getByRole('button', { name: 'Reply' }).first().click();
 		await screen.getByRole('textbox', { name: /repl/i }).first().fill('use release/1.0');
-		await screen.getByRole('button', { name: /send/i }).first().click();
+		// Named exactly: the row also carries a "Send to agents" button, and a
+		// loose /send/i would reach for whichever of the two came first.
+		await screen.getByRole('button', { name: 'Send reply' }).first().click();
 
 		await expect
 			.poll(() =>
@@ -323,5 +394,60 @@ describe('the conversation on a task', () => {
 		const box = (await reply.element()).getBoundingClientRect();
 
 		expect(box.height).toBeGreaterThanOrEqual(44);
+	});
+});
+
+/**
+ * What an agent has said about a task, without saying it in words
+ * (migration 013).
+ *
+ * A claimed task and an ignored one look identical until the first update
+ * lands, which can be minutes. This is what fills that gap.
+ */
+describe('acknowledgements on a task', () => {
+	it('shows a tick against the task the agent dealt with', async () => {
+		const { api, screen } = mount({
+			tasks: [aTask({ id: 't1', title: 'look at it' })],
+			acks: [anAck({ id: 'k1', messageId: null, taskId: 't1', state: 'done' })]
+		});
+		await api.settle();
+
+		await expect.element(screen.getByText('scout marked this done')).toBeInTheDocument();
+	});
+
+	it('shows an online agent thinking about it', async () => {
+		const { api, screen } = mount({
+			tasks: [aTask({ id: 't1', title: 'look at it' })],
+			acks: [anAck({ id: 'k1', messageId: null, taskId: 't1', state: 'thinking' })],
+			onlineIds: ['a1']
+		});
+		await api.settle();
+
+		await expect.element(screen.getByText(/scout is thinking/)).toBeInTheDocument();
+	});
+
+	it('stops claiming an agent is thinking once its session has gone', async () => {
+		const { api } = mount({
+			tasks: [aTask({ id: 't1', title: 'look at it' })],
+			acks: [anAck({ id: 'k1', messageId: null, taskId: 't1', state: 'thinking' })],
+			onlineIds: []
+		});
+		await api.settle();
+
+		expect(document.querySelector('[data-ack]')).toBeNull();
+	});
+
+	it('puts it on the task it belongs to and no other', async () => {
+		const { api } = mount({
+			tasks: [aTask({ id: 't1', title: 'acknowledged' }), aTask({ id: 't2', title: 'silent' })],
+			acks: [anAck({ id: 'k1', messageId: null, taskId: 't1', state: 'done' })]
+		});
+		await api.settle();
+
+		const rows = [...document.querySelectorAll('li[aria-label]')];
+		const acknowledged = rows.find((row) => row.getAttribute('aria-label') === 'acknowledged');
+		const silent = rows.find((row) => row.getAttribute('aria-label') === 'silent');
+		expect(acknowledged?.querySelector('[data-ack]')).not.toBeNull();
+		expect(silent?.querySelector('[data-ack]')).toBeNull();
 	});
 });

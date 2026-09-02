@@ -47,8 +47,8 @@ export const MAX_RATIO = 2.4;
  * identical everywhere is also what makes the immutable cache headers on
  * `/media/:id/:variant` worth anything.
  */
-export function mediaUrl(id: string, variant: MediaVariant): string {
-	return `${base}/media/${id}/${variant}`;
+export function mediaUrl(id: string, variant: MediaVariant, prefix = ''): string {
+	return `${base}${prefix}/media/${id}/${variant}`;
 }
 
 /** Has the pipeline produced this variant? */
@@ -57,9 +57,9 @@ export function has(item: MediaView, variant: MediaVariant): boolean {
 }
 
 /** The first of these variants that exists, as a URL. */
-function firstOf(item: MediaView, ...variants: MediaVariant[]): string | null {
+function firstOf(item: MediaView, prefix: string, ...variants: MediaVariant[]): string | null {
 	const found = variants.find((variant) => has(item, variant));
-	return found ? mediaUrl(item.id, found) : null;
+	return found ? mediaUrl(item.id, found, prefix) : null;
 }
 
 /** Only a `ready` row has anything to render; the rest have a state to show. */
@@ -109,17 +109,20 @@ export function gridColumns(count: number): number {
 }
 
 /** What a grid cell shows for an image: the small thumbnail (design §6 step 4). */
-export function thumbSrc(item: MediaView): string | null {
+export function thumbSrc(item: MediaView, prefix = ''): string | null {
 	if (!renderable(item)) return null;
-	if (item.kind === 'video') return posterSrc(item);
-	return firstOf(item, 'thumb-640', 'thumb-1600', 'original');
+	if (item.kind === 'video') return posterSrc(item, prefix);
+	return firstOf(item, prefix, 'thumb-640', 'thumb-1600', 'original');
 }
 
 /** Both thumbnails as a `srcset`, so a wide screen or a 2x display gets the big one. */
-export function thumbSrcset(item: MediaView): string | undefined {
+export function thumbSrcset(item: MediaView, prefix = ''): string | undefined {
 	if (!renderable(item) || item.kind === 'video') return undefined;
 	if (!has(item, 'thumb-640') || !has(item, 'thumb-1600')) return undefined;
-	return `${mediaUrl(item.id, 'thumb-640')} 640w, ${mediaUrl(item.id, 'thumb-1600')} 1600w`;
+	return (
+		`${mediaUrl(item.id, 'thumb-640', prefix)} 640w, ` +
+		`${mediaUrl(item.id, 'thumb-1600', prefix)} 1600w`
+	);
 }
 
 /**
@@ -129,21 +132,21 @@ export function thumbSrcset(item: MediaView): string | undefined {
  * webp is a fraction of it at the size a screen can actually show; the original
  * is still one click away at its own address.
  */
-export function viewSrc(item: MediaView): string | null {
+export function viewSrc(item: MediaView, prefix = ''): string | null {
 	if (!renderable(item) || item.kind === 'video') return null;
-	return firstOf(item, 'thumb-1600', 'original');
+	return firstOf(item, prefix, 'thumb-1600', 'original');
 }
 
 /** The playable source: the transcode if there is one, else the original. */
-export function videoSrc(item: MediaView): string | null {
+export function videoSrc(item: MediaView, prefix = ''): string | null {
 	if (!renderable(item) || item.kind !== 'video') return null;
-	return firstOf(item, 'video', 'original');
+	return firstOf(item, prefix, 'video', 'original');
 }
 
 /** The poster frame, which is what a video shows until it is played. */
-export function posterSrc(item: MediaView): string | null {
+export function posterSrc(item: MediaView, prefix = ''): string | null {
 	if (!renderable(item)) return null;
-	return firstOf(item, 'poster');
+	return firstOf(item, prefix, 'poster');
 }
 
 /** Is this something the lightbox can enlarge? Video plays where it sits. */

@@ -9,7 +9,7 @@
  * Two things are specific to this list, and both come from what a request *is* —
  * an agent stopped dead, waiting on a human.
  *
- * **Nothing is dropped, ever.** The banner shows a queue and the store keeps
+ * **Nothing is dropped, ever.** The feed shows one card per request, and the store keeps
  * every pending request the server sent, in the server's order (oldest first, so
  * the agent that has waited longest is at the front). There is no page size and
  * no per-project filter: a request belongs to the owner rather than to the
@@ -22,7 +22,7 @@
  *
  * The optional browser notification (design §7) lives here rather than in the
  * component: it fires off `request.created`, which is a fact about the stream,
- * and the banner would have to reconstruct "this one is new" from a list it
+ * and the cards would have to reconstruct "this one is new" from a list it
  * refetches wholesale. Permission is never *asked for* — that is the owner's to
  * grant, and a page that prompts on load is a page people close.
  */
@@ -68,7 +68,7 @@ export class Requests {
 
 	private hub: SharedStream | null;
 	private held: Subscription | null = null;
-	/** Refcounted: the banner may be mounted twice on a page that has a drawer. */
+	/** Refcounted: the sidebar's copy is mounted twice on a page that has a drawer. */
 	private holders = 0;
 	private queued = false;
 	private inFlight: Promise<void> | null = null;
@@ -82,7 +82,7 @@ export class Requests {
 		this.status = 'live';
 	};
 	private readonly onError = () => {
-		// `EventSource` reconnects by itself; this only stops the banner implying
+		// `EventSource` reconnects by itself; this only stops the cards implying
 		// it is current while it is not.
 		if (this.held) this.status = 'offline';
 	};
@@ -142,7 +142,7 @@ export class Requests {
 	 * the event that prompted this call, so applying it raises the cursor past an
 	 * item that was never delivered. This store has no poller, so nothing would
 	 * repair it until some later, unrelated event arrived — a blocked agent
-	 * silently absent from the banner, which is the one lie this must never tell.
+	 * silently absent from the feed, which is the one lie this must never tell.
 	 * So remember that another read is wanted and run it once the current one
 	 * settles (the same shape as `timeline.svelte.ts`).
 	 */
@@ -193,7 +193,12 @@ export class Requests {
 
 	private apply(snapshot: RequestsSnapshot): void {
 		this.items = snapshot.requests;
-		this.seq = Math.max(this.seq, snapshot.seq);
+		// Adopted, not raised to the greater of the two: the server's stamp says
+		// where the stream *is*, and a seq below the one held means the deployment
+		// restarted — its bus counts from zero and is never persisted. Keeping the
+		// larger figure would make every event the new process publishes look like a
+		// replay and drop it, silently, until somebody reloaded the page.
+		this.seq = snapshot.seq;
 	}
 
 	private receive(event: StreamMessage): void {

@@ -308,6 +308,34 @@ describe('resync', () => {
 		expect(feed.seq).toBe(900);
 	});
 
+	/**
+	 * The restart case, which is the one that made the dashboard go quiet.
+	 *
+	 * `seq` counts from zero in the server's memory and is never persisted, so a
+	 * redeployed process starts issuing 1, 2, 3 again. A store that kept the
+	 * larger of the two figures would treat every event the new server published
+	 * as a replay and drop it, silently, until the page was reloaded.
+	 */
+	it('rewinds its cursor when the server comes back counting from zero', async () => {
+		const feed = timeline();
+		feed.hydrate(api.snapshot());
+		feed.start();
+		expect(feed.seq).toBe(11);
+
+		api.replace({ seq: 0, items: [second, first] });
+		stream.emit('resync', { seq: 0, reason: 'ahead', from: 11 });
+		await api.settle();
+
+		expect(feed.seq).toBe(0);
+
+		// And the restarted server's first event actually lands.
+		api.replace({ seq: 1, items: [third, second, first] });
+		stream.emit('update.created', { seq: 1, payload: { updateId: 'u3', projectId: 'p1' } });
+		await api.settle();
+
+		expect(feed.items.map((item) => item.id)).toContain('u3');
+	});
+
 	it('does not animate every card as if it were new', async () => {
 		const feed = timeline();
 		feed.hydrate(api.snapshot());
@@ -454,5 +482,68 @@ describe('one project at a time', () => {
 		await api.settle();
 
 		expect(feed.items.map((item) => item.id)).toEqual(['u3', 'u2', 'u1']);
+	});
+});
+
+/**
+ * Filtering the feed to one task (design §7).
+ *
+ * Server-side rather than over what is already loaded: the browser holds one
+ * page of the timeline, and a task's history can run further back than that page
+ * reaches — a client-side filter would show a fraction of the work and look like
+ * all of it.
+ */
+describe('filtering by task', () => {
+	it('asks the server for that task’s updates', async () => {
+		const api = fakeApi({ seq: 1, projects: [], items: [anUpdate()] });
+		const feed = new Timeline({ fetch: api.fetch, schedule: (run) => run() });
+		feed.hydrate(api.snapshot());
+
+		await feed.filterByTask('t1');
+
+		expect(api.calls.at(-1)).toContain('task=t1');
+		expect(feed.task).toBe('t1');
+	});
+
+	it('clears it again', async () => {
+		const api = fakeApi({ seq: 1, projects: [], items: [anUpdate()] });
+		const feed = new Timeline({ fetch: api.fetch, schedule: (run) => run() });
+		feed.hydrate(api.snapshot());
+		await feed.filterByTask('t1');
+
+		await feed.filterByTask(null);
+
+		expect(feed.task).toBeNull();
+		expect(api.calls.at(-1)).not.toContain('task=');
+	});
+
+	it('does nothing when the filter is already what was asked for', async () => {
+		const api = fakeApi({ seq: 1, projects: [], items: [anUpdate()] });
+		const feed = new Timeline({ fetch: api.fetch, schedule: (run) => run() });
+		feed.hydrate(api.snapshot());
+		await feed.filterByTask('t1');
+		const before = api.calls.length;
+
+		await feed.filterByTask('t1');
+
+		expect(api.calls.length).toBe(before);
+	});
+
+	it('drops arrivals counted against the feed it is leaving', async () => {
+		const feed = timeline();
+		feed.hydrate(api.snapshot());
+		feed.start();
+		feed.hold(true);
+		api.publish(third);
+		stream.emit('update.created', { seq: 12, payload: { updateId: 'u3' } });
+		await api.settle();
+		expect(feed.pendingCount).toBe(1);
+
+		await feed.filterByTask('t1');
+
+		// Those "N new" were counted against a feed that no longer exists, and
+		// offering them after the filter would promise updates that do not match it.
+		expect(feed.pendingCount).toBe(0);
+		feed.stop();
 	});
 });

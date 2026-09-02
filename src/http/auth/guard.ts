@@ -20,8 +20,17 @@ export const LOGOUT_PATH = '/logout';
  *
  * - `/mcp` — MCP Streamable HTTP, `Authorization: Bearer <agent token>` (§5).
  * - `/api/upload` — a single-use HMAC upload token in the URL (§6).
+ * - `/s` — a public share link: the token in the path is the whole
+ *   authorisation, and it grants exactly one card (`src/domain/shares.ts`). This
+ *   is the only unauthenticated *read* of agent-authored content in the product,
+ *   which is why the domain hands the route a purpose-built shape rather than
+ *   the dashboard's own, and why the media under it is scoped to the same share.
+ * - `/api/agent` — an agent's own live stream, `Authorization: Bearer <agent
+ *   token>` exactly as `/mcp` (§4, §5). It is under `/api` and would otherwise
+ *   be caught by the browser-API rule below, which would refuse every agent
+ *   with a 401 the agent could do nothing about.
  */
-export const TOKEN_AUTHED_PREFIXES = ['/mcp', '/api/upload'] as const;
+export const TOKEN_AUTHED_PREFIXES = ['/mcp', '/api/upload', '/s', '/api/agent'] as const;
 
 /** Reachable without a session, or the owner could never get one. */
 export const PUBLIC_PREFIXES = [LOGIN_PATH, LOGOUT_PATH] as const;

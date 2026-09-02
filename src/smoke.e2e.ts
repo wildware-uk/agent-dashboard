@@ -314,17 +314,18 @@ test('an agent blocks on its owner, and the answer it clicked comes back to the 
 	const loads = documentLoads(page);
 	await signIn(page);
 	const client = await agent();
-	const banner = page.getByTestId('request-banner');
+	const waiting = page.getByTestId('request-section');
 
-	// A confirm: permission, and a boolean back. The banner is sticky and above
-	// everything else, because the agent is stopped until it is answered (§7).
+	// A confirm: permission, and a boolean back. The card sits at the top of the
+	// feed, above the pinned section, because the agent is stopped until it is
+	// answered (§7).
 	const confirm = call(client, 'request_input', {
 		kind: 'confirm',
 		question: 'Push the migration to main?',
 		detail: 'It drops the legacy column.'
 	});
-	await expect(banner).toContainText('Push the migration to main?', { timeout: 20_000 });
-	await expect(banner).toContainText('It drops the legacy column.');
+	await expect(waiting).toContainText('Push the migration to main?', { timeout: 20_000 });
+	await expect(waiting).toContainText('It drops the legacy column.');
 	await page.getByRole('button', { name: 'Approve' }).click();
 
 	expect(await keepWaiting(client, await confirm)).toMatchObject({
@@ -339,7 +340,7 @@ test('an agent blocks on its owner, and the answer it clicked comes back to the 
 		question: 'Which branch should I release from?',
 		options: ['main', 'next', 'release/1.2']
 	});
-	await expect(banner).toContainText('Which branch should I release from?', { timeout: 20_000 });
+	await expect(waiting).toContainText('Which branch should I release from?', { timeout: 20_000 });
 	await page.getByRole('radio', { name: 'release/1.2' }).click();
 	await page.getByRole('button', { name: 'Send' }).click();
 
@@ -349,8 +350,8 @@ test('an agent blocks on its owner, and the answer it clicked comes back to the 
 	});
 
 	// Nothing is left waiting on the owner, and none of it cost a page load: the
-	// banner arrived and left over the same stream the timeline reads.
-	await expect(banner).toBeHidden();
+	// card arrived and left over the same stream the timeline reads.
+	await expect(waiting).toBeHidden();
 	expect(loads()).toBe(1);
 
 	await client.close();

@@ -76,25 +76,46 @@ throttled, while a request with no credentials costs nothing to refuse.
 
 ## Tools
 
-The tools built so far, of the fourteen in design §5 (§11 steps 5, 9, 12, 13 and 14).
+The tools built so far — the fourteen in design §5, plus `edit_update` (§11 steps 5, 9,
+12, 13 and 14), `post_message`, and `acknowledge` (migration 013).
 `TOOL_NAMES` is the list that cannot drift:
 
-| Tool               | Takes                                                                                                                                    | Does                                                     |
-| ------------------ | ---------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------- |
-| `create_project`   | `name`, `slug?`, `description?`                                                                                                          | Idempotent on slug; returns `created`.                   |
-| `list_projects`    | `status?`                                                                                                                                | Sidebar order: pinned first, then newest.                |
-| `post_update`      | `project` (slug or id), `body`, `title?`, `level?`, `media_ids?`, `session_id?`                                                          | Posts to the timeline; publishes `update.created`.       |
-| `create_upload`    | `filename`, `mime`, `bytes`                                                                                                              | Mints a single-use upload URL, 15 minute TTL.            |
-| `attach_media`     | `update_id`, `media_ids`                                                                                                                 | For bytes that land after the post. Retry-safe.          |
-| `register_session` | `meta?` (`{host, cwd, model}`)                                                                                                           | Opens a session; returns `heartbeat_interval_s`.         |
-| `heartbeat`        | `session_id`                                                                                                                             | Stays online; piggybacks the three work counts.          |
-| `end_session`      | `session_id`                                                                                                                             | Closes the run. Idempotent.                              |
-| `get_messages`     | `since?`, `project?`, `mark_read?`                                                                                                       | Reads what the owner said. Advances your cursor.         |
-| `list_tasks`       | `project?`, `state?`, `mine?`                                                                                                            | The work queue. `mine` is your token, not an id.         |
-| `claim_task`       | `task_id`                                                                                                                                | One atomic claim; the loser gets `conflict`.             |
-| `complete_task`    | `task_id`, `result`, `post_update?`                                                                                                      | Closes your claim, optionally posting a card.            |
-| `request_input`    | `kind`, `question`, `detail?`, `options?`, `placeholder?`, `multiline?`, `default?`, `min?`, `max?`, `project?`, `update?`, `timeout_s?` | Asks the owner for something, then parks up to `HOLD_S`. |
-| `await_request`    | `request_id`                                                                                                                             | Resumes that wait, with identical semantics.             |
+| Tool                | Takes                                                                                                                                              | Does                                                     |
+| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- | -------------------------------------------------------- |
+| `create_project`    | `name`, `slug?`, `description?`                                                                                                                    | Idempotent on slug; returns `created`.                   |
+| `list_projects`     | `status?`                                                                                                                                          | Sidebar order: pinned first, then newest.                |
+| `post_update`       | `project` (slug or id), `body`, `title?`, `level?`, `priority?`, `task_id?`, `media_ids?`, `session_id?`                                           | Posts to the timeline; publishes `update.created`.       |
+| `set_project_theme` | `project`, `background?`, `accent?`, `logo_media_id?`, `logo_replaces_name?`                                                                       | Colours and a logo for one project. Hex only.            |
+| `edit_update`       | `update_id`, `body?`, `title?`, `level?`                                                                                                           | Corrects your own card. Marked edited, keeps its place.  |
+| `create_upload`     | `filename`, `mime`, `bytes`                                                                                                                        | Mints a single-use upload URL, 15 minute TTL.            |
+| `attach_media`      | `update_id`, `media_ids`                                                                                                                           | For bytes that land after the post. Retry-safe.          |
+| `register_session`  | `meta?` (`{host, cwd, model}`)                                                                                                                     | Opens a session; returns `heartbeat_interval_s`.         |
+| `heartbeat`         | `session_id`                                                                                                                                       | Stays online; piggybacks the three work counts.          |
+| `end_session`       | `session_id`                                                                                                                                       | Closes the run. Idempotent.                              |
+| `get_messages`      | `since?`, `project?`, `mark_read?`                                                                                                                 | Reads what the owner said. Advances your cursor.         |
+| `create_task`       | `project`, `title`, `body?`, `assign_to_me?`                                                                                                       | Puts work on the board. Yours only if you ask.           |
+| `list_tasks`        | `project?`, `state?`, `mine?`                                                                                                                      | The work queue. `mine` is your token, not an id.         |
+| `claim_task`        | `task_id`                                                                                                                                          | One atomic claim; the loser gets `conflict`.             |
+| `complete_task`     | `task_id`, `result`, `post_update?`                                                                                                                | Closes your claim, optionally posting a card.            |
+| `post_message`      | `body`, `update_id?`, `task_id?`, `project?`                                                                                                       | Answers the owner in the thread they asked in.           |
+| `acknowledge`       | `state`, `message_id?` \| `task_id?`                                                                                                               | Two words, no body: a tick, or a live "is thinking…".    |
+| `request_input`     | `kind`, `question`, `detail?`, `options?`, `placeholder?`, `multiline?`, `label?`, `default?`, `min?`, `max?`, `project?`, `update?`, `timeout_s?` | Asks the owner for something, then parks up to `HOLD_S`. |
+| `await_request`     | `request_id`                                                                                                                                       | Resumes that wait, with identical semantics.             |
+
+`acknowledge` is the smallest tool here and exists because of what the dashboard
+looks like from the _owner's_ side in the seconds after they type: identical to
+how it looked before. `thinking` and `done` are the whole vocabulary — `thinking`
+renders as a live "… is thinking…" and `done` as a tick — and there is
+deliberately no body, because a status that could carry a sentence would be a
+second message channel beside `post_message` and the two would drift.
+
+Two consequences worth knowing before changing it. There is **one row per agent
+per thing** (`src/db/acknowledgements.ts` upserts), so re-asserting `thinking` on
+every reconnect is free and leaves no trail. And `thinking` is a claim about
+_now_, so the dashboard renders it only while that agent is online
+(`src/web/Ack.svelte`) — an animation running against a session that died an hour
+ago is a lie the owner has no way to check, which is the same silence the tool
+exists to end.
 
 `post_update` takes `media_ids` and refuses the whole post if any id is not the
 caller's to attach — an image an agent believes it published must not be silently
@@ -139,6 +160,15 @@ that I have it". A narrowed read — one project, or an explicit `since` — wil
 move the cursor past a message it did not hand over, so delivery is at-least-once
 rather than at-most-once: an agent may be given the same message twice, and can
 never silently lose one. The reasoning is in `src/domain/messages.ts`.
+
+`request_input` offers six kinds. Five of them answer one question each — type,
+confirm, or pick — and `form` is the generic one: the agent's own action labels
+in `options`, its draft in `default`, and the field named by `label`, answered as
+`{action, text}`. It exists because a real approval is usually two questions at
+once ("send this message" is a draft to edit _and_ a decision to take), and
+asking them separately means one of the two is answered about text that has since
+changed. Its description tells the agent to act on `value.text` rather than the
+draft it sent, which is the one way to get this kind wrong.
 
 `request_input` and `await_request` are the two tools whose **description is the
 mechanism**. A stateless MCP server has no push channel (see above), and a human

@@ -57,4 +57,10 @@ export {
 } from './frames';
 export type { Resync } from './frames';
 export { ownerAuthenticated, unauthenticatedResponse } from './owner';
+export { AGENT_HEARTBEAT_MS, AGENT_RETRY_MS, WORK_EVENT, createAgentStreamHandler } from './agent';
+export type {
+	AgentStreamHandler,
+	AgentStreamHandlerOptions,
+	AgentStreamRequestEvent
+} from './agent';
 export type { OwnerCheck, OwnerRequest } from './owner';

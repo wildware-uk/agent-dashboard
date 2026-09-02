@@ -22,9 +22,10 @@ type Row = {
 	author: string;
 	body: string;
 	created_at: number;
+	reply_to: string | null;
 };
 
-const COLUMNS = `seq, id, project_id, update_id, task_id, author, body, created_at`;
+const COLUMNS = `seq, id, project_id, update_id, task_id, author, body, created_at, reply_to`;
 
 function toMessage(row: Row): Message {
 	return {
@@ -35,7 +36,8 @@ function toMessage(row: Row): Message {
 		taskId: row.task_id,
 		author: row.author,
 		body: row.body,
-		createdAt: row.created_at
+		createdAt: row.created_at,
+		replyTo: row.reply_to
 	};
 }
 
@@ -48,6 +50,8 @@ export type NewMessage = {
 	author: string;
 	body: string;
 	createdAt?: number;
+	/** The message this answers (migration 014). */
+	replyTo?: string | null;
 };
 
 export function insertMessage(db: Db, input: NewMessage): Message {
@@ -58,13 +62,14 @@ export function insertMessage(db: Db, input: NewMessage): Message {
 		task_id: orNull(input.taskId),
 		author: input.author,
 		body: input.body,
-		created_at: input.createdAt ?? Date.now()
+		created_at: input.createdAt ?? Date.now(),
+		reply_to: orNull(input.replyTo)
 	};
 
 	const inserted = db
 		.prepare<typeof row, Row>(
-			`INSERT INTO messages (id, project_id, update_id, task_id, author, body, created_at)
-			 VALUES (:id, :project_id, :update_id, :task_id, :author, :body, :created_at)
+			`INSERT INTO messages (id, project_id, update_id, task_id, author, body, created_at, reply_to)
+			 VALUES (:id, :project_id, :update_id, :task_id, :author, :body, :created_at, :reply_to)
 			 RETURNING ${COLUMNS}`
 		)
 		.get(row)!;
@@ -122,20 +127,62 @@ export function listMessages(db: Db, query: MessageQuery = {}): Message[] {
 export function countMessagesAfter(
 	db: Db,
 	afterSeq: number,
-	query: { projectId?: string; excludeAuthor?: string } = {}
+	query: { projectId?: string; projectIds?: readonly string[]; excludeAuthor?: string } = {}
 ): number {
-	const params = {
+	const params: Record<string, unknown> = {
 		after_seq: afterSeq,
 		project_id: orNull(query.projectId),
 		exclude_author: orNull(query.excludeAuthor)
 	};
+
+	// An explicit list of projects, for a caller that wants "anything in the
+	// places this agent works" rather than one project or all of them. Expanded
+	// into placeholders because SQLite has no array parameter; an empty list is
+	// not the same as an absent one and is answered without a query at all,
+	// since `IN ()` is a syntax error and would otherwise mean "match nothing"
+	// written as a crash.
+	let scope = '';
+	if (query.projectIds) {
+		if (query.projectIds.length === 0) return 0;
+		scope = ` AND project_id IN (${query.projectIds.map((_, index) => `:p${index}`).join(', ')})`;
+		query.projectIds.forEach((id, index) => (params[`p${index}`] = id));
+	}
 
 	return db
 		.prepare<typeof params, { n: number }>(
 			`SELECT count(*) AS n FROM messages
 			 WHERE seq > :after_seq
 			   AND (:project_id IS NULL OR project_id = :project_id)
-			   AND (:exclude_author IS NULL OR author <> :exclude_author)`
+			   AND (:exclude_author IS NULL OR author <> :exclude_author)${scope}`
 		)
 		.get(params)!.n;
+}
+
+/**
+ * Every project one agent has anything to do with.
+ *
+ * There is no "assignment" in this product — an agent is not a member of a
+ * project, it just works in one — so relevance is derived from what it has
+ * actually done: posted an update, been handed a task, or spoken in a thread.
+ * That is the honest answer to "should this agent be woken for this project",
+ * and it needs no configuration anybody could forget to set.
+ *
+ * An empty list means an agent that has done nothing yet, which callers treat
+ * as "hears everything" rather than "hears nothing": a brand new agent must not
+ * be deaf to the first message ever sent to it.
+ */
+export function listAgentProjectIds(db: Db, agentId: string, author: string): string[] {
+	const params = { agent_id: agentId, author };
+	return db
+		.prepare<typeof params, { project_id: string }>(
+			`SELECT DISTINCT project_id FROM updates WHERE agent_id = :agent_id
+			 UNION
+			 SELECT DISTINCT project_id FROM tasks
+			  WHERE agent_id = :agent_id AND project_id IS NOT NULL
+			 UNION
+			 SELECT DISTINCT project_id FROM messages
+			  WHERE author = :author AND project_id IS NOT NULL`
+		)
+		.all(params)
+		.map((row) => row.project_id);
 }

@@ -22,16 +22,21 @@ describe('the $mcp surface', () => {
 		expect(mcp.TOOL_NAMES).toEqual([
 			'create_project',
 			'list_projects',
+			'set_project_theme',
 			'post_update',
+			'edit_update',
 			'create_upload',
 			'attach_media',
 			'register_session',
 			'heartbeat',
 			'end_session',
 			'list_tasks',
+			'create_task',
 			'claim_task',
 			'complete_task',
 			'get_messages',
+			'post_message',
+			'acknowledge',
 			'request_input',
 			'await_request'
 		]);

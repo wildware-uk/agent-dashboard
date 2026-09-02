@@ -21,11 +21,11 @@ import type { McpTool } from './types';
 
 const inputSchema = {
 	kind: z
-		.enum(['text', 'confirm', 'buttons', 'choice', 'multi_choice'])
+		.enum(['text', 'confirm', 'buttons', 'choice', 'multi_choice', 'form'])
 		.describe(
 			'What you need back: "text" for a string, "confirm" for a yes/no, "buttons" for one ' +
 				'action out of several, "choice" for one option from a list, "multi_choice" for any ' +
-				'number of options.'
+				'number of options, "form" for an editable draft plus your own action buttons.'
 		),
 	question: z
 		.string()
@@ -44,41 +44,56 @@ const inputSchema = {
 		.array(z.string())
 		.optional()
 		.describe(
-			'The options offered, for kind "buttons", "choice" and "multi_choice". Required for ' +
-				'those three, refused for the others. Distinct, at most 25, 200 characters each. ' +
-				'The answer you get back is one of these exact strings.'
+			'The options offered, for kind "buttons", "choice", "multi_choice" and "form". ' +
+				'Required for those four, refused for the others. Distinct, at most 25, 200 ' +
+				'characters each. For "form" these are your action buttons ("Approve", "Reject") ' +
+				'rather than things to pick between. The answer you get back is one of these ' +
+				'exact strings.'
 		),
 	placeholder: z
 		.string()
 		.optional()
-		.describe('kind "text" only: the hint shown in the empty box, e.g. "fix: the parser".'),
+		.describe('kind "text" and "form": the hint shown in the empty box, e.g. "fix: the parser".'),
 	multiline: z
 		.boolean()
 		.optional()
-		.describe('kind "text" only: true gives your owner a textarea rather than a single line.'),
+		.describe(
+			'kind "text" and "form": true gives your owner a textarea rather than a single line. ' +
+				'Use it for anything longer than a line — a form carrying a message almost always ' +
+				'wants it.'
+		),
+	label: z
+		.string()
+		.optional()
+		.describe(
+			'kind "form" only: what to call the editable field, e.g. "Message" or "Commit ' +
+				'message". Defaults to "Your answer".'
+		),
 	default: z
 		.string()
 		.optional()
 		.describe(
 			'Pre-fills the control: the suggested text for "text", one of the options for ' +
-				'"buttons" and "choice", "true" or "false" for "confirm". Not accepted for ' +
-				'"multi_choice".'
+				'"buttons" and "choice", "true" or "false" for "confirm", and for "form" the draft ' +
+				'you want reviewed — put the message you are proposing to send here. Not accepted ' +
+				'for "multi_choice".'
 		),
 	min: z
 		.number()
 		.int()
 		.optional()
 		.describe(
-			'kind "multi_choice": the fewest options that may be chosen. kind "text": the shortest ' +
-				'answer, in characters. Not accepted for the other kinds.'
+			'kind "multi_choice": the fewest options that may be chosen. kind "text" and "form": ' +
+				'the shortest answer, in characters. Not accepted for the other kinds.'
 		),
 	max: z
 		.number()
 		.int()
 		.optional()
 		.describe(
-			'kind "multi_choice": the most options that may be chosen. kind "text": the longest ' +
-				'answer, in characters (10000 by default). Not accepted for the other kinds.'
+			'kind "multi_choice": the most options that may be chosen. kind "text" and "form": ' +
+				'the longest answer, in characters (10000 by default). Not accepted for the other ' +
+				'kinds.'
 		),
 	project: z
 		.string()
@@ -118,10 +133,17 @@ export const requestInputTool: McpTool<typeof inputSchema, Promise<CallToolResul
 			'- kind "buttons" -> one of your options. "retry" / "skip" / "abort".',
 			'- kind "choice" -> one of your options, chosen from a list.',
 			'- kind "multi_choice" -> a list of your options. Use min and max to bound how many.',
+			'- kind "form" -> { action, text }: your own action buttons plus one editable field, so',
+			'  your owner can change what you drafted and then decide about it in one step. Put the',
+			'  draft in `default`, the buttons in `options`, and name the field with `label`. This',
+			'  is the kind to use for "here is the Slack message I am about to send" — asking for',
+			'  approval and asking for edits separately means one of the two is answered about text',
+			'  that has already changed.',
 			'',
 			'Arguments: kind and question are required. detail is the longer explanation.',
-			'options is required for buttons, choice and multi_choice and refused for the rest.',
-			'placeholder, multiline, default, min, max are the kind-specific knobs listed above.',
+			'options is required for buttons, choice, multi_choice and form, and refused for the',
+			'rest. placeholder, multiline, label, default, min, max are the kind-specific knobs',
+			'listed above.',
 			'project (a slug or id) and update (an update id) say what the request is about.',
 			'timeout_s is how long the request stays answerable, one hour by default.',
 			'',
@@ -147,10 +169,15 @@ export const requestInputTool: McpTool<typeof inputSchema, Promise<CallToolResul
 			'',
 			'READING THE ANSWER. `response.value` is typed by `response.kind`: a string for "text",',
 			'"buttons" and "choice"; true or false for "confirm"; an array of strings for',
-			'"multi_choice". Narrow on `response.kind` and the value is whichever of those it says.',
-			'The server checks every answer against the request that asked for it, so a "choice"',
-			'value is always one of the options you offered and a "multi_choice" always respects your',
-			'min and max — you do not need to re-validate it.',
+			'"multi_choice"; and { "action", "text" } for "form". Narrow on `response.kind` and the',
+			'value is whichever of those it says. The server checks every answer against the request',
+			'that asked for it, so a "choice" value is always one of the options you offered and a',
+			'"multi_choice" always respects your min and max — you do not need to re-validate it.',
+			'',
+			'For a "form", USE `value.text` AND NOT YOUR DRAFT. The whole point of the kind is that',
+			'your owner may have rewritten it, and `value.action` tells you only what they decided,',
+			'not what they decided about. `value.action` is one of the options you offered, so a',
+			'"Reject" is a real answer: do not send anything.',
 			'',
 			'"timeout" means nobody answered in time and "cancelled" means your owner dismissed the',
 			'prompt. NEITHER IS PERMISSION. Do not do the thing you asked about; post an update',
@@ -178,6 +205,7 @@ export const requestInputTool: McpTool<typeof inputSchema, Promise<CallToolResul
 						options: args.options,
 						placeholder: args.placeholder,
 						multiline: args.multiline,
+						label: args.label,
 						default: args.default,
 						min: args.min,
 						max: args.max,

@@ -247,8 +247,13 @@ export function listMediaByStatus(
 }
 
 /**
- * Media nothing references, older than the cutoff: the sweeper's query
- * (design §3 — a ready row with no update after an hour is garbage).
+ * Media nothing points at any more, old enough to collect.
+ *
+ * "Orphaned" means no update *and* no project using it as a logo. The second
+ * half is not obvious from the media table alone, which is exactly why it is
+ * written into the query rather than left to the caller: a logo is media that by
+ * design will never have an `update_id`, and a sweeper that only knew the first
+ * half deleted every one of them an hour after it was set.
  */
 export function listOrphanedMedia(
 	db: Db,
@@ -263,6 +268,15 @@ export function listOrphanedMedia(
 			 WHERE update_id IS NULL
 			   AND status IN (${placeholders})
 			   AND created_at < ?
+			   -- A project logo is media nothing will ever attach to an update
+			   -- (migration 006), so "no update" stopped meaning "nobody wants
+			   -- this" the day logos existed. Without this clause the sweeper
+			   -- collects every logo an hour after it is set, and the header goes
+			   -- blank with nothing to say why.
+			   AND id NOT IN (
+				 SELECT json_extract(theme, '$.logoMediaId') FROM projects
+				  WHERE theme IS NOT NULL AND json_extract(theme, '$.logoMediaId') IS NOT NULL
+			   )
 			 ORDER BY seq
 			 LIMIT ?`
 		)

@@ -33,6 +33,7 @@
  */
 import {
 	assignTask,
+	broadcastTask,
 	cancelTask,
 	context,
 	createProject,
@@ -40,12 +41,15 @@ import {
 	deleteUpdate,
 	isDomainError,
 	invalid,
+	markProjectSeen,
+	markRepliesSeen,
 	setUpdatePinned,
 	updateProject,
 	type CreateProjectInput,
 	type CreateTaskInput,
 	type DomainContext,
 	type ProjectStatus,
+	type ProjectThemeInput,
 	type UpdateProjectInput
 } from '$domain';
 import type { AuthConfig, SessionCookieReader } from '../auth';
@@ -133,20 +137,57 @@ export function createTaskHandler(options: OwnerHandlerOptions = {}): OwnerHandl
 }
 
 /**
- * `PATCH /api/tasks/[id]` — reassign one task, or cancel it.
+ * `PATCH /api/tasks/[id]` — reassign one task, broadcast it, or cancel it.
  *
- * Those are the only two, and the omissions are deliberate: `claimed` and `done`
- * are the agent's to write over MCP (design §5), so a browser cannot mark work
- * finished that nobody did. A patch naming any other state is refused rather
- * than quietly ignored.
+ * Those are the only three, and the omissions are deliberate: `claimed` and
+ * `done` are the agent's to write over MCP (design §5), so a browser cannot mark
+ * work finished that nobody did. A patch naming any other state is refused
+ * rather than quietly ignored.
  */
 export function patchTaskHandler(options: OwnerHandlerOptions = {}): OwnerHandler {
 	return handle(options, async (event, ctx) => {
 		const id = event.params.id ?? '';
 		const patch = readTaskPatch(await readJson(event.request));
-		const task = patch.cancel ? cancelTask(ctx, id) : assignTask(ctx, id, patch.agentId);
+		const task =
+			patch.kind === 'cancel'
+				? cancelTask(ctx, id)
+				: patch.kind === 'broadcast'
+					? broadcastTask(ctx, id, patch.on)
+					: assignTask(ctx, id, patch.agentId);
 		return { status: 200, body: { task } };
 	});
+}
+
+/**
+ * `POST /api/projects/[reference]/seen` — the owner has looked at this project.
+ *
+ * A `POST` to its own path rather than a field on the project patch, because a
+ * patch is a change to what the project *is* and this is a record of what the
+ * owner has read. Folding it in would also mean every "mark seen" bumped
+ * `updated_at` and reordered anything sorted by it.
+ *
+ * Idempotent in the way that matters: sending it twice stamps a later time and
+ * clears the same badge.
+ */
+export function markProjectSeenHandler(options: OwnerHandlerOptions = {}): OwnerHandler {
+	return handle(options, (event, ctx) =>
+		Promise.resolve({
+			status: 200,
+			body: { project: markProjectSeen(ctx, event.params.reference ?? '') }
+		})
+	);
+}
+
+/**
+ * `POST /api/updates/[id]/replies-seen` — the owner has read this card's thread.
+ *
+ * Idempotent in the way that matters: sending it twice stamps a later time and
+ * the card stays out of "Recent replies" either way.
+ */
+export function markRepliesSeenHandler(options: OwnerHandlerOptions = {}): OwnerHandler {
+	return handle(options, (event, ctx) =>
+		Promise.resolve({ status: 200, body: { update: markRepliesSeen(ctx, event.params.id ?? '') } })
+	);
 }
 
 /**
@@ -215,6 +256,36 @@ export function readProjectPatch(body: Body): UpdateProjectInput {
 	if ('slug' in body) patch.slug = text(body.slug, 'slug');
 	if ('status' in body) patch.status = status(body.status);
 	if ('pinned' in body) patch.pinned = flag(body.pinned, 'pinned');
+	if ('theme' in body) patch.theme = themePatch(body.theme);
+	// Passed through untouched: `$domain` is the one place that decides what a
+	// board may be, and a second shape check here would be a weaker copy of it.
+	if ('board' in body) patch.board = body.board;
+	return patch;
+}
+
+/**
+ * The theme half of a project patch (design §7).
+ *
+ * Only the three fields are read, and each only as a string or `null` — the
+ * values are checked properly in `$domain`, which is the one place that decides
+ * what may reach a CSS custom property. This is the shape check that keeps an
+ * object or an array from getting that far.
+ */
+function themePatch(value: unknown): ProjectThemeInput | null {
+	if (value === null) return null;
+	if (typeof value !== 'object' || Array.isArray(value)) {
+		throw invalid('theme must be an object, or null to clear it');
+	}
+
+	const body = value as Record<string, unknown>;
+	const patch: ProjectThemeInput = {};
+	if ('background' in body) patch.background = nullableText(body.background, 'background');
+	if ('accent' in body) patch.accent = nullableText(body.accent, 'accent');
+	if ('logoMediaId' in body) patch.logoMediaId = nullableText(body.logoMediaId, 'logoMediaId');
+	if ('logoReplacesName' in body) {
+		patch.logoReplacesName =
+			body.logoReplacesName === null ? null : flag(body.logoReplacesName, 'logoReplacesName');
+	}
 	return patch;
 }
 
@@ -234,7 +305,15 @@ export function readUpdatePatch(body: Body): boolean {
 	return flag(body.pinned, 'pinned');
 }
 
-/** The new-task form: a project, a title, and optionally a brief and an assignee. */
+/**
+ * The new-task form: a project, a title, and optionally a brief, an assignee,
+ * and whether to hand it straight to the project's agents.
+ *
+ * `broadcast` is what the board's one-line composer sends. It is a field on the
+ * create rather than a second call because handing work over is one act, and
+ * `$domain` refuses it alongside an assignee — naming an agent and offering it
+ * to everybody are different instructions.
+ */
 export function readCreateTask(body: Body): CreateTaskInput {
 	const input: CreateTaskInput = {
 		project: text(body.project, 'project'),
@@ -242,30 +321,50 @@ export function readCreateTask(body: Body): CreateTaskInput {
 	};
 	if ('body' in body) input.body = nullableText(body.body, 'body');
 	if ('agentId' in body) input.agentId = nullableText(body.agentId, 'agentId');
+	if ('broadcast' in body) input.broadcast = flag(body.broadcast, 'broadcast');
 	return input;
 }
 
-/** What a task patch resolved to: a cancel, or an assignee to write. */
-export type TaskPatch = { cancel: true } | { cancel: false; agentId: string | null };
+/** What a task patch resolved to: a cancel, a broadcast, or an assignee to write. */
+export type TaskPatch =
+	| { kind: 'cancel' }
+	| { kind: 'assign'; agentId: string | null }
+	| { kind: 'broadcast'; on: boolean };
 
 /**
- * The two things the owner may do to an existing task.
+ * The three things the owner may do to an existing task.
  *
- * One at a time, and named explicitly. A patch carrying both would have to pick
- * an order, and a patch carrying neither is a click that would publish an event
+ * One at a time, and named explicitly. A patch carrying two would have to pick
+ * an order, and a patch carrying none is a click that would publish an event
  * telling every open tab to re-render for nothing.
+ *
+ * `broadcast` is the third because sending work to a project's agents is not
+ * assigning it: an assignment names who must do it, a broadcast says whoever
+ * gets there first, and collapsing them would mean an owner could only reach a
+ * project's fleet by picking one of them.
  */
 export function readTaskPatch(body: Body): TaskPatch {
 	if ('state' in body) {
 		if (body.state !== 'cancelled') {
 			throw invalid('the only state the owner may set is cancelled; agents claim and complete');
 		}
-		if ('agentId' in body) throw invalid('cancel a task or reassign it, not both');
-		return { cancel: true };
+		if ('agentId' in body || 'broadcast' in body) {
+			throw invalid('cancel a task, reassign it, or broadcast it — one at a time');
+		}
+		return { kind: 'cancel' };
 	}
 
-	if ('agentId' in body) return { cancel: false, agentId: nullableText(body.agentId, 'agentId') };
-	throw invalid('a task patch either reassigns the task or cancels it');
+	if ('broadcast' in body) {
+		if ('agentId' in body) {
+			throw invalid('cancel a task, reassign it, or broadcast it — one at a time');
+		}
+		return { kind: 'broadcast', on: flag(body.broadcast, 'broadcast') };
+	}
+
+	if ('agentId' in body) {
+		return { kind: 'assign', agentId: nullableText(body.agentId, 'agentId') };
+	}
+	throw invalid('a task patch reassigns the task, broadcasts it, or cancels it');
 }
 
 function text(value: unknown, field: string): string {

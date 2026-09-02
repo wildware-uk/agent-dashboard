@@ -17,11 +17,19 @@
 		theme = document.documentElement.dataset.theme === 'light' ? 'light' : 'dark';
 	});
 
+	/** The surfaces `app.css` paints, as the one colour a status bar can be. */
+	const BAR = { dark: '#111419', light: '#fbfcfd' };
+
 	function set(next: 'dark' | 'light') {
 		theme = next;
 		const root = document.documentElement;
 		root.dataset.theme = next;
 		root.classList.toggle('dark', next === 'dark');
+		// An installed app's status bar is painted from this tag, so a theme the
+		// owner chose has to move it too — otherwise a light page keeps a dark bar
+		// above it for the rest of the session.
+		const meta = document.querySelector('meta[name="theme-color"]');
+		if (meta) meta.setAttribute('content', BAR[next]);
 		try {
 			localStorage.setItem('theme', next);
 		} catch {

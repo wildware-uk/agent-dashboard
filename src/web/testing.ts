@@ -12,6 +12,7 @@
  * hide exactly the bugs these tests exist to catch.
  */
 import type {
+	AckView,
 	MediaView,
 	MessageView,
 	MessagesSnapshot,
@@ -139,6 +140,10 @@ export type FakeApiState = {
 	hasMore?: boolean;
 	/** Agent id to display name, as the full snapshot carries it. */
 	agentNames?: Record<string, string>;
+	/** The threads the server render embeds, so a card paints with its replies. */
+	messages?: MessageView[];
+	/** What agents have said about those messages (migration 013). */
+	acks?: AckView[];
 };
 
 /**
@@ -167,7 +172,9 @@ export function fakeApi(initial: FakeApiState) {
 				at: new Date().toISOString(),
 				projects: state.projects,
 				updates: page(),
-				agentNames: state.agentNames ?? {}
+				agentNames: state.agentNames ?? {},
+				...(state.messages ? { messages: state.messages } : {}),
+				...(state.acks ? { acks: state.acks } : {})
 			};
 		},
 
@@ -256,8 +263,24 @@ export function fakeActions(): {
 		actions: {
 			createProject: (input) =>
 				record('createProject', [input], aProject({ id: 'new', name: input.name })),
-			patchProject: (reference, patch) =>
-				record('patchProject', [reference, patch], aProject({ slug: reference, ...patch })),
+			patchProject: (reference, patch) => {
+				// `theme` is the one field whose patch shape differs from the row's: a
+				// patch may say `null` for a field to clear it, and a row never can.
+				// The server resolves that; the double just records the call.
+				const { theme, ...fields } = patch;
+				return record(
+					'patchProject',
+					[reference, patch],
+					// A patch's `theme` may say `null` for a field to clear it and a row
+					// never can, so the double reports the row unthemed unless the patch
+					// set a whole theme. Resolving the merge is the server's job.
+					aProject({
+						slug: reference,
+						...fields,
+						...(theme ? { theme: { background: theme.background ?? undefined } } : {})
+					})
+				);
+			},
 			setUpdatePinned: (id, pinned) =>
 				record('setUpdatePinned', [id, pinned], anUpdate({ id, pinned })),
 			deleteUpdate: (id) => record('deleteUpdate', [id], anUpdate({ id, deletedAt: 1 })),
@@ -265,9 +288,32 @@ export function fakeActions(): {
 				record(
 					'createTask',
 					[input],
-					aTask({ id: 'new', title: input.title, agentId: input.agentId ?? null })
+					aTask({
+						id: 'new',
+						title: input.title,
+						agentId: input.agentId ?? null,
+						// The server stamps a broadcast as it inserts; the double reports
+						// the row the same way rather than dropping the field.
+						broadcastAt: input.broadcast ? 1 : null
+					})
 				),
-			patchTask: (id, patch) => record('patchTask', [id, patch], aTask({ id, ...patch })),
+			patchTask: (id, patch) => {
+				// `broadcast` is a verb, not a column: the row answers with the stamp
+				// the server wrote, so the double translates it the same way.
+				const { broadcast, ...fields } = patch;
+				return record(
+					'patchTask',
+					[id, patch],
+					aTask({
+						id,
+						...fields,
+						...(broadcast === undefined ? {} : { broadcastAt: broadcast ? 1 : null })
+					})
+				);
+			},
+			markProjectSeen: (reference) =>
+				record('markProjectSeen', [reference], aProject({ slug: reference })),
+			markRepliesSeen: (id) => record('markRepliesSeen', [id], anUpdate({ id, repliesSeenAt: 1 })),
 			postMessage: (input) =>
 				record(
 					'postMessage',
@@ -280,7 +326,10 @@ export function fakeActions(): {
 					[id, value],
 					aRequest({ id, state: 'answered', answer: { kind: 'confirm', value } })
 				),
-			dismissRequest: (id) => record('dismissRequest', [id], aRequest({ id, state: 'cancelled' }))
+			dismissRequest: (id) => record('dismissRequest', [id], aRequest({ id, state: 'cancelled' })),
+			shareUpdate: (id) =>
+				record('shareUpdate', [id], { url: `https://dash.test/s/token-for-${id}` }),
+			revokeShare: (id) => record('revokeShare', [id], { revoked: true })
 		}
 	};
 }
@@ -448,6 +497,7 @@ export function aTask(overrides: Partial<TaskView> = {}): TaskView {
 		claimedAt: null,
 		doneAt: null,
 		result: null,
+		broadcastAt: null,
 		...overrides
 	};
 }
@@ -460,9 +510,10 @@ export function aTask(overrides: Partial<TaskView> = {}): TaskView {
  * the endpoint sends the list as it stands, so a test says what the server now
  * holds rather than publishing a delta.
  */
-export function fakeTasksApi(initial: { seq?: number; tasks?: TaskView[] } = {}) {
+export function fakeTasksApi(initial: { seq?: number; tasks?: TaskView[]; acks?: AckView[] } = {}) {
 	let seq = initial.seq ?? 1;
 	let tasks = initial.tasks ?? [];
+	const acks = initial.acks ?? [];
 	const calls: string[] = [];
 	const queue: (() => void)[] = [];
 	let status = 200;
@@ -472,7 +523,7 @@ export function fakeTasksApi(initial: { seq?: number; tasks?: TaskView[] } = {})
 		queue,
 
 		snapshot(): TasksSnapshot {
-			return { seq, at: new Date().toISOString(), tasks };
+			return { seq, at: new Date().toISOString(), tasks, acks };
 		},
 
 		/** The server's answer is now this, at this stream cursor. */
@@ -490,7 +541,7 @@ export function fakeTasksApi(initial: { seq?: number; tasks?: TaskView[] } = {})
 			calls.push(url);
 			if (status !== 200) return Promise.resolve(new Response('no', { status }));
 			return Promise.resolve(
-				new Response(JSON.stringify({ seq, at: new Date().toISOString(), tasks }), {
+				new Response(JSON.stringify({ seq, at: new Date().toISOString(), tasks, acks }), {
 					status: 200,
 					headers: { 'content-type': 'application/json' }
 				})
@@ -508,6 +559,24 @@ export function fakeTasksApi(initial: { seq?: number; tasks?: TaskView[] } = {})
 	};
 }
 
+/**
+ * An acknowledgement with sensible defaults: an agent saying it is on the
+ * default message (migration 013).
+ */
+export function anAck(overrides: Partial<AckView> = {}): AckView {
+	return {
+		id: 'ack1',
+		seq: 1,
+		agentId: 'a1',
+		messageId: 'msg1',
+		taskId: null,
+		state: 'thinking',
+		createdAt: Date.UTC(2026, 7, 25, 11, 1),
+		updatedAt: Date.UTC(2026, 7, 25, 11, 1),
+		...overrides
+	};
+}
+
 /** A message with sensible defaults: the owner's reply on the default card. */
 export function aMessage(overrides: Partial<MessageView> = {}): MessageView {
 	return {
@@ -519,6 +588,7 @@ export function aMessage(overrides: Partial<MessageView> = {}): MessageView {
 		author: 'human',
 		body: 'nice one',
 		createdAt: Date.UTC(2026, 7, 25, 11),
+		replyTo: null,
 		...overrides
 	};
 }
@@ -532,9 +602,12 @@ export function aMessage(overrides: Partial<MessageView> = {}): MessageView {
  * request per card, or newest-first, would be wrong here as well as in
  * production.
  */
-export function fakeMessagesApi(initial: { seq?: number; messages?: MessageView[] } = {}) {
+export function fakeMessagesApi(
+	initial: { seq?: number; messages?: MessageView[]; acks?: AckView[] } = {}
+) {
 	let seq = initial.seq ?? 1;
 	let messages = initial.messages ?? [];
+	let acks = initial.acks ?? [];
 	const calls: string[] = [];
 	const queue: (() => void)[] = [];
 	let status = 200;
@@ -544,7 +617,13 @@ export function fakeMessagesApi(initial: { seq?: number; messages?: MessageView[
 		queue,
 
 		snapshot(): MessagesSnapshot {
-			return { seq, at: new Date().toISOString(), messages };
+			return { seq, at: new Date().toISOString(), messages, acks };
+		},
+
+		/** An agent said something about a message, bumping the stream cursor. */
+		acknowledge(ack: AckView): void {
+			acks = [...acks.filter((held) => held.id !== ack.id), ack];
+			seq = ack.seq;
 		},
 
 		/** Somebody posted, on the server, bumping the stream cursor. */
@@ -562,7 +641,7 @@ export function fakeMessagesApi(initial: { seq?: number; messages?: MessageView[
 			calls.push(url);
 			if (status !== 200) return Promise.resolve(new Response('no', { status }));
 			return Promise.resolve(
-				new Response(JSON.stringify({ seq, at: new Date().toISOString(), messages }), {
+				new Response(JSON.stringify({ seq, at: new Date().toISOString(), messages, acks }), {
 					status: 200,
 					headers: { 'content-type': 'application/json' }
 				})

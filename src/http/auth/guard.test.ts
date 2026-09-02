@@ -29,6 +29,19 @@ describe('what the session guard covers', () => {
 		expect(requiresSession('/api/upload/abc.def')).toBe(false);
 	});
 
+	it('lets a share link through: the token in the path is the authorisation', () => {
+		// The one unauthenticated read in the product (design §8). The token grants
+		// exactly one card, and the media under it is scoped to the same share.
+		for (const pathname of ['/s/tok', '/s/tok/', '/s/tok/media/m1/thumb-640']) {
+			expect(requiresSession(pathname), pathname).toBe(false);
+		}
+	});
+
+	it('still guards a path that merely starts with the same letters', () => {
+		expect(requiresSession('/settings')).toBe(true);
+		expect(requiresSession('/shared')).toBe(true);
+	});
+
 	it('does not guard login or logout, or the owner could never reach them', () => {
 		expect(requiresSession('/login')).toBe(false);
 		expect(requiresSession('/logout')).toBe(false);

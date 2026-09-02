@@ -42,6 +42,17 @@ const inputSchema = {
 			`Optional headline shown above the body, at most ${TITLE_MAX_LENGTH} characters. ` +
 				`Omit for a body-only note.`
 		),
+	priority: z
+		.enum(['low', 'medium', 'high'])
+		.optional()
+		.describe(
+			'How much this needs your owner NOW: "low", "medium" (the default) or "high". A ' +
+				'different question from level — level is what happened, priority is whether it can ' +
+				'wait. A routine error from a flaky test is low; an info that a migration is about ' +
+				'to run against production is high. Your owner filters notifications on this, per ' +
+				'device, so "high" is what reaches a phone at 2am. Use it sparingly or it stops ' +
+				'meaning anything.'
+		),
 	level: z
 		.enum(['info', 'success', 'warn', 'error'])
 		.optional()
@@ -59,6 +70,16 @@ const inputSchema = {
 				`already PUT, at most ${MEDIA_PER_UPDATE_MAX}. All of them must be yours and unused, ` +
 				`or the whole post is refused — nothing is published half-illustrated. If an upload ` +
 				`finishes after you post, use attach_media instead.`
+		),
+	task_id: z
+		.string()
+		.optional()
+		.describe(
+			'The task this is progress on, from list_tasks or claim_task. Filing an update against ' +
+				'a task is how a long-running piece of work gets a history your owner can read: the ' +
+				'task page shows every update on it, newest first, with the latest as its current ' +
+				'status. Use it for every post about work you claimed. The task must be in the same ' +
+				'project you are posting to.'
 		),
 	session_id: z
 		.string()
@@ -87,8 +108,13 @@ export const postUpdateTool: McpTool<typeof inputSchema> = {
 			`- title (optional): a headline, at most ${TITLE_MAX_LENGTH} characters.`,
 			'- level (optional): "info" (default), "success", "warn" or "error". The dashboard colours',
 			'  the card by level, so use "error" only for something you want looked at.',
+			'- priority (optional): "low", "medium" (default) or "high" — whether it can wait. Your',
+			'  owner filters notifications on it per device, so "high" is what reaches a phone.',
 			`- media_ids (optional): up to ${MEDIA_PER_UPDATE_MAX} ids from create_upload whose bytes`,
 			'  you have already uploaded. They appear as images or video on the card.',
+			'- task_id (optional): the task this is progress on. Your owner reads a task page that',
+			'  shows every update filed against it, so a claimed task with no updates looks stalled',
+			'  even while you are working. Post against it as you go.',
 			'- session_id (optional): the id register_session returned, if you have one. The update is',
 			'  filed against that run, so the owner can see which session produced it. It must be one',
 			'  of your own sessions.',
@@ -119,6 +145,8 @@ export const postUpdateTool: McpTool<typeof inputSchema> = {
 				body: args.body,
 				title: args.title,
 				level: args.level,
+				priority: args.priority,
+				taskId: args.task_id,
 				sessionId: args.session_id,
 				mediaIds: args.media_ids
 			});

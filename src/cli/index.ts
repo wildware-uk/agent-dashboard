@@ -29,6 +29,7 @@ import {
 	revokeAgentToken,
 	type DomainContext
 } from '$domain';
+import { generateVAPIDKeys } from 'web-push';
 import { hashPassword } from '$http/auth';
 
 /** Everything a command may talk to. Nothing here reads `process` directly. */
@@ -91,6 +92,26 @@ export const COMMANDS: Record<string, Command> = {
 			io.out(token);
 			io.out('');
 			io.out('This is the only time the token is shown. Store it in the agent MCP config.');
+			return OK;
+		}
+	},
+
+	'vapid-keys': {
+		args: '',
+		summary: 'Generate a VAPID keypair for push notifications. Paste both into .env.',
+		run: (_argv, io) => {
+			// Generated here rather than by hand because the pair has to be a
+			// matching P-256 key in the exact base64url encoding a push service
+			// expects, and every browser subscription is bound to the public half:
+			// a mistyped key is not a startup error, it is notifications that
+			// silently never arrive.
+			const { publicKey, privateKey } = generateVAPIDKeys();
+
+			io.out(`VAPID_PUBLIC_KEY=${publicKey}`);
+			io.out(`VAPID_PRIVATE_KEY=${privateKey}`);
+			io.out('');
+			io.out('Add both to .env and restart. Changing them later invalidates every');
+			io.out('subscription already stored, and each browser must subscribe again.');
 			return OK;
 		}
 	},

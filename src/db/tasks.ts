@@ -22,10 +22,11 @@ type Row = {
 	claimed_at: number | null;
 	done_at: number | null;
 	result: string | null;
+	broadcast_at: number | null;
 };
 
 const COLUMNS = `seq, id, project_id, agent_id, title, body, state, created_at, claimed_at,
-	done_at, result`;
+	done_at, result, broadcast_at`;
 
 function toTask(row: Row): Task {
 	return {
@@ -39,7 +40,8 @@ function toTask(row: Row): Task {
 		createdAt: row.created_at,
 		claimedAt: row.claimed_at,
 		doneAt: row.done_at,
-		result: row.result
+		result: row.result,
+		broadcastAt: row.broadcast_at
 	};
 }
 
@@ -52,6 +54,15 @@ export type NewTask = {
 	body?: string;
 	state?: TaskState;
 	createdAt?: number;
+	/**
+	 * Sent to the project's agents as it is created.
+	 *
+	 * Here rather than left to a second write because the two are one act when
+	 * the owner hands something over: a task that existed unbroadcast for a beat
+	 * would publish `task.created` that no agent should act on, followed by a
+	 * `task.updated` that they should.
+	 */
+	broadcastAt?: number | null;
 };
 
 export function insertTask(db: Db, input: NewTask): Task {
@@ -62,13 +73,14 @@ export function insertTask(db: Db, input: NewTask): Task {
 		title: input.title,
 		body: input.body ?? '',
 		state: input.state ?? 'todo',
-		created_at: input.createdAt ?? Date.now()
+		created_at: input.createdAt ?? Date.now(),
+		broadcast_at: orNull(input.broadcastAt)
 	};
 
 	const inserted = db
 		.prepare<typeof row, Row>(
-			`INSERT INTO tasks (id, project_id, agent_id, title, body, state, created_at)
-			 VALUES (:id, :project_id, :agent_id, :title, :body, :state, :created_at)
+			`INSERT INTO tasks (id, project_id, agent_id, title, body, state, created_at, broadcast_at)
+			 VALUES (:id, :project_id, :agent_id, :title, :body, :state, :created_at, :broadcast_at)
 			 RETURNING ${COLUMNS}`
 		)
 		.get(row)!;
@@ -85,6 +97,8 @@ export type TaskQuery = {
 	projectId?: string;
 	state?: TaskState;
 	agentId?: string;
+	/** Only tasks the owner has broadcast to a project's agents. */
+	broadcast?: boolean;
 	/** Default 100. */
 	limit?: number;
 };
@@ -94,6 +108,7 @@ export function listTasks(db: Db, query: TaskQuery = {}): Task[] {
 		project_id: orNull(query.projectId),
 		state: orNull(query.state),
 		agent_id: orNull(query.agentId),
+		broadcast: query.broadcast === undefined ? null : Number(query.broadcast),
 		limit: query.limit ?? 100
 	};
 
@@ -103,6 +118,9 @@ export function listTasks(db: Db, query: TaskQuery = {}): Task[] {
 			 WHERE (:project_id IS NULL OR project_id = :project_id)
 			   AND (:state IS NULL OR state = :state)
 			   AND (:agent_id IS NULL OR agent_id = :agent_id)
+			   AND (:broadcast IS NULL
+			        OR (:broadcast = 1 AND broadcast_at IS NOT NULL)
+			        OR (:broadcast = 0 AND broadcast_at IS NULL))
 			 ORDER BY seq DESC
 			 LIMIT :limit`
 		)
@@ -186,4 +204,49 @@ export function assignTask(db: Db, id: string, agentId: string | null): Task | u
 		.get(agentId, id);
 
 	return row && toTask(row);
+}
+
+/**
+ * Send a task out to its project's agents, or take it back off the wire.
+ *
+ * Only `todo` work can be broadcast: a claimed task already has somebody on it,
+ * and announcing it would put every other agent into a race it must lose. The
+ * conditional lives in the SQL rather than above it for the same reason
+ * `claimTask`'s does — one statement is one verdict.
+ */
+export function broadcastTask(db: Db, id: string, at: number | null): Task | undefined {
+	const row = db
+		.prepare<[number | null, string], Row>(
+			`UPDATE tasks SET broadcast_at = ?
+			 WHERE id = ? AND state = 'todo'
+			 RETURNING ${COLUMNS}`
+		)
+		.get(at, id);
+
+	return row && toTask(row);
+}
+
+/**
+ * How many broadcast `todo` tasks are open in a set of projects.
+ *
+ * Unassigned only: once somebody claims a broadcast task it stops being work
+ * going spare, and counting it afterwards would keep telling the rest of the
+ * fleet about a job that is already being done.
+ *
+ * An empty list counts nothing — the caller is saying "these projects", and an
+ * empty "these" is not "all". A caller that means all of them passes
+ * `undefined`.
+ */
+export function countBroadcastTasks(db: Db, projectIds?: readonly string[]): number {
+	if (projectIds?.length === 0) return 0;
+
+	const scope = projectIds ? `AND project_id IN (${projectIds.map(() => '?').join(', ')})` : '';
+	const row = db
+		.prepare<string[], { count: number }>(
+			`SELECT COUNT(*) AS count FROM tasks
+			 WHERE state = 'todo' AND agent_id IS NULL AND broadcast_at IS NOT NULL ${scope}`
+		)
+		.get(...(projectIds ? [...projectIds] : []))!;
+
+	return row.count;
 }

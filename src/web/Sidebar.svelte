@@ -12,12 +12,51 @@
 	import NewProject from './NewProject.svelte';
 	import ProjectActions from './ProjectActions.svelte';
 	import type { OwnerActions } from './actions';
-	import type { ProjectView } from './types';
+	import type { MediaView, ProjectView } from './types';
 
 	let {
 		projects,
 		/** The selected project's slug, or `null` for the whole timeline. */
 		activeSlug = null,
+		/**
+		 * How many agents are blocked on the owner, per project id (design §7).
+		 *
+		 * This is what makes it safe for the request cards to live inside one
+		 * project's feed: a blocked agent somewhere else is a number on the row that
+		 * navigates to it, rather than something the owner has to go looking for.
+		 */
+		requestCounts = {},
+		/**
+		 * Every pending request, for the "All projects" row.
+		 *
+		 * Not the sum of {@link requestCounts}: a request an agent posted without a
+		 * project has no row of its own, and the whole-timeline feed is the only
+		 * place it can be answered. Counting it here is what keeps it findable.
+		 */
+		totalRequests = 0,
+		/**
+		 * Updates per project id that have landed since the owner last opened it.
+		 *
+		 * A different question from {@link requestCounts} and shown in a different
+		 * colour for that reason: amber is "an agent is blocked on you", this is
+		 * "things happened here". Conflating them would make the urgent one stop
+		 * meaning anything.
+		 */
+		unseenCounts = {},
+		/**
+		 * How many tasks are outstanding, for the count beside the Tasks link.
+		 *
+		 * Open ones only — todo and claimed. A total that included everything ever
+		 * finished would be a number that only ever goes up.
+		 */
+		openTasks = 0,
+		/**
+		 * Ready images per project id, for the logo picker in the manage menu.
+		 *
+		 * Passed through rather than fetched: the shell already has the timeline,
+		 * and a logo is an image an agent posted into the project.
+		 */
+		projectImages = {},
 		/** Called after a navigation, so the mobile drawer can close itself. */
 		onnavigate,
 		/**
@@ -33,6 +72,11 @@
 	}: {
 		projects: ProjectView[];
 		activeSlug?: string | null;
+		requestCounts?: Record<string, number>;
+		totalRequests?: number;
+		unseenCounts?: Record<string, number>;
+		openTasks?: number;
+		projectImages?: Record<string, MediaView[]>;
 		onnavigate?: () => void;
 		actions?: OwnerActions;
 	} = $props();
@@ -50,14 +94,78 @@
 	const href = (slug: string) => resolve('/projects/[slug]', { slug });
 </script>
 
+<!--
+	The waiting count. Solid amber with black ink for the same reason the card's
+	chip is: it has to be legible on the raised row, the flat row and both themes
+	without depending on what is behind it. The digits are hidden from screen
+	readers and replaced with a sentence, because "3" on its own says nothing.
+-->
+{#snippet waiting(count: number)}
+	<span
+		data-testid="request-badge"
+		class="ml-auto shrink-0 rounded-full bg-amber-500 px-1.5 py-0.5 text-[0.65rem] font-semibold text-black tabular-nums"
+	>
+		<span aria-hidden="true">{count}</span>
+		<span class="sr-only">{count} waiting on you</span>
+	</span>
+{/snippet}
+
+<!--
+	The "new since you last looked" count. Sky rather than amber, and it sits
+	*after* the amber one where a row carries both, so the urgent badge keeps the
+	position the eye already learned. Same black ink for the same reason: it has
+	to be legible on the raised row, the flat row and both themes.
+
+	`ml-auto` is on whichever badge comes first, so a row with only this one still
+	pushes it to the right edge.
+-->
+{#snippet fresh(count: number, first: boolean)}
+	<span
+		data-testid="unseen-badge"
+		class="{first
+			? 'ml-auto '
+			: ''}shrink-0 rounded-full bg-sky-500 px-1.5 py-0.5 text-[0.65rem] font-semibold text-black tabular-nums"
+	>
+		<span aria-hidden="true">{count}</span>
+		<span class="sr-only">{count} new since you last looked</span>
+	</span>
+{/snippet}
+
 <nav aria-label="Projects" class="flex flex-col gap-4 p-3 text-sm">
 	<a
 		href={resolve('/')}
 		onclick={onnavigate}
 		aria-current={activeSlug === null ? 'page' : undefined}
-		class="rounded px-2 py-1.5 font-medium hover:bg-surface-raised aria-[current=page]:bg-surface-raised aria-[current=page]:text-content"
+		class="flex items-center gap-2 rounded px-2 py-1.5 font-medium hover:bg-surface-raised aria-[current=page]:bg-surface-raised aria-[current=page]:text-content"
 	>
-		All projects
+		<span class="truncate">All projects</span>
+		{#if totalRequests > 0}{@render waiting(totalRequests)}{/if}
+	</a>
+
+	<!--
+		Tasks are the long-running half of the product — what is being worked on, as
+		opposed to what happened — and until this link they lived only in a rail that
+		is `xl:block`, invisible below 1280px and behind a drawer nobody opens.
+	-->
+	<a
+		href={resolve('/tasks')}
+		onclick={onnavigate}
+		data-testid="tasks-link"
+		class="flex items-center gap-2 rounded px-2 py-1.5 font-medium hover:bg-surface-raised"
+	>
+		<svg class="size-3.5 shrink-0" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+			<path d="M2 3h12v2H2zM2 7h12v2H2zM2 11h8v2H2z" />
+		</svg>
+		<span class="truncate">Tasks</span>
+		{#if openTasks > 0}
+			<span
+				class="ml-auto shrink-0 rounded-full bg-surface-raised px-1.5 py-0.5 text-[0.65rem] font-semibold text-content-muted tabular-nums"
+				data-testid="open-tasks"
+			>
+				<span aria-hidden="true">{openTasks}</span>
+				<span class="sr-only">{openTasks} open</span>
+			</span>
+		{/if}
 	</a>
 
 	<div class="flex flex-col gap-1">
@@ -99,9 +207,13 @@
 								<span class="sr-only">Pinned</span>
 							{/if}
 							<span class="truncate">{project.name}</span>
+							{#if requestCounts[project.id]}{@render waiting(requestCounts[project.id])}{/if}
+							{#if unseenCounts[project.id]}
+								{@render fresh(unseenCounts[project.id], !requestCounts[project.id])}
+							{/if}
 						</a>
 						{#if actions}
-							<ProjectActions {project} {actions} />
+							<ProjectActions {project} images={projectImages[project.id] ?? []} {actions} />
 						{/if}
 					</li>
 				{/each}
@@ -138,10 +250,14 @@
 								class="flex min-w-0 flex-1 items-center gap-2 rounded px-2 py-1.5 text-content-muted hover:bg-surface-raised aria-[current=page]:bg-surface-raised aria-[current=page]:text-content"
 							>
 								<span class="truncate">{project.name}</span>
+								{#if requestCounts[project.id]}{@render waiting(requestCounts[project.id])}{/if}
+								{#if unseenCounts[project.id]}
+									{@render fresh(unseenCounts[project.id], !requestCounts[project.id])}
+								{/if}
 							</a>
 							<!-- Reachable here too, or an archived project could never come back. -->
 							{#if actions}
-								<ProjectActions {project} {actions} />
+								<ProjectActions {project} images={projectImages[project.id] ?? []} {actions} />
 							{/if}
 						</li>
 					{/each}

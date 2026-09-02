@@ -71,10 +71,31 @@ import { resolveProject } from './projects';
 import { optionalText, requiredText } from './text';
 
 /** The five kinds, in the order design §5 tabulates them. */
-export const REQUEST_KINDS = ['text', 'confirm', 'buttons', 'choice', 'multi_choice'] as const;
+/**
+ * The kinds a request can take (design §5).
+ *
+ * `form` is the generic one, and it exists because the other five each answer
+ * exactly one question: pick, confirm, or type. Real approvals are usually both
+ * — "send this Slack message" is a draft to edit *and* a decision to take — and
+ * expressing that as two requests means the owner approves text they have not
+ * edited yet, or edits text they have not been asked to approve. A `form` is one
+ * request with the agent's own action labels and one editable field, answered as
+ * `{ action, text }`.
+ */
+export const REQUEST_KINDS = [
+	'text',
+	'confirm',
+	'buttons',
+	'choice',
+	'multi_choice',
+	'form'
+] as const;
 
 /** The kinds that offer the owner a list to pick from. */
-const LISTED: readonly RequestKind[] = ['buttons', 'choice', 'multi_choice'];
+const LISTED: readonly RequestKind[] = ['buttons', 'choice', 'multi_choice', 'form'];
+
+/** The kinds that put an editable text box in front of the owner. */
+const TEXTUAL: readonly RequestKind[] = ['text', 'form'];
 
 /** One line the owner reads at the top of a banner. Not a report. */
 export const QUESTION_MAX_LENGTH = 500;
@@ -159,18 +180,27 @@ export type CreateRequestInput = {
 	kind: RequestKind;
 	question: string;
 	detail?: string | null;
-	/** Required for `buttons`, `choice` and `multi_choice`; refused for the rest. */
+	/**
+	 * Required for `buttons`, `choice`, `multi_choice` and `form`; refused for the
+	 * rest. For a `form` these are the actions — the buttons under the field —
+	 * rather than things to pick between.
+	 */
 	options?: readonly string[] | null;
-	/** `text` only: the greyed-out hint in the empty box. */
+	/** `text` and `form`: the greyed-out hint in the empty box. */
 	placeholder?: string | null;
-	/** `text` only: give the owner a textarea rather than one line. */
+	/** `text` and `form`: give the owner a textarea rather than one line. */
 	multiline?: boolean;
-	/** Pre-fills the control. An option for the listed kinds; text for `text`. */
+	/**
+	 * Pre-fills the control: an option for the listed kinds, the text itself for
+	 * `text`, and the draft the owner is being asked to approve for a `form`.
+	 */
 	default?: string | null;
-	/** `multi_choice`: fewest selections. `text`: shortest answer. */
+	/** `multi_choice`: fewest selections. `text` and `form`: shortest answer. */
 	min?: number;
-	/** `multi_choice`: most selections. `text`: longest answer. */
+	/** `multi_choice`: most selections. `text` and `form`: longest answer. */
 	max?: number;
+	/** `form` only: what to call the editable field, e.g. "Message". */
+	label?: string | null;
 	/** A project slug or id, so the banner can say what this is about. */
 	project?: string | null;
 	/** The update this follows from. Supplies the project when that is omitted. */
@@ -441,6 +471,27 @@ export function validateAnswer(request: OwnerRequest, value: unknown): RequestAn
 		return { kind, value: picked };
 	}
 
+	if (kind === 'form') {
+		// Both halves or neither: an action with no text would send whatever the
+		// agent drafted while the owner believes they edited it, and text with no
+		// action would not say whether to send it at all.
+		if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+			throw invalid('a form is answered with { action, text }');
+		}
+		const answer = value as { action?: unknown; text?: unknown };
+		if (typeof answer.action !== 'string' || !options.includes(answer.action)) {
+			throw invalid(`${JSON.stringify(answer.action)} is not one of the actions offered`);
+		}
+		if (typeof answer.text !== 'string') throw invalid('a form’s text is a string');
+
+		const text = answer.text.trim();
+		const min = config.min ?? 0;
+		const max = config.max ?? TEXT_ANSWER_MAX_LENGTH;
+		if (text.length < min) throw invalid(`the text must be at least ${min} characters`);
+		if (text.length > max) throw invalid(`the text must be at most ${max} characters`);
+		return { kind, value: { action: answer.action, text } };
+	}
+
 	// `buttons` and `choice`: one of the offered strings, and nothing else.
 	if (typeof value !== 'string' || !options.includes(value)) {
 		throw invalid(`${JSON.stringify(value)} is not one of the options offered`);
@@ -558,7 +609,11 @@ function settledAlready(request: OwnerRequest) {
 /** The scalar `decided_value` keeps, where the answer is one. */
 function scalarOf(answer: RequestAnswer): string | null {
 	if (typeof answer.value === 'boolean') return answer.value ? 'true' : 'false';
-	return Array.isArray(answer.value) ? null : answer.value;
+	if (Array.isArray(answer.value)) return null;
+	// A form's scalar is the action taken: the edited text is the other half of
+	// the answer and lives in `answer`, which is the authority either way.
+	if (typeof answer.value === 'object') return answer.value.action;
+	return answer.value;
 }
 
 /** The row's two settled states become one, and the JSON columns are decoded. */
@@ -638,13 +693,19 @@ function assertConfig(
 
 	const placeholder = optionalText(input.placeholder, 'placeholder', OPTION_MAX_LENGTH);
 	if (placeholder !== null) {
-		if (kind !== 'text') throw invalid('placeholder is for a text request');
+		if (!TEXTUAL.includes(kind)) throw invalid('placeholder is for a text or form request');
 		config.placeholder = placeholder;
 	}
 
 	if (input.multiline !== undefined && input.multiline) {
-		if (kind !== 'text') throw invalid('multiline is for a text request');
+		if (!TEXTUAL.includes(kind)) throw invalid('multiline is for a text or form request');
 		config.multiline = true;
+	}
+
+	const label = optionalText(input.label, 'label', OPTION_MAX_LENGTH);
+	if (label !== null) {
+		if (kind !== 'form') throw invalid('label names a form request’s field');
+		config.label = label;
 	}
 
 	const fallback = optionalText(input.default, 'default', TEXT_ANSWER_MAX_LENGTH);
@@ -653,17 +714,22 @@ function assertConfig(
 		if (kind === 'confirm' && fallback !== 'true' && fallback !== 'false') {
 			throw invalid('the default for a confirm is "true" or "false"');
 		}
-		if (options && !options.includes(fallback)) {
+		// A form's options are its buttons and its default is the field's starting
+		// text, so the two have nothing to do with each other — unlike every other
+		// listed kind, where the default *is* one of the options.
+		if (options && kind !== 'form' && !options.includes(fallback)) {
 			throw invalid('the default must be one of the options');
 		}
 		config.default = fallback;
 	}
 
 	if (input.min !== undefined || input.max !== undefined) {
-		if (kind !== 'text' && kind !== 'multi_choice') {
-			throw invalid(`min and max are for a text or multi_choice request`);
+		if (!TEXTUAL.includes(kind) && kind !== 'multi_choice') {
+			throw invalid(`min and max are for a text, form or multi_choice request`);
 		}
-		const ceiling = kind === 'text' ? TEXT_ANSWER_MAX_LENGTH : (options?.length ?? 0);
+		// For the two textual kinds they bound the answer in characters; for a
+		// multi_choice they bound how many options may be picked.
+		const ceiling = TEXTUAL.includes(kind) ? TEXT_ANSWER_MAX_LENGTH : (options?.length ?? 0);
 		const min = bound(input.min, 'min', ceiling);
 		const max = bound(input.max, 'max', ceiling);
 		if (min !== null && max !== null && min > max) throw invalid('min must not exceed max');
