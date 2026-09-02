@@ -269,6 +269,15 @@ export type MessageDelivery = Keyed & {
 	messageId: string;
 	agentId: string;
 	deliveredAt: number;
+	/**
+	 * The connection it was handed to (migration 019), or `null` for one that
+	 * named none.
+	 *
+	 * Two sessions can share a bearer token, so "delivered" had to stop being a
+	 * fact about the agent: one of them was consuming the only delivery there
+	 * was and the other went silent.
+	 */
+	clientId: string | null;
 };
 
 export type ReadCursor = Keyed & {

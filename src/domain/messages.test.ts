@@ -675,12 +675,12 @@ describe('marking a message delivered', () => {
 		expect(deliveriesFor(h, [post.id])).toEqual([]);
 	});
 
-	it('answers what this agent has already been handed', () => {
+	it('answers what one connection has already been handed', () => {
 		const first = fromOwner('one', { project: slug });
 		const second = fromOwner('two', { project: slug });
-		markMessagesDelivered(h, { agentId, messageIds: [first.id] });
+		markMessagesDelivered(h, { agentId, clientId: 'session-a', messageIds: [first.id] });
 
-		const sent = alreadyDelivered(h, agentId, [first.id, second.id]);
+		const sent = alreadyDelivered(h, agentId, 'session-a', [first.id, second.id]);
 
 		expect([...sent]).toEqual([first.id]);
 	});
@@ -688,9 +688,53 @@ describe('marking a message delivered', () => {
 	it('is per agent, so one agent’s delivery is not another’s', () => {
 		const post = fromOwner('anybody', { project: slug });
 		const other = h.agent('runner');
+		markMessagesDelivered(h, { agentId, clientId: 'session-a', messageIds: [post.id] });
+
+		expect([...alreadyDelivered(h, other, 'session-b', [post.id])]).toEqual([]);
+		expect(deliveriesFor(h, [post.id])).toHaveLength(1);
+	});
+
+	/**
+	 * The regression that took a live session silent (migration 019).
+	 *
+	 * All of this owner's sessions share one bearer token, so they are one agent
+	 * — and "delivered to the agent" meant the first connection handed a message
+	 * consumed the only delivery there was. With a dead session's bridge still
+	 * holding a socket open, messages were marked delivered and reached nobody.
+	 */
+	it('tells a second session even when the first has already been told', () => {
+		const post = fromOwner('both of you', { project: slug });
+		markMessagesDelivered(h, { agentId, clientId: 'session-a', messageIds: [post.id] });
+
+		expect([...alreadyDelivered(h, agentId, 'session-b', [post.id])]).toEqual([]);
+		const second = markMessagesDelivered(h, {
+			agentId,
+			clientId: 'session-b',
+			messageIds: [post.id]
+		});
+
+		expect(second).toHaveLength(1);
+		// Still one line on the card: the owner is told it reached scout, not how
+		// many sockets scout had open.
+		expect(deliveriesFor(h, [post.id])).toHaveLength(1);
+	});
+
+	it('does not tell the same session twice, so a reconnect is quiet', () => {
+		const post = fromOwner('once', { project: slug });
+		markMessagesDelivered(h, { agentId, clientId: 'session-a', messageIds: [post.id] });
+
+		expect([...alreadyDelivered(h, agentId, 'session-a', [post.id])]).toEqual([post.id]);
+		expect(
+			markMessagesDelivered(h, { agentId, clientId: 'session-a', messageIds: [post.id] })
+		).toEqual([]);
+	});
+
+	it('answers nothing for a connection with no name, which remembers its own', () => {
+		const post = fromOwner('anonymous', { project: slug });
 		markMessagesDelivered(h, { agentId, messageIds: [post.id] });
 
-		expect([...alreadyDelivered(h, other, [post.id])]).toEqual([]);
-		expect(deliveriesFor(h, [post.id])).toHaveLength(1);
+		// An older bridge has no durable identity, so the database cannot answer
+		// for it and it must not be handed somebody else's answer either.
+		expect([...alreadyDelivered(h, agentId, null, [post.id])]).toEqual([]);
 	});
 });

@@ -152,7 +152,15 @@ const DESIGN_COLUMNS: Record<string, string[]> = {
 	acknowledgements: ['agent_id', 'message_id', 'task_id', 'state', 'created_at', 'updated_at'],
 	// Migration 018: the moment the server handed one message to one agent, so
 	// "nobody has answered" can be told from "nobody was ever told".
-	message_deliveries: ['message_id', 'agent_id', 'delivered_at']
+	message_deliveries: [
+		'message_id',
+		'agent_id',
+		'delivered_at',
+		// Appended by migration 019: which connection was handed it. Two sessions
+		// share one token here, so delivery had to stop being a fact about the
+		// agent — one of them was consuming the only delivery there was.
+		'client_id'
+	]
 };
 
 describe('schema', () => {

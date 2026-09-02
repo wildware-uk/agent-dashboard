@@ -12,6 +12,7 @@ export {
 	describeAnswer,
 	describeRise,
 	main,
+	newClientId,
 	readFrames,
 	runBridge
 } from './bridge';

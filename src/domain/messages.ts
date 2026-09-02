@@ -310,6 +310,10 @@ export function deleteMessage(ctx: DomainContext, input: DeleteMessageInput): Me
  * delivered message is still unread, still counted, and still handed over when
  * the agent asks for it.
  *
+ * `clientId` is the connection that was handed it (migration 019). Two sessions
+ * sharing a token are two clients and both are told; one session reconnecting
+ * keeps its id and is not told twice.
+ *
  * Silent for anything already delivered: the same push over a new connection is
  * the same fact, and an event for it would make a card flicker for nothing.
  *
@@ -317,7 +321,7 @@ export function deleteMessage(ctx: DomainContext, input: DeleteMessageInput): Me
  */
 export function markMessagesDelivered(
 	ctx: DomainContext,
-	input: { agentId: string; messageIds: readonly string[] }
+	input: { agentId: string; messageIds: readonly string[]; clientId?: string | null }
 ): MessageDelivery[] {
 	const created: MessageDelivery[] = [];
 
@@ -330,6 +334,7 @@ export function markMessagesDelivered(
 		const { delivery, created: first } = recordDelivery(ctx.db, {
 			messageId,
 			agentId: input.agentId,
+			clientId: input.clientId ?? null,
 			at: ctx.now()
 		});
 		if (!first) continue;
@@ -345,13 +350,25 @@ export function markMessagesDelivered(
 	return created;
 }
 
-/** Which of these messages one agent has already been handed (migration 018). */
+/**
+ * Which of these messages one **connection** has already been handed
+ * (migrations 018, 019).
+ *
+ * Per client rather than per agent, because two sessions can share a bearer
+ * token: asking whether the agent had seen it let one live session go silent
+ * while another connection — a dead session's, in the case that found this —
+ * held the only delivery there was.
+ *
+ * A caller with no client id gets nothing back and is expected to remember
+ * within its own connection.
+ */
 export function alreadyDelivered(
 	ctx: DomainContext,
 	agentId: string,
+	clientId: string | null,
 	messageIds: readonly string[]
 ): Set<string> {
-	return deliveredMessageIds(ctx.db, agentId, messageIds);
+	return deliveredMessageIds(ctx.db, agentId, clientId, messageIds);
 }
 
 /**

@@ -8,6 +8,7 @@ import {
 	describeAnswer,
 	describeRise,
 	main,
+	newClientId,
 	readFrames,
 	runBridge,
 	type AnswerFrame,
@@ -358,9 +359,11 @@ describe('pushing into the session', () => {
 
 		// One parameter per project rather than a joined string: the dashboard
 		// accepts either, and repeated keys need no escaping rules.
-		expect(fetcher.mock.calls[0]?.[0]).toBe(
-			'https://dash.test/api/agent/stream?project=megamerge-mod-engine&project=melon-merge'
-		);
+		// The client id rides along too (migration 019), and it is minted per
+		// process, so the projects are asserted rather than the whole string.
+		const asked = new URL(fetcher.mock.calls[0]?.[0] as string);
+		expect(asked.origin + asked.pathname).toBe('https://dash.test/api/agent/stream');
+		expect(asked.searchParams.getAll('project')).toEqual(['megamerge-mod-engine', 'melon-merge']);
 	});
 
 	it('sends the agent its token and asks for the stream', async () => {
@@ -368,7 +371,9 @@ describe('pushing into the session', () => {
 
 		// `*` on the wire, because a subscription is now always stated: the widest
 		// one is a thing somebody typed rather than the absence of a setting.
-		expect(fetcher.mock.calls[0]?.[0]).toBe('https://dash.test/api/agent/stream?project=*');
+		const asked = new URL(fetcher.mock.calls[0]?.[0] as string);
+		expect(asked.origin + asked.pathname).toBe('https://dash.test/api/agent/stream');
+		expect(asked.searchParams.get('project')).toBe('*');
 		expect(fetcher.mock.calls[0]?.[1]?.headers).toMatchObject({
 			authorization: 'Bearer a-token',
 			accept: 'text/event-stream'
@@ -621,5 +626,50 @@ describe('putting one settled request into a sentence', () => {
 
 	it('says a dismissal is not permission', () => {
 		expect(describeAnswer(frame({ state: 'cancelled', answer: null }))).toContain('not permission');
+	});
+});
+
+/**
+ * Naming itself on the stream (migration 019).
+ *
+ * The dashboard records deliveries against the client, so a bridge that does
+ * not say who it is falls back to per-connection memory — and, worse, two
+ * sessions sharing a token used to be one client, so the first to connect
+ * swallowed the other's messages. A per-process id is what tells them apart.
+ */
+describe('who the bridge says it is', () => {
+	async function urlUsed(options: { clientId?: string } = {}) {
+		const abort = new AbortController();
+		const fetcher = vi.fn().mockResolvedValue(new Response(sse(), { status: 200 }));
+
+		await runBridge({
+			baseUrl: 'https://dash.test',
+			token: 'a-token',
+			projects: ['megamerge'],
+			...options,
+			fetch: fetcher as unknown as typeof globalThis.fetch,
+			notify: vi.fn().mockResolvedValue(undefined),
+			sleep: async () => abort.abort(),
+			signal: abort.signal
+		});
+
+		return new URL(fetcher.mock.calls[0]![0] as string);
+	}
+
+	it('sends a client id even when nobody configured one', async () => {
+		const url = await urlUsed();
+
+		expect(url.searchParams.get('client')).toMatch(/^bridge-/);
+		expect(url.searchParams.get('project')).toBe('megamerge');
+	});
+
+	it('uses the id it was given', async () => {
+		const url = await urlUsed({ clientId: 'session-a' });
+
+		expect(url.searchParams.get('client')).toBe('session-a');
+	});
+
+	it('mints a different id per process, because sessions share a token', () => {
+		expect(newClientId()).not.toBe(newClientId());
 	});
 });
