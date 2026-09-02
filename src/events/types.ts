@@ -164,6 +164,20 @@ export interface EventPayloads {
 	 * whether it cares before asking for anything.
 	 */
 	'agent.renamed': { agentId: string; name: string };
+	/**
+	 * Something was recorded for the owner to find in the app (migration 021).
+	 *
+	 * The bell is on every open tab, so it has to hear: a notification that
+	 * appeared only on the tab that happened to be focused would send its owner
+	 * looking for something they had already been shown somewhere else.
+	 */
+	'notification.created': {
+		notificationId: string;
+		kind: 'update' | 'reply' | 'request';
+		projectId: string | null;
+	};
+	/** The owner read them, so every tab's bell clears together. */
+	'notifications.seen': { count: number };
 	/** Presence is derived from heartbeats, never stored as a flag (design §4). */
 	'agent.presence': { agentId: string; sessionId: string | null; online: boolean };
 }

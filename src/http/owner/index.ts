@@ -68,6 +68,12 @@ export {
 	type PushSettings
 } from './push';
 export {
+	MAX_NOTIFICATIONS,
+	listNotificationsHandler,
+	markNotificationsSeenHandler,
+	type NotificationHandlerOptions
+} from './notifications';
+export {
 	deleteMessageHandler,
 	listMessagesHandler,
 	postMessageHandler,

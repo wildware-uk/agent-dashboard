@@ -405,7 +405,7 @@ export function requestMessage(
 	const message: PushMessage = {
 		title: `${who} is waiting on you`,
 		body: request.question,
-		url: project ? `${base}/projects/${project.slug}` : base,
+		url: project ? `${base}/projects/${project.slug}?focus=${request.id}` : `${base}/`,
 		tag: `request-${request.id}`,
 		requestId: request.id
 	};
@@ -453,11 +453,25 @@ function firstLine(body: string, max = 140): string {
 	return flat.length <= max ? flat : `${flat.slice(0, max).trimEnd()}…`;
 }
 
-/** Where a notification about a project should land. */
-function projectUrl(ctx: DomainContext, projectId: string | null, base: string): string {
-	if (!projectId) return base;
+/**
+ * Where a notification about a project should land.
+ *
+ * `focus` names the card, post or reply it is about (migration 021), and the
+ * timeline scrolls to it and lights it up. Without it a tap landed at the top of
+ * a project with fifty cards under it, which is what the owner asked me to stop
+ * doing — for the push as much as for the bell, since they are two deliveries of
+ * one notification.
+ */
+function projectUrl(
+	ctx: DomainContext,
+	projectId: string | null,
+	base: string,
+	focus?: string
+): string {
+	const where = focus ? `?focus=${encodeURIComponent(focus)}` : '';
+	if (!projectId) return `${base}/${where}`;
 	const project = findProjectById(ctx.db, projectId);
-	return project ? `${base}/projects/${project.slug}` : base;
+	return project ? `${base}/projects/${project.slug}${where}` : `${base}/${where}`;
 }
 
 /**
@@ -481,7 +495,7 @@ export function updateMessage(
 		message: {
 			title: update.title ?? `${agent?.name ?? 'An agent'} posted an update`,
 			body: update.title ? firstLine(update.body) : firstLine(update.body),
-			url: projectUrl(ctx, update.projectId, base),
+			url: projectUrl(ctx, update.projectId, base, update.id),
 			tag: `update-${update.id}`
 		},
 		about: { type: 'update', level: update.level, priority: update.priority }
@@ -559,7 +573,7 @@ export function replyMessage(
 		message: {
 			title: answered ? `${name} replied to you` : `${name} commented`,
 			body: firstLine(message.body),
-			url: projectUrl(ctx, message.projectId, base),
+			url: projectUrl(ctx, message.projectId, base, message.id),
 			tag: `message-${message.id}`
 		},
 		about: { type: answered ? 'message' : 'comment' }

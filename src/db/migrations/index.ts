@@ -25,6 +25,7 @@ import { sql as messageDeletes } from './017-message-deletes';
 import { sql as messageDeliveries } from './018-message-deliveries';
 import { sql as deliveryPerClient } from './019-delivery-per-client';
 import { sql as answeringAComment } from './020-answering-a-comment';
+import { sql as notifications } from './021-notifications';
 
 export type Migration = {
 	/** 1-based, contiguous, and permanent once shipped. */
@@ -73,5 +74,6 @@ export const MIGRATIONS: readonly Migration[] = [
 	{ version: 17, name: 'message-deletes', sql: messageDeletes },
 	{ version: 18, name: 'message-deliveries', sql: messageDeliveries },
 	{ version: 19, name: 'delivery-per-client', sql: deliveryPerClient },
-	{ version: 20, name: 'answering-a-comment', sql: answeringAComment }
+	{ version: 20, name: 'answering-a-comment', sql: answeringAComment },
+	{ version: 21, name: 'notifications', sql: notifications }
 ];

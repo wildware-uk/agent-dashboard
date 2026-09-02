@@ -288,6 +288,31 @@ export type MessageDelivery = Keyed & {
 	clientId: string | null;
 };
 
+/** What kind of thing a notification points at (migration 021). */
+export type NotificationKind = 'update' | 'reply' | 'request';
+
+/**
+ * One thing the owner was told about, kept so the app can show it (migration 021).
+ *
+ * The columns are the *target* rather than the sentence: what an owner wants
+ * from a notification an hour later is not the words, it is the card it came
+ * from. Exactly one of `updateId`, `messageId` and `requestId` is set.
+ */
+export type Notification = Keyed & {
+	kind: NotificationKind;
+	projectId: string | null;
+	updateId: string | null;
+	messageId: string | null;
+	requestId: string | null;
+	/** Who caused it, for the avatar beside it. */
+	agentId: string | null;
+	title: string;
+	body: string;
+	createdAt: number;
+	/** When the owner looked at it. Server-side, so a phone and a desk agree. */
+	seenAt: number | null;
+};
+
 export type ReadCursor = Keyed & {
 	agentId: string;
 	lastSeenMessageSeq: number;

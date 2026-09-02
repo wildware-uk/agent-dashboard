@@ -175,7 +175,10 @@ describe('what the owner is told', () => {
 		expect(requestMessage(h, request.id, 'https://agents.example.com')).toMatchObject({
 			title: 'claude is waiting on you',
 			body: 'Push the migration to main?',
-			url: 'https://agents.example.com',
+			// No project to open, so the dashboard root — with a trailing slash,
+			// because a URL that ends at the origin is one a service worker has to
+			// normalise for itself.
+			url: 'https://agents.example.com/',
 			tag: `request-${request.id}`
 		});
 	});
@@ -184,8 +187,10 @@ describe('what the owner is told', () => {
 		const { project } = createProject(h, { name: 'Mega Merge' });
 		const request = ask({ project: project.slug });
 
+		// With `focus`, so tapping it lands on the prompt itself rather than at the
+		// top of a project with fifty cards under it (migration 021).
 		expect(requestMessage(h, request.id, 'https://agents.example.com')?.url).toBe(
-			`https://agents.example.com/projects/${project.slug}`
+			`https://agents.example.com/projects/${project.slug}?focus=${request.id}`
 		);
 	});
 

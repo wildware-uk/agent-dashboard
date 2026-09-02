@@ -73,7 +73,17 @@
 		 * agent is actually alive — an animation running against a session that
 		 * died is a lie the owner cannot check (migration 013).
 		 */
-		onlineIds = []
+		onlineIds = [],
+		/**
+		 * What to scroll to and light up, from a notification (migration 021).
+		 *
+		 * An update id, a post id or a message id — whichever the notification
+		 * pointed at. Landing at the top of a project with fifty cards under it is
+		 * what the owner asked me to stop doing, so this waits for the thing to
+		 * exist (a card three pages down arrives with the next read) and only then
+		 * moves the viewport.
+		 */
+		focus = null
 	}: {
 		feed: Timeline;
 		requests?: RequestView[];
@@ -84,7 +94,63 @@
 		actions?: OwnerActions;
 		threads?: ThreadSource;
 		onlineIds?: string[];
+		focus?: string | null;
 	} = $props();
+
+	/** The element a focus id names, whichever kind of thing it is. */
+	function focusTarget(id: string): HTMLElement | null {
+		const selectors = [
+			`[data-update-id="${CSS.escape(id)}"]`,
+			`[data-post="${CSS.escape(id)}"]`,
+			`[data-message-id="${CSS.escape(id)}"]`
+		];
+		for (const selector of selectors) {
+			const found = document.querySelector<HTMLElement>(selector);
+			if (found) return found;
+		}
+		return null;
+	}
+
+	/**
+	 * Scroll a notification's target into view and mark it, once it exists.
+	 *
+	 * The card may not be rendered yet — the page loads a window of the timeline
+	 * and the thread arrives in its own request — so this retries briefly rather
+	 * than giving up on the first miss, and then stops rather than spinning: a
+	 * notification about something that has since been deleted must not leave a
+	 * loop running behind a page nobody is looking at.
+	 */
+	$effect(() => {
+		const id = focus;
+		if (!id || typeof document === 'undefined') return;
+
+		let attempts = 0;
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		let done = false;
+
+		const look = () => {
+			if (done) return;
+			const target = focusTarget(id);
+			if (target) {
+				done = true;
+				target.scrollIntoView({ block: 'center', behavior: 'smooth' });
+				// A ring rather than a permanent state: it says "this one", and then
+				// gets out of the way of reading it.
+				target.setAttribute('data-focused', 'true');
+				timer = setTimeout(() => target.removeAttribute('data-focused'), 4_000);
+				return;
+			}
+			attempts += 1;
+			if (attempts > 20) return;
+			timer = setTimeout(look, 150);
+		};
+
+		look();
+		return () => {
+			done = true;
+			if (timer !== undefined) clearTimeout(timer);
+		};
+	});
 
 	/**
 	 * The acknowledgements on one card's thread, keyed by message id.

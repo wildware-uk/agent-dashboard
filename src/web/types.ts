@@ -405,6 +405,35 @@ export type MessageView = {
 };
 
 /** `GET /api/messages`: every thread in scope, stamped with the cursor it is good to. */
+/** One notification as the bell renders it (migration 021). */
+export type NotificationView = {
+	id: string;
+	seq: number;
+	kind: 'update' | 'reply' | 'request';
+	projectId: string | null;
+	projectSlug: string | null;
+	projectName: string | null;
+	updateId: string | null;
+	messageId: string | null;
+	requestId: string | null;
+	agentId: string | null;
+	title: string;
+	body: string;
+	createdAt: number;
+	seenAt: number | null;
+	/** Where clicking it goes: a route, plus the thing to focus once there. */
+	path: string;
+};
+
+/** What `GET /api/notifications` sends. */
+export type NotificationsSnapshot = {
+	seq: number;
+	at: string;
+	notifications: NotificationView[];
+	/** How many have not been looked at: the number on the bell. */
+	unseen: number;
+};
+
 export type MessagesSnapshot = {
 	/** The newest event seq this state accounts for. */
 	seq: number;
