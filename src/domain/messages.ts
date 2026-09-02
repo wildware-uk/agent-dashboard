@@ -42,7 +42,9 @@ import {
 	findUpdateById,
 	insertMessage,
 	listMessages,
+	listRepliesTo,
 	readCursorSeq,
+	softDeleteMessage,
 	type Message
 } from '$db';
 import type { DomainContext } from './context';
@@ -213,6 +215,77 @@ export function postMessage(ctx: DomainContext, input: PostMessageInput): Messag
 	});
 
 	return message;
+}
+
+export type DeleteMessageInput = {
+	messageId: string;
+	/**
+	 * Who is asking. Adapters resolve the owner from the session cookie and an
+	 * agent from its bearer token, never from an argument on the request — the
+	 * whole of this rule is "who are you", so a caller that could say would be a
+	 * caller that could delete anybody's words.
+	 */
+	by: MessageAuthor;
+};
+
+/**
+ * Delete a message, and tell the browsers that rendered it (migration 017).
+ *
+ * Two callers, two different permissions, one function:
+ *
+ * - **The owner deletes anything.** It is their dashboard and their feed —
+ *   they already delete an agent's update — and a probe they typed to test a
+ *   bug is exactly the litter this exists to clear.
+ * - **An agent deletes only what it wrote.** "Unsend" is taking your own words
+ *   back; an agent that could delete the owner's message could delete the
+ *   instruction it did not want to follow, and the owner would have no way to
+ *   tell that from a message they never sent.
+ *
+ * **Replies go with the post.** A reply under a line nobody can read is not a
+ * conversation, so deleting a post soft-deletes its replies too — including
+ * replies somebody else wrote, which is the one place the ownership rule bends.
+ * It bends the right way: the thread belongs to the post, and leaving orphans
+ * behind would show an answer to a question that is gone.
+ *
+ * Idempotent and quiet the second time, as {@link deleteUpdate} is: the row is
+ * already gone from every thread, so a second `message.deleted` would announce
+ * nothing.
+ *
+ * Images stay attached to the deleted row rather than being cut loose, which is
+ * what a deleted update does with its own. The sweeper only collects media
+ * attached to nothing, so this trades a little disk for the ability to undo a
+ * delete later without having shredded what it was about.
+ *
+ * @throws {DomainError} `not_found` for an unknown message,
+ *   `invalid_argument` for an agent deleting somebody else's.
+ */
+export function deleteMessage(ctx: DomainContext, input: DeleteMessageInput): Message {
+	const message = findMessageById(ctx.db, input.messageId);
+	if (!message) throw notFound(`no such message: ${input.messageId}`);
+	if (message.deletedAt !== null) return message;
+
+	const by = authorText(assertAuthor(ctx, input.by));
+	if (by !== HUMAN_AUTHOR && by !== message.author) {
+		// `invalid_argument`, as `editUpdate` refuses another agent's update: the
+		// same rule, said the same way, so an agent gets one answer for "those are
+		// not your words" wherever it meets it.
+		throw invalid('that message was posted by somebody else');
+	}
+
+	const at = ctx.now();
+	// Read before the delete: afterwards they are no longer live and the query
+	// that finds them would come back empty.
+	const replies = message.replyTo === null ? listRepliesTo(ctx.db, message.id) : [];
+	softDeleteMessage(ctx.db, message.id, at);
+	for (const reply of replies) softDeleteMessage(ctx.db, reply.id, at);
+
+	ctx.bus.publish('message.deleted', {
+		messageId: message.id,
+		projectId: message.projectId,
+		replies: replies.length
+	});
+
+	return findMessageById(ctx.db, message.id)!;
 }
 
 export type ReadMessagesInput = {

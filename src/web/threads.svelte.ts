@@ -80,6 +80,10 @@ export type ThreadSource = {
 /** The events that change a thread. */
 const WATCHED = [
 	'message.created',
+	// A line was taken back (migration 017). Watched for the same reason an
+	// arrival is: the store refetches and the thread is whatever the server now
+	// says it is, so a delete reaches every tab the way a reply does.
+	'message.deleted',
 	// An agent saying "seen it" or "done" (migration 013). Watched here rather
 	// than in a store of its own because an acknowledgement has no life apart
 	// from the message it is on: it arrives in the same read, and a second store

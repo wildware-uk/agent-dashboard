@@ -414,3 +414,72 @@ describe('replying with an image', () => {
 		expect(document.querySelector('[data-message] img')).not.toBeNull();
 	});
 });
+
+/**
+ * Deleting a line of the thread (migration 017).
+ *
+ * The owner asked for this so they could clear the probes they had typed to
+ * chase a bug. Two clicks, like the delete on a card: it is not undoable, and a
+ * mis-tap on a phone must not take a message with it.
+ */
+describe('deleting a message', () => {
+	it('offers no delete without a handler, so a read-only thread has none', async () => {
+		render(Thread, {
+			messages: [aMessage({ id: 'm1', author: 'human', body: 'mine' })],
+			onreply: replies().onreply
+		});
+
+		expect(document.querySelector('[aria-label="Delete this message"]')).toBeNull();
+	});
+
+	it('asks before it deletes', async () => {
+		const deleted: string[] = [];
+		const screen = render(Thread, {
+			messages: [aMessage({ id: 'm1', author: 'human', body: 'a probe' })],
+			onreply: replies().onreply,
+			ondelete: (id: string) => {
+				deleted.push(id);
+				return Promise.resolve();
+			}
+		});
+
+		await screen.getByRole('button', { name: 'Delete this message' }).click();
+		// Nothing has gone yet: the first click only asks.
+		expect(deleted).toEqual([]);
+
+		await screen.getByRole('button', { name: 'Confirm delete' }).click();
+		expect(deleted).toEqual(['m1']);
+	});
+
+	it('lets the owner back out', async () => {
+		const deleted: string[] = [];
+		const screen = render(Thread, {
+			messages: [aMessage({ id: 'm1', author: 'human', body: 'a probe' })],
+			onreply: replies().onreply,
+			ondelete: (id: string) => {
+				deleted.push(id);
+				return Promise.resolve();
+			}
+		});
+
+		await screen.getByRole('button', { name: 'Delete this message' }).click();
+		await screen.getByRole('button', { name: 'Cancel' }).click();
+
+		expect(deleted).toEqual([]);
+		await expect.element(screen.getByRole('button', { name: 'Delete this message' })).toBeVisible();
+	});
+
+	it('says so when the delete fails, and leaves the message where it was', async () => {
+		const screen = render(Thread, {
+			messages: [aMessage({ id: 'm1', author: 'human', body: 'a probe' })],
+			onreply: replies().onreply,
+			ondelete: () => Promise.reject(new Error('offline'))
+		});
+
+		await screen.getByRole('button', { name: 'Delete this message' }).click();
+		await screen.getByRole('button', { name: 'Confirm delete' }).click();
+
+		await expect.element(screen.getByRole('alert')).toHaveTextContent('offline');
+		expect(document.querySelectorAll('[data-message]')).toHaveLength(1);
+	});
+});

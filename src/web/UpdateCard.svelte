@@ -260,6 +260,9 @@
 				{onlineIds}
 				media={messageMedia}
 				uploader={actions}
+				ondelete={async (id) => {
+					await actions?.deleteMessage(id);
+				}}
 				onreply={reply}
 			/>
 		{/if}

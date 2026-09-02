@@ -72,6 +72,20 @@ export interface EventPayloads {
 	/** `author` is the literal `human` or `agent:<agent_id>` (design §3). */
 	'message.created': { messageId: string; projectId: string | null; author: string };
 	/**
+	 * A message is gone: the owner deleted it, or the agent that wrote it
+	 * unsent it (migration 017).
+	 *
+	 * Soft, like `update.deleted`, and announced for the same reason: every tab
+	 * that already rendered the line has to be told to drop it, and a thread
+	 * that kept showing an unsent message in one window and not another would be
+	 * the worst kind of disagreement — the owner cannot tell which one is right.
+	 *
+	 * `replies` rides along because deleting a post takes its replies with it,
+	 * and a subscriber that knows how many lines went can decide whether it
+	 * cares before refetching.
+	 */
+	'message.deleted': { messageId: string; projectId: string | null; replies: number };
+	/**
 	 * An agent's read cursor moved, so its unread count fell (design §5).
 	 *
 	 * The only *read* that publishes, and it earns the exception: `unread_messages`

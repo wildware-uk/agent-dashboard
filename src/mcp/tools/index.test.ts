@@ -40,6 +40,7 @@ describe('the tool set', () => {
 			'complete_task',
 			'get_messages',
 			'post_message',
+			'delete_message',
 			'acknowledge',
 			'request_input',
 			'await_request'
@@ -142,6 +143,7 @@ describe('tool argument schemas', () => {
 			complete_task: ['task_id', 'result'],
 			get_messages: [],
 			post_message: ['body'],
+			delete_message: ['message_id'],
 			acknowledge: ['state'],
 			request_input: ['kind', 'question'],
 			await_request: ['request_id']

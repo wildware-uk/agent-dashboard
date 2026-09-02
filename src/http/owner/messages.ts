@@ -21,6 +21,7 @@
 import { bus as sharedBus, type EventBus } from '$events';
 import {
 	acknowledgementsFor,
+	deleteMessage,
 	invalid,
 	listMessageMedia,
 	listThread,
@@ -79,6 +80,28 @@ export function postMessageHandler(options: MessageHandlerOptions = {}): OwnerHa
 		const message = postMessage(ctx, { author: { kind: 'human' }, ...input });
 		return { status: 201, body: { message } };
 	});
+}
+
+/**
+ * `DELETE /api/messages/[id]` — the owner takes a line back (migration 017).
+ *
+ * Theirs or an agent's: it is their feed, and they already delete an agent's
+ * update. The delete is soft, so every other tab that has the thread on screen
+ * is told to drop the line rather than left showing it; the confirmation is the
+ * browser's job, before the request is ever sent.
+ */
+export function deleteMessageHandler(options: MessageHandlerOptions = {}): OwnerHandler {
+	return ownerAction(options, (event, ctx) =>
+		Promise.resolve({
+			status: 200,
+			body: {
+				message: deleteMessage(ctx, {
+					messageId: event.params.id ?? '',
+					by: { kind: 'human' }
+				})
+			}
+		})
+	);
 }
 
 /**

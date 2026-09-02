@@ -55,7 +55,16 @@
 		 * picker; without one it is exactly the text box it always was, which is
 		 * what keeps every existing spec renderable with no server behind it.
 		 */
-		uploader = undefined
+		uploader = undefined,
+		/**
+		 * Delete one line of the thread (migration 017).
+		 *
+		 * Optional, and absent is the shape every spec renders: a thread with
+		 * nobody to write as has nothing to delete with either. Given one, each
+		 * message grows a control that asks before it fires — deleting a post
+		 * takes its replies with it, and there is no undo.
+		 */
+		ondelete = undefined
 	}: {
 		messages?: MessageView[];
 		onreply: (body: string, mediaIds?: string[]) => Promise<void>;
@@ -64,7 +73,20 @@
 		onlineIds?: string[];
 		media?: Record<string, MediaView[]>;
 		uploader?: Pick<OwnerActions, 'uploadMedia'>;
+		ondelete?: (id: string) => Promise<void>;
 	} = $props();
+
+	/**
+	 * Which message is asking "are you sure", and what went wrong if it did.
+	 *
+	 * One id rather than a flag per row: two open confirmations would be two
+	 * questions on screen with one answer between them, and an inline dialog
+	 * rather than `window.confirm`, which is untestable, unstyleable, and blocks
+	 * the tab including the stream — the same call `UpdateActions` makes.
+	 */
+	let confirming = $state<string | null>(null);
+	let deleting = $state<string | null>(null);
+	let deleteError = $state<string | null>(null);
 
 	let open = $state(false);
 	/** The box itself, so opening it can put the cursor in it. */
@@ -141,6 +163,22 @@
 		open = false;
 		error = null;
 		draft = '';
+	}
+
+	async function remove(id: string): Promise<void> {
+		if (!ondelete) return;
+		deleting = id;
+		deleteError = null;
+		try {
+			await ondelete(id);
+			confirming = null;
+		} catch (cause) {
+			// The line stays exactly where it was: a failed delete that looked like a
+			// successful one is the worst outcome available here.
+			deleteError = actionMessage(cause);
+		} finally {
+			deleting = null;
+		}
 	}
 
 	async function send(): Promise<void> {
@@ -222,6 +260,56 @@
 						<MediaGrid items={media[message.id]} />
 					{/if}
 					<Ack acks={acks[message.id] ?? []} {agentNames} {onlineIds} />
+
+					{#if ondelete}
+						{#if confirming === message.id}
+							<div
+								role="group"
+								aria-label="Confirm delete"
+								class="flex flex-wrap items-center gap-2 text-xs"
+							>
+								<span class="text-content">Delete this message?</span>
+								<button
+									type="button"
+									disabled={deleting !== null}
+									onclick={() => remove(message.id)}
+									class="rounded bg-rose-600 px-2 py-0.5 font-medium text-white disabled:opacity-50"
+								>
+									Confirm delete
+								</button>
+								<button
+									type="button"
+									disabled={deleting !== null}
+									onclick={() => {
+										confirming = null;
+										deleteError = null;
+									}}
+									class="rounded border border-border-subtle px-2 py-0.5 text-content-muted hover:text-content"
+								>
+									Cancel
+								</button>
+							</div>
+							{#if deleteError}
+								<p role="alert" class="text-xs text-rose-400">{deleteError}</p>
+							{/if}
+						{:else}
+							<!--
+								Always on the row, never behind a hover: a phone cannot hover
+								(design §7), and this is the control the owner asked for.
+							-->
+							<button
+								type="button"
+								aria-label="Delete this message"
+								onclick={() => {
+									confirming = message.id;
+									deleteError = null;
+								}}
+								class="w-fit rounded px-1 py-0.5 text-xs text-content-muted hover:bg-surface-raised hover:text-rose-400"
+							>
+								Delete
+							</button>
+						{/if}
+					{/if}
 				</li>
 			{/each}
 		</ol>

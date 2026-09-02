@@ -23,9 +23,19 @@ type Row = {
 	body: string;
 	created_at: number;
 	reply_to: string | null;
+	deleted_at: number | null;
 };
 
-const COLUMNS = `seq, id, project_id, update_id, task_id, author, body, created_at, reply_to`;
+const COLUMNS = `seq, id, project_id, update_id, task_id, author, body, created_at, reply_to, deleted_at`;
+
+/**
+ * The rule every read here keeps: a deleted message is gone.
+ *
+ * Written once, as a fragment, rather than remembered at each call site — a
+ * query that forgot it would put an unsent line back in somebody's thread, and
+ * that is exactly the kind of omission nobody notices until it is on screen.
+ */
+const LIVE = `deleted_at IS NULL`;
 
 function toMessage(row: Row): Message {
 	return {
@@ -37,7 +47,8 @@ function toMessage(row: Row): Message {
 		author: row.author,
 		body: row.body,
 		createdAt: row.created_at,
-		replyTo: row.reply_to
+		replyTo: row.reply_to,
+		deletedAt: row.deleted_at
 	};
 }
 
@@ -77,9 +88,47 @@ export function insertMessage(db: Db, input: NewMessage): Message {
 	return toMessage(inserted);
 }
 
+/**
+ * One message, deleted or not.
+ *
+ * Unfiltered on purpose, unlike every list here: a caller that has an id is
+ * asking about that row, and deleting something twice has to be answerable
+ * without a second query. Callers that must not act on a deleted message check
+ * `deletedAt`, which is the same shape `findUpdateById` keeps.
+ */
 export function findMessageById(db: Db, id: string): Message | undefined {
 	const row = db.prepare<[string], Row>(`SELECT ${COLUMNS} FROM messages WHERE id = ?`).get(id);
 	return row && toMessage(row);
+}
+
+/**
+ * Soft delete.
+ *
+ * @returns whether this call was the one that deleted it, so only the first
+ *   caller publishes `message.deleted`.
+ */
+export function softDeleteMessage(db: Db, id: string, at: number = Date.now()): boolean {
+	return (
+		db
+			.prepare<[number, string]>(`UPDATE messages SET deleted_at = ? WHERE id = ? AND ${LIVE}`)
+			.run(at, id).changes > 0
+	);
+}
+
+/**
+ * The live replies under one message.
+ *
+ * Deleting a post takes its replies with it — a thread hanging under a line
+ * nobody can read is not a conversation — so the caller needs to know what they
+ * are.
+ */
+export function listRepliesTo(db: Db, messageId: string): Message[] {
+	return db
+		.prepare<[string], Row>(
+			`SELECT ${COLUMNS} FROM messages WHERE reply_to = ? AND ${LIVE} ORDER BY seq ASC`
+		)
+		.all(messageId)
+		.map(toMessage);
 }
 
 export type MessageQuery = {
@@ -149,6 +198,7 @@ export function listMessages(db: Db, query: MessageQuery = {}): Message[] {
 			   AND (? IS NULL OR task_id = ?)
 			   AND (? IS NULL OR seq > ?)
 			   AND (? IS NULL OR author <> ?)
+			   AND ${LIVE}
 			   ${scope}
 			 ORDER BY seq ${query.newest ? 'DESC' : 'ASC'}
 			 LIMIT ?`
@@ -193,6 +243,7 @@ export function countMessagesAfter(
 		.prepare<typeof params, { n: number }>(
 			`SELECT count(*) AS n FROM messages
 			 WHERE seq > :after_seq
+			   AND ${LIVE}
 			   AND (:project_id IS NULL OR project_id = :project_id)
 			   AND (:exclude_author IS NULL OR author <> :exclude_author)${scope}`
 		)
@@ -222,7 +273,7 @@ export function listAgentProjectIds(db: Db, agentId: string, author: string): st
 			  WHERE agent_id = :agent_id AND project_id IS NOT NULL
 			 UNION
 			 SELECT DISTINCT project_id FROM messages
-			  WHERE author = :author AND project_id IS NOT NULL`
+			  WHERE author = :author AND project_id IS NOT NULL AND ${LIVE}`
 		)
 		.all(params)
 		.map((row) => row.project_id);

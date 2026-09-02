@@ -36,6 +36,7 @@ describe('the $mcp surface', () => {
 			'complete_task',
 			'get_messages',
 			'post_message',
+			'delete_message',
 			'acknowledge',
 			'request_input',
 			'await_request'

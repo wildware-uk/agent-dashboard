@@ -150,6 +150,10 @@ function subscription(ctx: DomainContext, url: URL): string[] | null | undefined
  */
 const WATCHED: readonly AppEvent['type'][] = [
 	'message.created',
+	// A message was deleted (migration 017), which lowers an unread count exactly
+	// as reading it does. Without this the agent is left holding a figure for a
+	// message nobody can show it, and the next real one looks like a fall.
+	'message.deleted',
 	// The agent's own read, which lowers its unread count. Watched for the same
 	// reason the others are: it moves a number this stream exists to report, and
 	// a fall nobody is told about is a stale baseline downstream.

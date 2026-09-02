@@ -128,6 +128,21 @@ three-step upload as a card. Answer with the screenshot rather than describing
 it — "the layout is broken at 375px" is a sentence, and the picture is the
 answer.
 
+## Unsending
+
+```
+delete_message({ message_id })
+```
+
+For the line you wish you had not sent: a duplicate, half a paragraph posted by
+accident, an answer that was wrong before anybody acted on it. It disappears
+from the owner's screen live, in every tab that has the thread open.
+
+Only your own messages — the author comes from your token, so there is no way to
+delete theirs. And prefer correcting to deleting: a reply that was wrong and a
+reply that was never sent look the same afterwards, and the owner may have
+already read it. Delete noise, answer a mistake.
+
 Before you reply — or before you start work you are about to do instead of
 replying — `acknowledge({ state: 'thinking', message_id })`. It is one call, and
 it is the difference between the owner seeing that you picked their message up

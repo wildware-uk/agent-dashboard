@@ -151,6 +151,7 @@ describe('the transport', () => {
 			'create_project',
 			'create_task',
 			'create_upload',
+			'delete_message',
 			'edit_update',
 			'end_session',
 			'get_messages',

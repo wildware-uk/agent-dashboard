@@ -488,6 +488,16 @@
 								onreply={async (body) => {
 									await actions?.postMessage({ replyTo: row.post.id, body });
 								}}
+								ondelete={actions
+									? async (id) => {
+											await actions.deleteMessage(id);
+										}
+									: undefined}
+								ondeletepost={actions
+									? async () => {
+											await actions.deleteMessage(row.post.id);
+										}
+									: undefined}
 							/>
 						{:else}
 							<UpdateCard
