@@ -516,8 +516,16 @@
 								replyDeliveries={deliveriesForPost(row.post.id)}
 								uploader={actions}
 								{onlineIds}
-								onreply={async (body) => {
-									await actions?.postMessage({ replyTo: row.post.id, body });
+								onreply={async (body, mediaIds = [], answers) => {
+									// The images go with it: a reply that quietly dropped the
+									// screenshot it was written about would be worse than one
+									// that failed to send.
+									await actions?.postMessage({
+										replyTo: row.post.id,
+										body,
+										...(mediaIds.length > 0 ? { mediaIds } : {}),
+										...(answers ? { answers } : {})
+									});
 								}}
 								ondelete={actions
 									? async (id) => {

@@ -112,7 +112,10 @@ const DESIGN_COLUMNS: Record<string, string[]> = {
 		'reply_to',
 		// Migration 017: soft delete, so every tab that rendered the line can be
 		// told to drop it — the same shape `updates.deleted_at` keeps.
-		'deleted_at'
+		'deleted_at',
+		// Migration 020: the comment in the same thread this one answers, so a
+		// thread carrying two conversations can still be read.
+		'answers'
 	],
 	read_cursors: ['agent_id', 'last_seen_message_seq'],
 	// The four columns migration 002 appends carry the other four request kinds

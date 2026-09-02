@@ -738,3 +738,112 @@ describe('marking a message delivered', () => {
 		expect([...alreadyDelivered(h, agentId, null, [post.id])]).toEqual([]);
 	});
 });
+
+/**
+ * Answering one comment inside a thread (migration 020).
+ *
+ * The owner asked for both halves at once: address a reply to a particular
+ * remark, and keep everything in the one thread. So `answers` is a label, and
+ * the thread it lands in comes from the comment it answers.
+ */
+describe('answering a comment', () => {
+	it('lands in the same thread as the comment it answers', () => {
+		const update = postUpdate(h, { project: slug, agentId, body: 'shipped' });
+		const said = postMessage(h, {
+			author: { kind: 'agent', agentId },
+			updateId: update.id,
+			body: 'the build is green'
+		});
+
+		const answer = postMessage(h, {
+			author: { kind: 'human' },
+			answers: said.id,
+			body: 'which suite?'
+		});
+
+		expect(answer.updateId).toBe(update.id);
+		expect(answer.answers).toBe(said.id);
+		expect(listThread(h, { updateId: update.id }).map((m) => m.id)).toEqual([said.id, answer.id]);
+	});
+
+	it('works the same under one of the owner’s own posts', () => {
+		const post = fromOwner('two things here', { project: slug });
+		const first = postMessage(h, {
+			author: { kind: 'agent', agentId },
+			replyTo: post.id,
+			body: 'about the first'
+		});
+
+		const answer = postMessage(h, {
+			author: { kind: 'human' },
+			answers: first.id,
+			body: 'yes, that one'
+		});
+
+		expect(answer.replyTo).toBe(post.id);
+		expect(answer.answers).toBe(first.id);
+	});
+
+	it('lets a reply answer the post itself, which heads the thread', () => {
+		const post = fromOwner('what about this', { project: slug });
+
+		const answer = postMessage(h, {
+			author: { kind: 'agent', agentId },
+			replyTo: post.id,
+			answers: post.id,
+			body: 'on it'
+		});
+
+		expect(answer.replyTo).toBe(post.id);
+		expect(answer.answers).toBe(post.id);
+	});
+
+	it('refuses a comment from a different thread', () => {
+		const update = postUpdate(h, { project: slug, agentId, body: 'shipped' });
+		const elsewhere = postMessage(h, {
+			author: { kind: 'human' },
+			updateId: update.id,
+			body: 'over here'
+		});
+		const post = fromOwner('a separate conversation', { project: slug });
+
+		expect(
+			refusalCode(() =>
+				postMessage(h, {
+					author: { kind: 'agent', agentId },
+					replyTo: post.id,
+					answers: elsewhere.id,
+					body: 'wrong thread'
+				})
+			)
+		).toBe('invalid_argument');
+	});
+
+	it('refuses a comment that has been deleted', () => {
+		const post = fromOwner('mind this', { project: slug });
+		const reply = postMessage(h, {
+			author: { kind: 'agent', agentId },
+			replyTo: post.id,
+			body: 'gone in a moment'
+		});
+		deleteMessage(h, { messageId: reply.id, by: { kind: 'agent', agentId } });
+
+		expect(
+			refusalCode(() =>
+				postMessage(h, { author: { kind: 'human' }, answers: reply.id, body: 'too late' })
+			)
+		).toBe('not_found');
+	});
+
+	it('leaves an ordinary reply with nothing to answer', () => {
+		const update = postUpdate(h, { project: slug, agentId, body: 'shipped' });
+
+		const said = postMessage(h, {
+			author: { kind: 'human' },
+			updateId: update.id,
+			body: 'nice one'
+		});
+
+		expect(said.answers).toBeNull();
+	});
+});

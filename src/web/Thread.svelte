@@ -34,7 +34,13 @@
 	let {
 		/** The thread, oldest first. Empty is the common case. */
 		messages = [],
-		/** Post a reply. Resolves when the server has it; rejects with a message. */
+		/**
+		 * Post a reply. Resolves when the server has it; rejects with a message.
+		 *
+		 * `answers` is the comment being replied to, when the owner picked one:
+		 * the reply still lands in this thread, labelled as answering that line
+		 * (migration 020).
+		 */
 		onreply,
 		/** Agent id to display name, as the shell resolves it for the cards. */
 		agentNames = {},
@@ -75,7 +81,7 @@
 		ondelete = undefined
 	}: {
 		messages?: MessageView[];
-		onreply: (body: string, mediaIds?: string[]) => Promise<void>;
+		onreply: (body: string, mediaIds?: string[], answers?: string) => Promise<void>;
 		agentNames?: Record<string, string>;
 		acks?: Record<string, AckView[]>;
 		onlineIds?: string[];
@@ -96,6 +102,15 @@
 	let confirming = $state<string | null>(null);
 	let deleting = $state<string | null>(null);
 	let deleteError = $state<string | null>(null);
+
+	/**
+	 * Which comment the box is answering, if any (migration 020).
+	 *
+	 * The thread stays one flat list — a tree of replies is unreadable on a
+	 * phone, which is the whole reason this is a label rather than nesting — and
+	 * the box says who it is addressed to while it is open.
+	 */
+	let answering = $state<string | null>(null);
 
 	let open = $state(false);
 	/** The box itself, so opening it can put the cursor in it. */
@@ -172,6 +187,24 @@
 		open = false;
 		error = null;
 		draft = '';
+		answering = null;
+	}
+
+	/** Open the box addressed to one comment. */
+	function replyTo(messageId: string): void {
+		answering = messageId;
+		open = true;
+		error = null;
+	}
+
+	/** The line being answered, for the label above the box. */
+	const answered = $derived(messages.find((message) => message.id === answering));
+
+	/** Who wrote the comment with this id, for an "answering …" label. */
+	function speakerOf(messageId: string | null | undefined): string | null {
+		if (!messageId) return null;
+		const found = messages.find((message) => message.id === messageId);
+		return found ? speaker(found.author) : null;
 	}
 
 	async function remove(id: string): Promise<void> {
@@ -194,7 +227,7 @@
 		busy = true;
 		error = null;
 		try {
-			await onreply(draft.trim(), uploads?.ids ?? []);
+			await onreply(draft.trim(), uploads?.ids ?? [], answering ?? undefined);
 			uploads?.clear();
 			close();
 		} catch (cause) {
@@ -256,6 +289,16 @@
 						<span data-message-author class="font-medium text-content">
 							{speaker(message.author)}
 						</span>
+						{#if speakerOf(message.answers)}
+							<!--
+								Who this line was addressed to. A label, not an indent: the
+								thread stays one readable list however many conversations are
+								running through it.
+							-->
+							<span data-answering class="text-content-muted">
+								answering {speakerOf(message.answers)}
+							</span>
+						{/if}
 						<time
 							class="ml-auto text-content-muted"
 							datetime={new Date(message.createdAt).toISOString()}
@@ -274,6 +317,17 @@
 						{agentNames}
 						{onlineIds}
 					/>
+
+					<div class="flex flex-wrap items-center gap-1">
+						<button
+							type="button"
+							aria-label="Reply to {speaker(message.author)}"
+							onclick={() => replyTo(message.id)}
+							class="w-fit rounded px-1 py-0.5 text-xs text-content-muted hover:bg-surface-raised hover:text-content"
+						>
+							Reply
+						</button>
+					</div>
 
 					{#if ondelete}
 						{#if confirming === message.id}
@@ -332,7 +386,11 @@
 	{#if open}
 		<div class="flex min-w-0 flex-col gap-2">
 			<label class="flex flex-col gap-1 text-xs text-content-muted">
-				Reply to this update
+				{#if answered}
+					Answering {speaker(answered.author)}
+				{:else}
+					Reply to this update
+				{/if}
 				<!--
 					Focused by an effect rather than by `autofocus`: the attribute focuses
 					on page load as well, which would steal the cursor from a reader who

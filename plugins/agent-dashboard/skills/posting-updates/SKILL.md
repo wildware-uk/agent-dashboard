@@ -123,6 +123,12 @@ until newer conversations push it down. Reply where the message came from:
 post_message({ update_id | task_id, body })
 ```
 
+To answer one particular remark in a busy thread, name it:
+`post_message({ answers: message_id, body })`. Your reply stays in the same
+thread and is labelled as answering that line — naming it is enough, the thread
+comes with it. Threads never nest; a card with two conversations on it stays one
+readable list.
+
 A reply can carry images too: `post_message({ ..., media_ids })`, with the same
 three-step upload as a card. Answer with the screenshot rather than describing
 it — "the layout is broken at 375px" is a sentence, and the picture is the

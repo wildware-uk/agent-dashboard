@@ -75,7 +75,7 @@
 		onlineIds?: string[];
 		postDeliveries?: DeliveryView[];
 		replyDeliveries?: Record<string, DeliveryView[]>;
-		onreply: (body: string, mediaIds?: string[]) => Promise<void>;
+		onreply: (body: string, mediaIds?: string[], answers?: string) => Promise<void>;
 		postMedia?: MediaView[];
 		replyMedia?: Record<string, MediaView[]>;
 		uploader?: Pick<OwnerActions, 'uploadMedia'>;

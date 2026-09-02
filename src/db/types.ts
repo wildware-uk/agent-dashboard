@@ -244,6 +244,14 @@ export type Message = Keyed & {
 	 * One level only: a reply names a post, never another reply.
 	 */
 	replyTo: string | null;
+	/**
+	 * The comment in the same thread this one answers (migration 020).
+	 *
+	 * Display, not structure: which thread a message is in is still `updateId`,
+	 * `taskId` or `replyTo`. This says who it was addressed to, so a thread with
+	 * two conversations running through it can be read.
+	 */
+	answers: string | null;
 	/** Either the literal `human` or `agent:<agent_id>` (design §3). */
 	author: string;
 	body: string;

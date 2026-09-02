@@ -120,11 +120,15 @@
 	 * refetches, so the reply arrives here the same way it arrives in a tab that
 	 * was only watching (design §4).
 	 */
-	async function reply(body: string, mediaIds: string[] = []): Promise<void> {
+	async function reply(body: string, mediaIds: string[] = [], answers?: string): Promise<void> {
 		await actions?.postMessage({
 			update: update.id,
 			body,
-			...(mediaIds.length > 0 ? { mediaIds } : {})
+			...(mediaIds.length > 0 ? { mediaIds } : {}),
+			// The comment being answered, when the owner picked one (migration 020).
+			// The reply still lands in this card's thread; the label is what tells
+			// two conversations on one card apart.
+			...(answers ? { answers } : {})
 		});
 	}
 </script>

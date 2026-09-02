@@ -100,6 +100,14 @@ export type NewMessage = {
 	 */
 	replyTo?: string;
 	/**
+	 * A comment in the thread this message answers (migration 020).
+	 *
+	 * The reply still belongs to whatever thread it was written in — this only
+	 * says which line it is addressed to, so a card carrying two conversations
+	 * can be read without nesting anything.
+	 */
+	answers?: string;
+	/**
 	 * Images already uploaded with {@link OwnerActions.uploadMedia}.
 	 *
 	 * Ids, not bytes: the upload is its own request, so a slow picture never

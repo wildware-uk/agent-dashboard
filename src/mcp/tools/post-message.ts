@@ -51,6 +51,15 @@ const inputSchema = {
 				'names no update and no task is one they wrote straight into the feed. Reply to the ' +
 				'post itself, never to another reply.'
 		),
+	answers: z
+		.string()
+		.optional()
+		.describe(
+			'A comment in a thread that this message is a direct answer to, from get_messages. ' +
+				'Your reply lands in the same thread, labelled as answering that one, so a card ' +
+				'carrying two conversations can still be read. It supplies the thread on its own: ' +
+				'you need not also pass update_id or task_id.'
+		),
 	project: z
 		.string()
 		.optional()
@@ -91,6 +100,9 @@ export const postMessageTool: McpTool<typeof inputSchema> = {
 			'  being discussed, so a reply names it. You may also name a reply — including one your',
 			'  owner wrote inside a thread — and your answer is filed under the same post, so a thread',
 			'  is always one level deep.',
+			'- answers (optional): the id of a comment you are answering directly. Your reply stays in',
+			'  the same thread and is labelled "answering <them>", which is how a thread with two',
+			'  conversations in it stays readable. Naming it is enough — the thread comes with it.',
 			'- project (optional): a slug or id, for a note that answers no card. Taken from the',
 			'  update or task when you name one.',
 			'- media_ids (optional): images to show on the reply, from create_upload with their bytes',
@@ -120,6 +132,7 @@ export const postMessageTool: McpTool<typeof inputSchema> = {
 				updateId: args.update_id,
 				taskId: args.task_id,
 				replyTo: args.message_id,
+				answers: args.answers,
 				project: args.project,
 				mediaIds: args.media_ids
 			});

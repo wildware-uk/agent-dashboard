@@ -121,6 +121,17 @@ export type PostMessageInput = {
 	 */
 	replyTo?: string | null;
 	/**
+	 * A comment in the same thread this message answers (migration 020).
+	 *
+	 * The owner asked to reply to a comment while keeping everything in one
+	 * thread, and those two wishes pull against each other: a tree of replies is
+	 * unreadable on a phone. So this is a *label*, not a structure. The message
+	 * lands in the same flat thread as the one it answers — the anchor is taken
+	 * from the target when the caller names no other — and the renderer shows who
+	 * it was addressed to.
+	 */
+	answers?: string | null;
+	/**
 	 * Images to show on this message (migration 016).
 	 *
 	 * The owner's come from `POST /api/media`, an agent's from `create_upload`.
@@ -147,9 +158,16 @@ export function postMessage(ctx: DomainContext, input: PostMessageInput): Messag
 	const body = requiredText(input.body, 'body', MESSAGE_BODY_MAX_LENGTH);
 	const author = authorText(assertAuthor(ctx, input.author));
 
-	const updateId = input.updateId ?? null;
-	const taskId = input.taskId ?? null;
-	const replyTo = input.replyTo ?? null;
+	// The comment being answered, resolved first: it can supply the thread, so
+	// an agent replying to a remark need not also work out which card it was on.
+	const answered = input.answers ? findMessageById(ctx.db, input.answers) : null;
+	if (input.answers && (!answered || answered.deletedAt !== null)) {
+		throw notFound(`no such message: ${input.answers}`);
+	}
+
+	const updateId = input.updateId ?? answered?.updateId ?? null;
+	const taskId = input.taskId ?? answered?.taskId ?? null;
+	const replyTo = input.replyTo ?? (answered ? (answered.replyTo ?? null) : null);
 	if (updateId !== null && taskId !== null) {
 		throw invalid('a message hangs off an update or a task, not both');
 	}
@@ -198,11 +216,19 @@ export function postMessage(ctx: DomainContext, input: PostMessageInput): Messag
 			? assertAttachableToMessage(ctx, { mediaIds: input.mediaIds, author })
 			: [];
 
+	// An answer lands in the thread it was addressed to, which is what "keep it
+	// all in one thread" means: naming a comment on a card does not start a
+	// second conversation somewhere else.
+	if (answered && !sameThread(answered, { updateId, taskId, replyTo: anchor })) {
+		throw invalid('that message is in a different thread');
+	}
+
 	const message = insertMessage(ctx.db, {
 		projectId,
 		updateId,
 		taskId,
 		replyTo: anchor,
+		answers: answered?.id ?? null,
 		author,
 		body,
 		createdAt: ctx.now()
@@ -650,6 +676,26 @@ function readTo(
 	const skipped = unread.find((message) => !handed.has(message.id));
 
 	return skipped ? Math.min(last, skipped.seq - 1) : last;
+}
+
+/**
+ * Whether an answer would land beside the comment it answers.
+ *
+ * A feed post's replies all carry the post's id, a card's thread all carry the
+ * card's, so "same thread" is the anchor matching — with one allowance: a reply
+ * may answer *the post itself*, which anchors to nothing and is the head of the
+ * thread rather than a member of it.
+ */
+function sameThread(
+	answered: Message,
+	here: { updateId: string | null; taskId: string | null; replyTo: string | null }
+): boolean {
+	if (here.replyTo !== null && answered.id === here.replyTo) return true;
+	return (
+		answered.updateId === here.updateId &&
+		answered.taskId === here.taskId &&
+		(answered.replyTo ?? null) === here.replyTo
+	);
 }
 
 /** The author, checked: an agent that does not exist cannot have said anything. */

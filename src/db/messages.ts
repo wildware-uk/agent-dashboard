@@ -24,9 +24,10 @@ type Row = {
 	created_at: number;
 	reply_to: string | null;
 	deleted_at: number | null;
+	answers: string | null;
 };
 
-const COLUMNS = `seq, id, project_id, update_id, task_id, author, body, created_at, reply_to, deleted_at`;
+const COLUMNS = `seq, id, project_id, update_id, task_id, author, body, created_at, reply_to, deleted_at, answers`;
 
 /**
  * The rule every read here keeps: a deleted message is gone.
@@ -48,7 +49,8 @@ function toMessage(row: Row): Message {
 		body: row.body,
 		createdAt: row.created_at,
 		replyTo: row.reply_to,
-		deletedAt: row.deleted_at
+		deletedAt: row.deleted_at,
+		answers: row.answers
 	};
 }
 
@@ -63,6 +65,8 @@ export type NewMessage = {
 	createdAt?: number;
 	/** The message this answers (migration 014). */
 	replyTo?: string | null;
+	/** The comment in the same thread this one is addressed to (migration 020). */
+	answers?: string | null;
 };
 
 export function insertMessage(db: Db, input: NewMessage): Message {
@@ -74,13 +78,15 @@ export function insertMessage(db: Db, input: NewMessage): Message {
 		author: input.author,
 		body: input.body,
 		created_at: input.createdAt ?? Date.now(),
-		reply_to: orNull(input.replyTo)
+		reply_to: orNull(input.replyTo),
+		answers: orNull(input.answers)
 	};
 
 	const inserted = db
 		.prepare<typeof row, Row>(
-			`INSERT INTO messages (id, project_id, update_id, task_id, author, body, created_at, reply_to)
-			 VALUES (:id, :project_id, :update_id, :task_id, :author, :body, :created_at, :reply_to)
+			`INSERT INTO messages
+			   (id, project_id, update_id, task_id, author, body, created_at, reply_to, answers)
+			 VALUES (:id, :project_id, :update_id, :task_id, :author, :body, :created_at, :reply_to, :answers)
 			 RETURNING ${COLUMNS}`
 		)
 		.get(row)!;
