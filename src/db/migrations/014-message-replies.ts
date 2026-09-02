@@ -11,11 +11,14 @@
  * and every agent's `get_messages`, and a table rebuild to add threading would
  * put all of that at risk to avoid a nullable column.
  *
- * **One level, on purpose.** A reply's `reply_to` names the post it answers,
- * never another reply. Threads of threads are a shape nobody asked for and a
- * renderer nobody wants to write; the domain refuses a `reply_to` that points at
- * a message which is itself a reply, so the rule is enforced rather than
- * remembered.
+ * **One level, on purpose.** A reply's `reply_to` always names a *post*, never
+ * another reply. Threads of threads are a shape nobody asked for and a renderer
+ * nobody wants to write.
+ *
+ * The domain keeps that by flattening rather than refusing: answering a reply
+ * files the answer under the same post. Refusing was the first attempt and it
+ * was wrong — the owner replies inside threads, so their message is itself a
+ * reply, and an agent answering them was refused for doing the obvious thing.
  */
 export const sql = `
 ALTER TABLE messages ADD COLUMN reply_to TEXT REFERENCES messages (id);

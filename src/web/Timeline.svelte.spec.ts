@@ -329,7 +329,14 @@ describe('requests waiting on the owner', () => {
  */
 describe('recent replies', () => {
 	const threadsFor = (byUpdate: Record<string, ReturnType<typeof aMessage>[]>) => ({
-		for: (updateId: string) => byUpdate[updateId] ?? [],
+		// The section only lifts conversations the owner is part of, so a fixture
+		// thread is "they said something, an agent answered" — the newest message
+		// is what the section sorts on, and it has to be the agent's.
+		for: (updateId: string) =>
+			(byUpdate[updateId] ?? []).flatMap((message, index) => [
+				aMessage({ id: `${message.id}-asked`, updateId, author: 'human', createdAt: index }),
+				{ ...message, author: 'agent:a1' }
+			]),
 		forTask: () => []
 	});
 
@@ -498,8 +505,13 @@ describe('what the owner posted', () => {
  */
 describe('finishing with a conversation', () => {
 	const chatty = () => anUpdate({ id: 'chatty', seq: 2, createdAt: day, body: 'a card' });
+	/** The owner asked, an agent answered: what the section lifts. */
 	const threadsFor = (byUpdate: Record<string, ReturnType<typeof aMessage>[]>) => ({
-		for: (updateId: string) => byUpdate[updateId] ?? [],
+		for: (updateId: string) =>
+			(byUpdate[updateId] ?? []).flatMap((message, index) => [
+				aMessage({ id: `${message.id}-asked`, updateId, author: 'human', createdAt: index }),
+				{ ...message, author: 'agent:a1' }
+			]),
 		forTask: () => []
 	});
 
@@ -624,5 +636,61 @@ describe('an agent acknowledging a post', () => {
 		});
 
 		expect(document.querySelector('[data-post="post1"] [data-ack]')).toBeNull();
+	});
+});
+
+/**
+ * Whose conversations ride the top (#feedback: "Recent replies should only show
+ * replies to me, not to other agents").
+ *
+ * The section exists so an answer to the owner is not buried in a day group.
+ * One agent leaving a note on another's card is not that, and a section holding
+ * both is one the owner has to filter by eye.
+ */
+describe('recent replies, scoped to the owner', () => {
+	const threadsFor = (byUpdate: Record<string, ReturnType<typeof aMessage>[]>) => ({
+		for: (updateId: string) => byUpdate[updateId] ?? [],
+		forTask: () => []
+	});
+
+	it('lifts a card where an agent answered the owner', async () => {
+		mount([anUpdate({ id: 'mine', seq: 2, createdAt: day })], {
+			threads: threadsFor({
+				mine: [
+					aMessage({ id: 'm1', updateId: 'mine', author: 'human', createdAt: day }),
+					aMessage({ id: 'm2', updateId: 'mine', author: 'agent:a1', createdAt: day + 1_000 })
+				]
+			})
+		});
+
+		expect(document.querySelector('[data-testid="replied-section"]')).not.toBeNull();
+	});
+
+	it('leaves a thread the owner never spoke in where it is', async () => {
+		mount([anUpdate({ id: 'theirs', seq: 2, createdAt: day })], {
+			threads: threadsFor({
+				theirs: [
+					aMessage({ id: 'm1', updateId: 'theirs', author: 'agent:a1', createdAt: day }),
+					aMessage({ id: 'm2', updateId: 'theirs', author: 'agent:a2', createdAt: day + 1_000 })
+				]
+			})
+		});
+
+		expect(document.querySelector('[data-testid="replied-section"]')).toBeNull();
+	});
+
+	it('does not lift a card whose newest message is the owner’s own', async () => {
+		// Nobody has answered yet. Parking your own words at the top of your own
+		// feed is not news.
+		mount([anUpdate({ id: 'mine', seq: 2, createdAt: day })], {
+			threads: threadsFor({
+				mine: [
+					aMessage({ id: 'm1', updateId: 'mine', author: 'agent:a1', createdAt: day }),
+					aMessage({ id: 'm2', updateId: 'mine', author: 'human', createdAt: day + 1_000 })
+				]
+			})
+		});
+
+		expect(document.querySelector('[data-testid="replied-section"]')).toBeNull();
 	});
 });

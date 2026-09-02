@@ -151,7 +151,23 @@
 
 		const withReplies = feed.items
 			.filter((item) => !item.pinned)
-			.map((item) => ({ item, at: threads.for(item.id).at(-1)?.createdAt ?? null }))
+			.map((item) => {
+				const thread = threads.for(item.id);
+				const newest = thread.at(-1);
+				return {
+					item,
+					// Only conversations that are *the owner's* ride the top
+					// (#feedback: "Recent replies should only show replies to me, not to
+					// other agents"). A card is here because somebody answered them, so
+					// it takes both halves: they spoke in the thread, and the newest
+					// thing in it came back from an agent. One agent leaving a note on
+					// another's card is a comment, and it belongs in its day.
+					at:
+						newest && newest.author !== 'human' && thread.some((m) => m.author === 'human')
+							? newest.createdAt
+							: null
+				};
+			})
 			.filter((candidate): candidate is { item: UpdateView; at: number } => candidate.at !== null)
 			// Read conversations drop back into their day (migration 015). Without
 			// this the section only ever grew, and the cards riding above the

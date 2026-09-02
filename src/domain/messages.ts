@@ -141,13 +141,25 @@ export function postMessage(ctx: DomainContext, input: PostMessageInput): Messag
 	}
 
 	// Resolved before anything is written, so a reply cannot be filed against a
-	// post that is not there — and so the one-level rule is a refusal rather than
-	// a nesting nobody renders.
-	const parent = replyTo === null ? null : findMessageById(ctx.db, replyTo);
-	if (replyTo !== null && !parent) throw notFound(`no such message: ${replyTo}`);
-	if (parent && parent.replyTo !== null) {
-		throw invalid('reply to the post itself rather than to another reply');
-	}
+	// post that is not there.
+	const target = replyTo === null ? null : findMessageById(ctx.db, replyTo);
+	if (replyTo !== null && !target) throw notFound(`no such message: ${replyTo}`);
+
+	/**
+	 * Answering a reply files the answer under the same post.
+	 *
+	 * This used to be a refusal, and that was wrong in a way only use could show:
+	 * the owner replies *inside* a thread, so what they said is itself a reply —
+	 * and an agent trying to answer them got `invalid_argument` for doing the
+	 * obvious thing. A rule that makes the owner unanswerable is not protecting
+	 * anything.
+	 *
+	 * Flattening keeps what the rule was actually for. Threads stay one level, so
+	 * there is still nothing to render recursively, and the conversation is one
+	 * list under the post it belongs to rather than a tree.
+	 */
+	const parent = target?.replyTo ? findMessageById(ctx.db, target.replyTo) : target;
+	const anchor = parent?.id ?? null;
 
 	// The named project first, so an unknown slug is refused before anything else,
 	// and then the anchor's. A request that says both and disagrees is refused
@@ -166,7 +178,7 @@ export function postMessage(ctx: DomainContext, input: PostMessageInput): Messag
 		projectId,
 		updateId,
 		taskId,
-		replyTo,
+		replyTo: anchor,
 		author,
 		body,
 		createdAt: ctx.now()

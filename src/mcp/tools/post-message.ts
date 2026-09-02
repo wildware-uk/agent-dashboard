@@ -79,8 +79,9 @@ export const postMessageTool: McpTool<typeof inputSchema> = {
 			'  task, never both.',
 			"- message_id (optional): the owner's own feed post to answer. They can write straight",
 			'  into the timeline, and such a post hangs off no update and no task — it *is* the thing',
-			'  being discussed, so a reply names it. Replies are one level deep: name the post, never',
-			'  another reply.',
+			'  being discussed, so a reply names it. You may also name a reply — including one your',
+			'  owner wrote inside a thread — and your answer is filed under the same post, so a thread',
+			'  is always one level deep.',
 			'- project (optional): a slug or id, for a note that answers no card. Taken from the',
 			'  update or task when you name one.',
 			'',
@@ -92,8 +93,8 @@ export const postMessageTool: McpTool<typeof inputSchema> = {
 			'On failure: "not_found" means the update, task, message or project matched nothing — a',
 			'deleted update is gone rather than silently re-anchored. "invalid_argument" means an',
 			'empty or over-long body, that you named more than one of update_id, task_id and',
-			'message_id, that you replied to a reply rather than to a post, or that you named a',
-			'project that disagrees with the one the anchor belongs to.'
+			'message_id, or that you named a project that disagrees with the one the anchor belongs',
+			'to.'
 		].join('\n'),
 		inputSchema,
 		annotations: { destructiveHint: false, idempotentHint: false, openWorldHint: false }
