@@ -326,7 +326,10 @@ describe('replying to a post', () => {
 		expect(post).toMatchObject({ replyTo: null, updateId: null, taskId: null, projectId });
 	});
 
-	it('refuses a reply to a reply, rather than nesting', () => {
+	it('files a reply to a reply under the same post, rather than nesting', () => {
+		// This was a refusal, and it was wrong in a way only use could show: the
+		// owner replies *inside* a thread, so what they said is itself a reply, and
+		// an agent answering them was refused for doing the obvious thing.
 		const post = fromOwner('a thought', { project: slug });
 		const reply = postMessage(h, {
 			author: { kind: 'agent', agentId },
@@ -334,11 +337,28 @@ describe('replying to a post', () => {
 			replyTo: post.id
 		});
 
-		expect(
-			refusalCode(() =>
-				postMessage(h, { author: { kind: 'human' }, body: 'and?', replyTo: reply.id })
-			)
-		).toBe('invalid_argument');
+		const answer = postMessage(h, {
+			author: { kind: 'human' },
+			body: 'and?',
+			replyTo: reply.id
+		});
+
+		expect(answer.replyTo).toBe(post.id);
+		expect(listThread(h, { project: slug }).filter((m) => m.replyTo === post.id)).toHaveLength(2);
+	});
+
+	it('keeps the thread one level deep however far down somebody replies', () => {
+		const post = fromOwner('a thought', { project: slug });
+		let last = postMessage(h, {
+			author: { kind: 'agent', agentId },
+			body: 'one',
+			replyTo: post.id
+		});
+
+		for (const body of ['two', 'three']) {
+			last = postMessage(h, { author: { kind: 'human' }, body, replyTo: last.id });
+			expect(last.replyTo).toBe(post.id);
+		}
 	});
 
 	it('refuses a reply to a message that is not there', () => {
