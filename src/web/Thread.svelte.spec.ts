@@ -169,10 +169,12 @@ describe('on a phone', () => {
 	it('gives both controls a 44px target', async () => {
 		const screen = render(Thread, { messages: [aMessage()], onreply: replies().onreply });
 
-		const reply = screen.getByRole('button', { name: 'Reply' }).element();
+		// Exact, because each message now carries its own "Reply to <name>" as
+		// well (migration 020); the one under test is the thread's own control.
+		const reply = screen.getByRole('button', { name: 'Reply', exact: true }).element();
 		expect(reply.className).toContain('min-h-11');
 
-		await screen.getByRole('button', { name: 'Reply' }).click();
+		await screen.getByRole('button', { name: 'Reply', exact: true }).click();
 		expect(screen.getByRole('button', { name: 'Send reply' }).element().className).toContain(
 			'min-h-11'
 		);
@@ -481,5 +483,73 @@ describe('deleting a message', () => {
 
 		await expect.element(screen.getByRole('alert')).toHaveTextContent('offline');
 		expect(document.querySelectorAll('[data-message]')).toHaveLength(1);
+	});
+});
+
+/**
+ * Answering one comment, in the same thread (migration 020).
+ *
+ * The owner: "Allow replying to comments, it would be ideal to keep all
+ * relevant data in one thread." Both halves — addressed to somebody, and still
+ * one flat list, because a tree of replies is unreadable on a phone.
+ */
+describe('answering a comment', () => {
+	it('sends the comment being answered with the reply', async () => {
+		const sent: { body: string; answers?: string }[] = [];
+		const screen = render(Thread, {
+			messages: [
+				aMessage({ id: 'm1', author: 'agent:a1', body: 'the build is green' }),
+				aMessage({ id: 'm2', author: 'human', body: 'and the tests?' })
+			],
+			agentNames: { a1: 'scout' },
+			onreply: (body: string, _media?: string[], answers?: string) => {
+				sent.push({ body, answers });
+				return Promise.resolve();
+			}
+		});
+
+		await screen.getByRole('button', { name: 'Reply to scout' }).click();
+		await screen.getByRole('textbox').fill('which suite?');
+		await screen.getByRole('button', { name: 'Send reply' }).click();
+
+		expect(sent).toEqual([{ body: 'which suite?', answers: 'm1' }]);
+	});
+
+	it('says who the open box is addressed to', async () => {
+		const screen = render(Thread, {
+			messages: [aMessage({ id: 'm1', author: 'agent:a1', body: 'the build is green' })],
+			agentNames: { a1: 'scout' },
+			onreply: replies().onreply
+		});
+
+		await screen.getByRole('button', { name: 'Reply to scout' }).click();
+
+		await expect.element(screen.getByText('Answering scout')).toBeVisible();
+	});
+
+	it('labels a message that answers another, without nesting it', async () => {
+		render(Thread, {
+			messages: [
+				aMessage({ id: 'm1', author: 'agent:a1', body: 'the build is green' }),
+				aMessage({ id: 'm2', author: 'human', body: 'which suite?', answers: 'm1' })
+			],
+			agentNames: { a1: 'scout' },
+			onreply: replies().onreply
+		});
+
+		const labels = [...document.querySelectorAll('[data-answering]')];
+		expect(labels).toHaveLength(1);
+		expect(labels[0]?.textContent).toContain('scout');
+		// Still one flat list: two messages, two boxes, no thread inside a thread.
+		expect(document.querySelectorAll('[data-message]')).toHaveLength(2);
+	});
+
+	it('leaves an ordinary reply unlabelled', async () => {
+		render(Thread, {
+			messages: [aMessage({ id: 'm1', author: 'human', body: 'just a note' })],
+			onreply: replies().onreply
+		});
+
+		expect(document.querySelector('[data-answering]')).toBeNull();
 	});
 });

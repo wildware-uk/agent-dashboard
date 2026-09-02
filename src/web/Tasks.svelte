@@ -484,11 +484,12 @@
 									media={taskMedia(task.id)}
 									uploader={actions}
 									{onlineIds}
-									onreply={async (body, mediaIds = []) => {
+									onreply={async (body, mediaIds = [], answers) => {
 										await actions.postMessage({
 											task: task.id,
 											body,
-											...(mediaIds.length > 0 ? { mediaIds } : {})
+											...(mediaIds.length > 0 ? { mediaIds } : {}),
+											...(answers ? { answers } : {})
 										});
 									}}
 								/>

@@ -156,6 +156,7 @@ export function readReply(body: Body): {
 	updateId?: string;
 	taskId?: string;
 	replyTo?: string;
+	answers?: string;
 	mediaIds?: string[];
 } {
 	const input: {
@@ -164,6 +165,7 @@ export function readReply(body: Body): {
 		updateId?: string;
 		taskId?: string;
 		replyTo?: string;
+		answers?: string;
 		mediaIds?: string[];
 	} = {
 		body: text(body.body, 'body')
@@ -174,6 +176,10 @@ export function readReply(body: Body): {
 	// reply names it directly.
 	if ('replyTo' in body) input.replyTo = text(body.replyTo, 'replyTo');
 	if ('project' in body) input.project = text(body.project, 'project');
+	// The comment in the thread this answers (migration 020). It supplies the
+	// thread when nothing else names one, so the reply lands beside what it
+	// answers rather than starting a conversation elsewhere.
+	if ('answers' in body) input.answers = text(body.answers, 'answers');
 	// Images the owner already uploaded to `POST /api/media` (migration 016).
 	// Shape-checked here, owned-and-unattached checked in `$domain`.
 	if ('mediaIds' in body) {

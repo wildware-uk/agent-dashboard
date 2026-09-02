@@ -325,6 +325,8 @@ export type MessageView = {
 	task_id: string | null;
 	/** The owner's post this answers, for a reply on a feed post (migration 014). */
 	reply_to: string | null;
+	/** The comment in the same thread this one is addressed to (migration 020). */
+	answers?: string;
 	/** The literal `human`, or `agent:<agent_id>` (design §3). */
 	author: string;
 	/** Markdown, as it was written. */
@@ -347,6 +349,9 @@ export function messageView(message: Message): MessageView {
 		update_id: message.updateId,
 		task_id: message.taskId,
 		reply_to: message.replyTo,
+		// Absent rather than null on the ordinary message, which answers the thread
+		// rather than one line in it.
+		...(message.answers === null ? {} : { answers: message.answers }),
 		author: message.author,
 		body: message.body,
 		created_at: iso(message.createdAt),

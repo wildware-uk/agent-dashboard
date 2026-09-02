@@ -391,6 +391,14 @@ export type MessageView = {
 	 * own rather than inside somebody else's thread.
 	 */
 	replyTo?: string | null;
+	/**
+	 * The comment in the same thread this one answers (migration 020).
+	 *
+	 * A label rather than a structure: the message sits in the same flat thread,
+	 * and the card shows who it was addressed to. That is what keeps a card
+	 * carrying two conversations readable without nesting anything.
+	 */
+	answers?: string | null;
 	author: string;
 	body: string;
 	createdAt: number;
