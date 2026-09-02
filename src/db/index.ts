@@ -161,6 +161,8 @@ export {
 	findMessageById,
 	insertMessage,
 	listMessages,
+	listRepliesTo,
+	softDeleteMessage,
 	type MessageQuery,
 	type NewMessage
 } from './messages';

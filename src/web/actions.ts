@@ -197,6 +197,19 @@ export type OwnerActions = {
 	renameAgent(id: string, name: string): Promise<{ id: string; name: string }>;
 	postMessage(input: NewMessage): Promise<MessageView>;
 	/**
+	 * Delete a message: one of the owner's own posts, a reply, or an agent's
+	 * line in a thread (migration 017).
+	 *
+	 * Nothing is removed here. The server soft-deletes and publishes, the tab
+	 * hears `message.deleted` and refetches, so the line goes from every open
+	 * window by the same route — there is no optimistic removal that could
+	 * disagree with a delete that failed.
+	 *
+	 * Deleting a post takes its replies with it, which is why the control asks
+	 * before it fires.
+	 */
+	deleteMessage(id: string): Promise<MessageView>;
+	/**
 	 * Answer an agent's request (design §5).
 	 *
 	 * `value` is sent exactly as the control produced it — a string, a boolean or
@@ -322,6 +335,7 @@ export function ownerActions(request: Requester = defaultRequest): OwnerActions 
 		renameAgent: (id, name) =>
 			send('agent', `/api/agents/${encodeURIComponent(id)}`, 'PATCH', { name }),
 		postMessage: (input) => send('message', '/api/messages', 'POST', input),
+		deleteMessage: (id) => send('message', `/api/messages/${encodeURIComponent(id)}`, 'DELETE'),
 		answerRequest: (id, value) =>
 			send('request', `/api/requests/${encodeURIComponent(id)}/answer`, 'POST', { value }),
 		dismissRequest: (id) => send('request', `/api/requests/${encodeURIComponent(id)}`, 'DELETE'),

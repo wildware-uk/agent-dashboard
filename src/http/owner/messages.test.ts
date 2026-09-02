@@ -2,7 +2,12 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { createProject, listThread, postMessage, postUpdate } from '$domain';
 import { harness, type Harness } from '$domain/testing';
 import { SESSION_COOKIE, signSession } from '../auth';
-import { listMessagesHandler, postMessageHandler, type OwnerHandler } from './messages';
+import {
+	deleteMessageHandler,
+	listMessagesHandler,
+	postMessageHandler,
+	type OwnerHandler
+} from './messages';
 
 /**
  * The owner's half of messages (design §7): the reply box's endpoint, and the
@@ -28,6 +33,10 @@ beforeEach(() => {
 
 type CallOptions = {
 	body?: unknown;
+	/** Route parameters — `id` for the message being deleted. */
+	params?: Record<string, string>;
+	/** Overrides the method the body would otherwise imply. */
+	method?: string;
 	query?: Record<string, string>;
 	/** Signed session by default; pass `null` for a caller with no cookie. */
 	cookie?: string | null;
@@ -42,13 +51,15 @@ async function call(factory: (options: object) => OwnerHandler, options: CallOpt
 		url.searchParams.set(key, value);
 	}
 
-	const init: RequestInit = { method: options.body || options.raw ? 'POST' : 'GET' };
+	const init: RequestInit = {
+		method: options.method ?? (options.body || options.raw ? 'POST' : 'GET')
+	};
 	if (options.raw !== undefined) init.body = options.raw;
 	else if (options.body !== undefined) init.body = JSON.stringify(options.body);
 
 	const response = await handler({
 		request: new Request(url, init),
-		params: {},
+		params: options.params ?? {},
 		cookies: { get: (name: string) => (name === SESSION_COOKIE && cookie ? cookie : undefined) }
 	});
 
@@ -239,5 +250,61 @@ describe('posting to the feed and replying under it', () => {
 		const messages = body.messages as { id: string; replyTo: string | null }[];
 		expect(messages.find((message) => message.id === postId)?.replyTo).toBeNull();
 		expect(messages.filter((message) => message.replyTo === postId)).toHaveLength(1);
+	});
+});
+
+describe('DELETE /api/messages/[id]', () => {
+	it('deletes the owner’s own post and takes its replies with it', async () => {
+		const post = postMessage(h, { author: { kind: 'human' }, body: 'a probe', project: slug });
+		postMessage(h, { author: { kind: 'agent', agentId }, body: 'on it', replyTo: post.id });
+
+		const { status, body } = await call(deleteMessageHandler, {
+			method: 'DELETE',
+			params: { id: post.id }
+		});
+
+		expect(status).toBe(200);
+		expect((body.message as unknown as { deletedAt: number }).deletedAt).toEqual(
+			expect.any(Number)
+		);
+		expect(listThread(h, { project: slug })).toEqual([]);
+	});
+
+	it('deletes an agent’s line too, because the feed is the owner’s', async () => {
+		const said = postMessage(h, {
+			author: { kind: 'agent', agentId },
+			body: 'noise',
+			updateId
+		});
+
+		const { status } = await call(deleteMessageHandler, {
+			method: 'DELETE',
+			params: { id: said.id }
+		});
+
+		expect(status).toBe(200);
+		expect(listThread(h, { updateId })).toEqual([]);
+	});
+
+	it('refuses a caller with no session', async () => {
+		const post = postMessage(h, { author: { kind: 'human' }, body: 'mine', project: slug });
+
+		const { status } = await call(deleteMessageHandler, {
+			method: 'DELETE',
+			params: { id: post.id },
+			cookie: null
+		});
+
+		expect(status).toBe(401);
+		expect(listThread(h, { project: slug })).toHaveLength(1);
+	});
+
+	it('answers 404 for a message that never existed', async () => {
+		const { status } = await call(deleteMessageHandler, {
+			method: 'DELETE',
+			params: { id: 'nope' }
+		});
+
+		expect(status).toBe(404);
 	});
 });

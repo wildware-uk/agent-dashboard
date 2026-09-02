@@ -323,6 +323,7 @@ export function fakeActions(): {
 					[input],
 					aMessage({ id: 'new', body: input.body, updateId: input.update ?? null })
 				),
+			deleteMessage: (id) => record('deleteMessage', [id], aMessage({ id })),
 			answerRequest: (id, value) =>
 				record(
 					'answerRequest',

@@ -68,6 +68,7 @@ export {
 	type PushSettings
 } from './push';
 export {
+	deleteMessageHandler,
 	listMessagesHandler,
 	postMessageHandler,
 	readReply,

@@ -319,6 +319,8 @@ export type MessageView = {
 	/** Markdown, as it was written. */
 	body: string;
 	created_at: string;
+	/** When it was unsent (migration 017). Absent for a live message. */
+	deleted_at?: string;
 };
 
 /**
@@ -336,7 +338,10 @@ export function messageView(message: Message): MessageView {
 		reply_to: message.replyTo,
 		author: message.author,
 		body: message.body,
-		created_at: iso(message.createdAt)
+		created_at: iso(message.createdAt),
+		// Absent for a live message, which is almost all of them: a key that said
+		// `null` on every message would be noise on every read (migration 017).
+		...(message.deletedAt === null ? {} : { deleted_at: iso(message.deletedAt) })
 	};
 }
 

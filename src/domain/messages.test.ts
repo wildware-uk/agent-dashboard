@@ -12,6 +12,7 @@ import {
 	unreadMessagesInScope,
 	listThread,
 	parseAuthor,
+	deleteMessage,
 	postMessage,
 	readMessages
 } from './messages';
@@ -502,5 +503,116 @@ describe('which unread messages a notification carries', () => {
 			'first',
 			'second'
 		]);
+	});
+});
+
+/**
+ * Deleting a message (migration 017).
+ *
+ * Two callers with two different permissions, and the interesting cases are all
+ * about what a delete takes with it: the replies under a post, an agent's unread
+ * count, and a thread three tabs are looking at.
+ */
+describe('deleting a message', () => {
+	it('lets the owner delete their own post', () => {
+		const post = fromOwner('a probe I no longer need', { project: slug });
+
+		const deleted = deleteMessage(h, { messageId: post.id, by: { kind: 'human' } });
+
+		expect(deleted.deletedAt).not.toBeNull();
+		expect(listThread(h, { project: slug })).toEqual([]);
+	});
+
+	it('lets the owner delete an agent’s message, because it is their feed', () => {
+		const update = postUpdate(h, { project: slug, agentId, body: 'progress' });
+		const said = postMessage(h, {
+			author: { kind: 'agent', agentId },
+			body: 'and here is why',
+			updateId: update.id
+		});
+
+		deleteMessage(h, { messageId: said.id, by: { kind: 'human' } });
+
+		expect(listThread(h, { updateId: update.id })).toEqual([]);
+	});
+
+	it('lets an agent unsend what it wrote itself', () => {
+		const update = postUpdate(h, { project: slug, agentId, body: 'progress' });
+		const said = postMessage(h, {
+			author: { kind: 'agent', agentId },
+			body: 'posted too soon',
+			updateId: update.id
+		});
+
+		deleteMessage(h, { messageId: said.id, by: { kind: 'agent', agentId } });
+
+		expect(listThread(h, { updateId: update.id })).toEqual([]);
+	});
+
+	it('refuses an agent deleting somebody else’s words', () => {
+		const post = fromOwner('do the thing', { project: slug });
+
+		expect(
+			refusalCode(() => deleteMessage(h, { messageId: post.id, by: { kind: 'agent', agentId } }))
+		).toBe('invalid_argument');
+		expect(findMessageById(h.db, post.id)!.deletedAt).toBeNull();
+	});
+
+	it('takes the replies with the post, so no answer is left hanging', () => {
+		const post = fromOwner('what about this', { project: slug });
+		postMessage(h, { author: { kind: 'agent', agentId }, body: 'on it', replyTo: post.id });
+
+		const events: unknown[] = [];
+		h.bus.subscribe((event) => events.push(event));
+		deleteMessage(h, { messageId: post.id, by: { kind: 'human' } });
+
+		expect(listThread(h, { project: slug })).toEqual([]);
+		expect(events).toEqual([
+			expect.objectContaining({
+				type: 'message.deleted',
+				payload: { messageId: post.id, projectId, replies: 1 }
+			})
+		]);
+	});
+
+	it('leaves the post alone when one of its replies goes', () => {
+		const post = fromOwner('what about this', { project: slug });
+		const reply = postMessage(h, {
+			author: { kind: 'agent', agentId },
+			body: 'never mind',
+			replyTo: post.id
+		});
+
+		deleteMessage(h, { messageId: reply.id, by: { kind: 'agent', agentId } });
+
+		expect(listThread(h, { project: slug }).map((message) => message.id)).toEqual([post.id]);
+	});
+
+	it('drops a deleted message out of what an agent has waiting', () => {
+		const post = fromOwner('ignore me', { project: slug });
+		expect(countUnreadMessages(h, agentId)).toBe(1);
+
+		deleteMessage(h, { messageId: post.id, by: { kind: 'human' } });
+
+		expect(countUnreadMessages(h, agentId)).toBe(0);
+		expect(readMessages(h, { agentId }).messages).toEqual([]);
+	});
+
+	it('is quiet the second time, because the row is already gone', () => {
+		const post = fromOwner('once', { project: slug });
+		deleteMessage(h, { messageId: post.id, by: { kind: 'human' } });
+
+		const events: unknown[] = [];
+		h.bus.subscribe((event) => events.push(event));
+		const again = deleteMessage(h, { messageId: post.id, by: { kind: 'human' } });
+
+		expect(again.deletedAt).not.toBeNull();
+		expect(events).toEqual([]);
+	});
+
+	it('refuses a message that never existed', () => {
+		expect(refusalCode(() => deleteMessage(h, { messageId: 'nope', by: { kind: 'human' } }))).toBe(
+			'not_found'
+		);
 	});
 });

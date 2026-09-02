@@ -243,6 +243,13 @@ export type Message = Keyed & {
 	author: string;
 	body: string;
 	createdAt: number;
+	/**
+	 * When it was deleted, or `null` for a live message (migration 017).
+	 *
+	 * Soft, as an update's delete is: the row survives so every browser that
+	 * already rendered the line can be told to drop it.
+	 */
+	deletedAt: number | null;
 };
 
 export type ReadCursor = Keyed & {

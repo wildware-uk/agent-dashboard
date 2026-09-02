@@ -109,7 +109,10 @@ const DESIGN_COLUMNS: Record<string, string[]> = {
 		'created_at',
 		// Appended by migration 014: the post this answers, for the owner's own
 		// feed cards, which anchor to nothing else.
-		'reply_to'
+		'reply_to',
+		// Migration 017: soft delete, so every tab that rendered the line can be
+		// told to drop it — the same shape `updates.deleted_at` keeps.
+		'deleted_at'
 	],
 	read_cursors: ['agent_id', 'last_seen_message_seq'],
 	// The four columns migration 002 appends carry the other four request kinds
