@@ -1,0 +1,12 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512" role="img" aria-label="Agent Dashboard">
+	<title>Agent Dashboard</title>
+	<rect width="512" height="512" fill="#111419"/>
+	<g transform="translate(256 256) scale(0.72) translate(-256 -256)">
+	<rect x="96" y="112" width="48" height="76" rx="16" fill="#f59e0b"/>
+	<rect x="112" y="112" width="304" height="76" rx="16" fill="#2a3243"/>
+	<rect x="96" y="218" width="48" height="76" rx="16" fill="#38bdf8"/>
+	<rect x="112" y="218" width="304" height="76" rx="16" fill="#2a3243"/>
+	<rect x="96" y="324" width="48" height="76" rx="16" fill="#34d399"/>
+	<rect x="112" y="324" width="304" height="76" rx="16" fill="#2a3243"/>
+	</g>
+</svg>

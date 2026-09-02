@@ -17,7 +17,9 @@
 	 */
 	import { onMount, type Snippet } from 'svelte';
 	import { resolve } from '$app/paths';
-	import RequestBanner from './RequestBanner.svelte';
+	import Board from './Board.svelte';
+	import Composer from './Composer.svelte';
+	import NotifyToggle from './NotifyToggle.svelte';
 	import RightRail from './RightRail.svelte';
 	import Sidebar from './Sidebar.svelte';
 	import TasksPanel from './Tasks.svelte';
@@ -25,11 +27,45 @@
 	import TimelineView from './Timeline.svelte';
 	import { ownerActions, type OwnerActions } from './actions';
 	import { Presence } from './presence.svelte';
+	import { Push } from './push.svelte';
 	import { Requests } from './requests.svelte';
 	import { Tasks } from './tasks.svelte';
 	import { Threads } from './threads.svelte';
 	import { Timeline } from './timeline.svelte';
-	import type { SnapshotResponse, UpdateView } from './types';
+	import { mediaUrl } from './media';
+	import { themeStyle } from './theme';
+	import type { MediaView, SnapshotResponse, UpdateView } from './types';
+
+	/** The centre column's two views (design §7). */
+	type ShellView = 'feed' | 'board';
+
+	/**
+	 * Which view this browser was last on, remembered per browser.
+	 *
+	 * `localStorage` and not the server: this is a preference about one screen,
+	 * not about the project, and a laptop left on the board while a phone reads
+	 * the feed is two correct answers rather than a conflict.
+	 */
+	function defaultViewMemory() {
+		const KEY = 'agent-dashboard:view';
+		return {
+			view(): ShellView | null {
+				try {
+					const stored = globalThis.localStorage?.getItem(KEY);
+					return stored === 'feed' || stored === 'board' ? stored : null;
+				} catch {
+					return null;
+				}
+			},
+			set(value: ShellView): void {
+				try {
+					globalThis.localStorage?.setItem(KEY, value);
+				} catch {
+					// Private mode: the choice lasts for this page only.
+				}
+			}
+		};
+	}
 
 	let {
 		/** The server-rendered snapshot, stamped with the seq it is good to. */
@@ -75,19 +111,39 @@
 		/**
 		 * What agents are waiting on the owner for (design §5, §7).
 		 *
-		 * Owned here rather than by the banner because it is the one region that
-		 * must not be scoped to the project on screen: a request is aimed at the
-		 * owner, and an agent stopped dead in another project still has to be
-		 * impossible to miss.
+		 * Owned here rather than by the feed because the queue must not be scoped
+		 * to the project on screen: a request is aimed at the owner, and an agent
+		 * stopped dead in another project still has to be visible — as a card when
+		 * the feed spans every project, and as a count on the sidebar row when it
+		 * does not.
 		 */
 		requests = new Requests(),
+		/**
+		 * Whether this browser is subscribed to Web Push (design §7).
+		 *
+		 * Owned here so the header's toggle is built with the page rather than
+		 * inside a component a spec cannot reach, and injectable for the same
+		 * reason every other store here is.
+		 */
+		push = new Push(),
 		media,
 		/**
 		 * The owner's write calls (design §7), handed down to the sidebar and to
 		 * every card. Injectable for the same reason `feed` is: a spec drives real
 		 * clicks without a server.
 		 */
-		actions = ownerActions()
+		actions = ownerActions(),
+		/**
+		 * Which view the centre column starts on (design §7).
+		 *
+		 * A prop so a spec can open straight onto the board; production always
+		 * renders `feed` first and then adopts whatever this browser last chose, on
+		 * mount rather than during render — reading `localStorage` while the server
+		 * cannot would make the two renders disagree and break hydration.
+		 */
+		view = 'feed',
+		/** Injected by the specs; the shell reads the browser's own. */
+		remember = defaultViewMemory()
 	}: {
 		snapshot: SnapshotResponse;
 		project?: string | null;
@@ -97,9 +153,30 @@
 		tasks?: Tasks;
 		threads?: Threads;
 		requests?: Requests;
+		push?: Push;
 		media?: Snippet<[UpdateView]>;
 		actions?: OwnerActions;
+		view?: ShellView;
+		remember?: { view(): ShellView | null; set(view: ShellView): void };
 	} = $props();
+
+	/**
+	 * Which of the two views the centre column is showing.
+	 *
+	 * The feed is "what happened" and the board is "what is being worked on" —
+	 * two ways of looking at one project rather than two halves of one screen, so
+	 * each gets the whole column instead of the board riding above the feed as a
+	 * strip that scrolled away exactly when it was wanted.
+	 */
+	// Deliberately the initial value: after the first render this is the owner's
+	// to change, and a later prop must not yank the column out from under them.
+	// svelte-ignore state_referenced_locally
+	let tab = $state<ShellView>(view);
+
+	function show(next: ShellView): void {
+		tab = next;
+		remember.set(next);
+	}
 
 	// Deliberately the initial values, read once: the store adopts the snapshot
 	// this component was rendered with and then keeps itself up to date from the
@@ -113,21 +190,35 @@
 	// in. The store still refetches on `message.created` exactly as before.
 	// svelte-ignore state_referenced_locally
 	if (snapshot.messages)
-		threads.hydrate({ seq: snapshot.seq, at: snapshot.at, messages: snapshot.messages });
+		threads.hydrate({
+			seq: snapshot.seq,
+			at: snapshot.at,
+			messages: snapshot.messages,
+			// Carried through, or a tick would be absent at first paint and appear
+			// on the first refetch — which reads as the agent having only just
+			// acknowledged something it acknowledged an hour ago (migration 013).
+			acks: snapshot.acks
+		});
 
 	let drawer = $state(false);
 	/** The right rail as a drawer, which is how a phone reaches it (design §7). */
 	let rail = $state(false);
 
 	onMount(() => {
+		// After the first render, never during it: the server has no `localStorage`,
+		// so reading it while rendering would make the two renders disagree.
+		const remembered = remember.view();
+		if (remembered) tab = remembered;
+
 		feed.start();
 		// Presence is started here as well as by the rail. Both calls are cheap and
 		// idempotent, and the point is that a card's attribution must not depend on
 		// the rail being on screen: the rail is a `hidden xl:block` region, and a
 		// narrower viewport must still name its agents.
 		presence.start();
-		// The banner's queue. Started here for the same reason presence is: it is
-		// read by a region that is always mounted, and it is not the timeline's.
+		// The request queue. Started here for the same reason presence is: it is
+		// read by two regions — the feed's cards and the sidebar's counts — and it
+		// is not the timeline's to own.
 		requests.start();
 		// The threads on the cards this page is showing. Started here rather than in
 		// a card, because a card is mounted and unmounted as the feed moves and the
@@ -154,6 +245,142 @@
 	 * needs. Neither is a subset of the other, so the card gets both.
 	 */
 	const posters = $derived({ ...agentNames, ...feed.agentNames, ...presence.names });
+
+	/**
+	 * The images each project already has, for the logo picker (design §7).
+	 *
+	 * Built from the timeline this page has already loaded rather than from a new
+	 * endpoint: a logo is an image an agent posted, and the feed is where those
+	 * are. Ready ones only — a `pending` id would render as a broken box in the
+	 * header until the pipeline caught up, and the server refuses one anyway.
+	 */
+	const projectImages = $derived.by(() => {
+		const byProject: Record<string, MediaView[]> = {};
+		for (const update of feed.items) {
+			for (const item of update.media ?? []) {
+				if (item.kind !== 'image' || item.status !== 'ready') continue;
+				(byProject[update.projectId] ??= []).push(item);
+			}
+		}
+		return byProject;
+	});
+
+	/**
+	 * Whether the logo stands in for the project name.
+	 *
+	 * Needs a logo as well as the flag: the server refuses the flag without one,
+	 * but a header that rendered neither because of a stale payload would be a
+	 * page with no title at all.
+	 */
+	const wordmark = $derived(
+		Boolean(activeProject?.theme?.logoReplacesName && activeProject?.theme?.logoMediaId)
+	);
+
+	/** Whether this page is one project's feed rather than the whole timeline. */
+	/**
+	 * Task id to title, for the chip a card grows when it is progress on one.
+	 *
+	 * Read off the task store the rail already holds rather than fetched: the
+	 * titles are on the page, and a card asking for one would be a lookup per card
+	 * for a line of text.
+	 */
+	const taskTitles = $derived(Object.fromEntries(tasks.items.map((task) => [task.id, task.title])));
+
+	/** Outstanding work, for the count beside the sidebar's Tasks link. */
+	const openTasks = $derived(
+		tasks.items.filter((task) => task.state === 'todo' || task.state === 'claimed').length
+	);
+
+	/** The project's own lanes, or `null` for the default three. */
+	const boardColumns = $derived(activeProject?.board ?? null);
+
+	const scoped = $derived(project !== null);
+
+	/**
+	 * The requests that belong on the feed being rendered (design §7).
+	 *
+	 * The store holds every pending request, unscoped, on purpose. Deciding which
+	 * of them are *this feed's* is the shell's job because only the shell knows
+	 * what the page is showing: the whole timeline shows all of them, and a
+	 * project page shows that project's. The rest are not lost — they are the
+	 * sidebar's counts, which is what replaced the old always-on banner.
+	 *
+	 * A slug that names no known project yields nothing rather than everything: a
+	 * page that cannot say which project it is must not answer "all of them".
+	 */
+	const feedRequests = $derived.by(() => {
+		if (!scoped) return requests.items;
+		const id = activeProject?.id ?? null;
+		return id === null ? [] : requests.items.filter((request) => request.projectId === id);
+	});
+
+	/**
+	 * Project id to name, for the cards — and only when the feed spans more than
+	 * one project, because on a project page the name is on every card and says
+	 * nothing.
+	 */
+	const projectNames = $derived(
+		scoped
+			? {}
+			: Object.fromEntries(feed.projects.map((candidate) => [candidate.id, candidate.name]))
+	);
+
+	/**
+	 * How many agents are blocked, per project, for the sidebar badge.
+	 *
+	 * Requests with no project are deliberately absent: they have no row to sit
+	 * on. They are still answerable — they are cards on the whole-timeline feed,
+	 * which is what the "All projects" total counts.
+	 */
+	const requestCounts = $derived.by(() => {
+		const counts: Record<string, number> = {};
+		for (const request of requests.items) {
+			if (request.projectId === null) continue;
+			counts[request.projectId] = (counts[request.projectId] ?? 0) + 1;
+		}
+		return counts;
+	});
+
+	/**
+	 * Who is beating right now, as ids (design §4).
+	 *
+	 * Derived from the presence store the rail already holds, so an agent's
+	 * "is thinking…" stops the moment its session does — one clock decides who is
+	 * online, and everything that depends on it reads the same answer.
+	 */
+	const onlineIds = $derived(presence.online.map((agent) => agent.agentId));
+
+	/**
+	 * The "new since you last looked" counts, minus the project being looked at.
+	 *
+	 * The server's figure is counted from `owner_seen_at`, which is stamped when
+	 * the page opens and again as cards arrive — but there is a beat between a
+	 * card landing and that stamp, and a badge that blinked on the row the owner
+	 * is currently reading is the one place the count is certainly wrong. So the
+	 * open project is subtracted here rather than raced for on the server.
+	 */
+	const unseenCounts = $derived.by(() => {
+		const counts = { ...feed.unseen };
+		if (activeProject) delete counts[activeProject.id];
+		return counts;
+	});
+
+	/**
+	 * Stamp the open project as seen — on arrival, and again whenever a new card
+	 * lands while the owner is sitting on it.
+	 *
+	 * Keyed on the newest card rather than run on an interval, so a quiet project
+	 * costs one request per visit. Failures are swallowed: the badge is a
+	 * convenience, and a stamp that did not land clears on the next visit rather
+	 * than costing the owner anything they have to redo.
+	 */
+	$effect(() => {
+		const slug = activeProject?.slug;
+		// Read so the effect re-runs when the feed's top card changes.
+		void feed.items[0]?.id;
+		if (!slug) return;
+		void actions.markProjectSeen(slug).catch(() => {});
+	});
 </script>
 
 <svelte:window
@@ -164,16 +391,25 @@
 	}}
 />
 
-<div class="grid h-dvh grid-rows-[auto_1fr] bg-surface text-content">
-	<div class="min-w-0">
-		<!--
-			Above the header, not in the rail (design §7). A pending request is the
-			one case where an agent is stopped dead waiting on its owner, so it takes
-			the top of the page and pushes everything else down rather than competing
-			for a corner of it.
-		-->
-		<RequestBanner {requests} agentNames={posters} {actions} />
+<!--
+	The selected project's own styling (design §7).
 
+	Custom properties on the outermost element rather than a stylesheet: the
+	tokens `app.css` defines on `:root` are overridden for this subtree and
+	everything below inherits, so a themed project restyles the whole dashboard —
+	cards, buttons, borders — without a single component knowing it happened. An
+	unthemed project emits an empty attribute and nothing changes.
+
+	`themeStyle` re-checks every colour before it is written here; the domain has
+	already refused anything that is not a hex literal, and this is the second
+	check standing between an API response and a style attribute (`./theme.ts`).
+-->
+<div
+	class="grid h-dvh grid-rows-[auto_1fr] bg-surface text-content"
+	style={themeStyle(activeProject?.theme)}
+	data-themed={activeProject?.theme ? 'true' : undefined}
+>
+	<div class="min-w-0">
 		<!--
 		`min-w-0` for the same reason `<main>` below carries it: this header is a
 		grid item, so it defaults to `min-width: auto` and refuses to shrink below
@@ -208,9 +444,35 @@
 				</svg>
 			</button>
 
-			<h1 class="truncate text-base font-semibold tracking-tight sm:text-lg">
-				{activeProject ? activeProject.name : 'Agent Dashboard'}
-			</h1>
+			{#if activeProject?.theme?.logoMediaId}
+				<!--
+					The project's own mark, from this deployment's media rather than an
+					external URL: a logo hosted elsewhere would be a request the owner's
+					browser makes to somewhere nobody here controls, on every page load.
+
+					Two shapes. Beside the name it is decorative, so the alt is empty and
+					the name carries the meaning. Standing in for the name — a wordmark,
+					a logo that *is* the name — the alt becomes the project name, because
+					the accessible tree must not lose a name just because the pixels
+					carry it. Height-constrained with `w-auto`, since a wordmark is wide
+					and a square box would either crop it or pad it.
+				-->
+				<img
+					src={mediaUrl(activeProject.theme.logoMediaId, 'thumb-640')}
+					alt={wordmark ? activeProject.name : ''}
+					data-testid="project-logo"
+					data-wordmark={wordmark ? 'true' : undefined}
+					class={wordmark
+						? 'h-9 w-auto max-w-[60vw] shrink-0 object-contain sm:h-11'
+						: 'size-9 shrink-0 rounded object-contain sm:size-10'}
+				/>
+			{/if}
+
+			{#if !wordmark}
+				<h1 class="truncate text-base font-semibold tracking-tight sm:text-lg">
+					{activeProject ? activeProject.name : 'Agent Dashboard'}
+				</h1>
+			{/if}
 
 			<span
 				class="ml-auto flex items-center gap-1.5 text-xs text-content-muted"
@@ -223,6 +485,13 @@
 				></span>
 				<span class="hidden sm:inline">{feed.status === 'live' ? 'Live' : 'Reconnecting'}</span>
 			</span>
+
+			<!--
+				Push, next to the theme switch: both are "how this browser behaves",
+				not "what the dashboard contains". It renders nothing at all on a
+				deployment with no VAPID keypair, or in a browser without the APIs.
+			-->
+			<NotifyToggle {push} />
 
 			<Theme />
 
@@ -245,7 +514,16 @@
 		class="grid min-h-0 min-w-0 lg:grid-cols-[15rem_minmax(0,1fr)] xl:grid-cols-[15rem_minmax(0,1fr)_17rem]"
 	>
 		<aside class="hidden min-h-0 overflow-y-auto border-r border-border-subtle lg:block">
-			<Sidebar projects={feed.projects} activeSlug={project} {actions} />
+			<Sidebar
+				projects={feed.projects}
+				activeSlug={project}
+				{requestCounts}
+				totalRequests={requests.items.length}
+				{unseenCounts}
+				{openTasks}
+				{projectImages}
+				{actions}
+			/>
 		</aside>
 
 		<!--
@@ -255,8 +533,122 @@
 			723px, and the browser zoomed the whole dashboard out to compensate
 			(design §7).
 		-->
-		<main class="min-h-0 min-w-0" aria-label="Update timeline">
-			<TimelineView {feed} agentNames={posters} {media} {actions} {threads} />
+		<main class="grid min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)]">
+			<!--
+				The two views of one project (design §7). Tabs rather than one column
+				holding both: the feed is read and the board is scanned, and the strip
+				the board used to be scrolled away exactly when the owner wanted it.
+
+				Real tab semantics, because they are what a screen reader needs to say
+				"2 of 2" — and the panels below carry the matching `role="tabpanel"`.
+			-->
+			<div
+				role="tablist"
+				aria-label="Project views"
+				class="flex min-w-0 items-center gap-1 border-b border-border-subtle px-3 sm:px-4"
+			>
+				<button
+					type="button"
+					role="tab"
+					id="tab-feed"
+					data-testid="tab-feed"
+					aria-selected={tab === 'feed'}
+					aria-controls="panel-feed"
+					onclick={() => show('feed')}
+					class="-mb-px border-b-2 px-2 py-2 text-sm transition-colors {tab === 'feed'
+						? 'border-accent font-medium text-content'
+						: 'border-transparent text-content-muted hover:text-content'}"
+				>
+					Feed
+				</button>
+				<button
+					type="button"
+					role="tab"
+					id="tab-board"
+					data-testid="tab-board"
+					aria-selected={tab === 'board'}
+					aria-controls="panel-board"
+					onclick={() => show('board')}
+					class="-mb-px flex items-center gap-1.5 border-b-2 px-2 py-2 text-sm transition-colors {tab ===
+					'board'
+						? 'border-accent font-medium text-content'
+						: 'border-transparent text-content-muted hover:text-content'}"
+				>
+					Board
+					{#if openTasks > 0}
+						<span
+							data-testid="tab-board-count"
+							class="rounded-full bg-surface-raised px-1.5 text-xs text-content-muted tabular-nums"
+						>
+							{openTasks}
+						</span>
+					{/if}
+				</button>
+			</div>
+
+			{#if tab === 'feed'}
+				<!--
+					`min-w-0` is load-bearing, not tidiness. A grid item defaults to
+					`min-width: auto`, so it refuses to shrink below its content's
+					intrinsic width — one wide update dragged a 375px phone's layout
+					viewport out to 723px, and the browser zoomed the whole dashboard out
+					to compensate (design §7).
+				-->
+				<!--
+					Labelled by its own words rather than by the tab: `aria-labelledby`
+					would win over `aria-label`, and "Update timeline" is what every
+					other part of this app calls this region.
+				-->
+				<div
+					role="tabpanel"
+					id="panel-feed"
+					class="grid min-h-0 min-w-0 grid-rows-[auto_minmax(0,1fr)]"
+					aria-label="Update timeline"
+				>
+					<!--
+						Above the scroller rather than inside it, so it is still there when
+						the owner is halfway down a long day. Aligned to the same column as
+						the cards, or it would read as belonging to the chrome rather than
+						to the feed.
+					-->
+					<div class="mx-auto w-full max-w-3xl px-3 pt-4 sm:px-4">
+						<Composer {project} projects={feed.projects} {actions} />
+					</div>
+
+					<TimelineView
+						{feed}
+						{taskTitles}
+						requests={feedRequests}
+						{projectNames}
+						agentNames={posters}
+						{media}
+						{actions}
+						{threads}
+						{onlineIds}
+					/>
+				</div>
+			{:else}
+				<div
+					role="tabpanel"
+					id="panel-board"
+					aria-labelledby="tab-board"
+					class="flex min-h-0 min-w-0 flex-col px-3 py-4 sm:px-4"
+				>
+					<Board
+						tasks={tasks.items}
+						board={boardColumns}
+						agentNames={posters}
+						selected={feed.task}
+						onselect={(taskId) => {
+							void feed.filterByTask(taskId);
+							// Back to the feed, because filtering it is what the click did and
+							// a filter applied to a view nobody is looking at is a click that
+							// appeared to do nothing.
+							show('feed');
+						}}
+					/>
+				</div>
+			{/if}
 		</main>
 
 		<aside class="hidden min-h-0 overflow-y-auto border-l border-border-subtle xl:block">
@@ -267,6 +659,7 @@
 					{project}
 					projects={feed.projects}
 					agentNames={posters}
+					{onlineIds}
 					{actions}
 					{threads}
 				/>
@@ -301,6 +694,7 @@
 					{project}
 					projects={feed.projects}
 					agentNames={posters}
+					{onlineIds}
 					{actions}
 					{threads}
 				/>
@@ -330,6 +724,11 @@
 			<Sidebar
 				projects={feed.projects}
 				activeSlug={project}
+				{requestCounts}
+				totalRequests={requests.items.length}
+				{unseenCounts}
+				{openTasks}
+				{projectImages}
 				onnavigate={() => (drawer = false)}
 				{actions}
 			/>

@@ -4,9 +4,11 @@ import { insertAgent } from './agents';
 import { insertProject } from './projects';
 import {
 	assignTask,
+	broadcastTask,
 	cancelTask,
 	claimTask,
 	completeTask,
+	countBroadcastTasks,
 	findTaskById,
 	insertTask,
 	listTasks
@@ -152,5 +154,78 @@ describe('listTasks', () => {
 		todo();
 
 		expect(listTasks(db, { limit: 1 })).toHaveLength(1);
+	});
+});
+
+describe('broadcastTask', () => {
+	it('stamps when the task went out to the project', () => {
+		const task = todo();
+
+		expect(broadcastTask(db, task.id, 500)).toMatchObject({ id: task.id, broadcastAt: 500 });
+		expect(findTaskById(db, task.id)?.broadcastAt).toBe(500);
+	});
+
+	it('takes it back off the wire when the stamp is cleared', () => {
+		const task = todo();
+		broadcastTask(db, task.id, 500);
+
+		expect(broadcastTask(db, task.id, null)?.broadcastAt).toBeNull();
+	});
+
+	it('refuses work somebody already holds, so nobody is sent to lose a race', () => {
+		const task = todo();
+		claimTask(db, task.id, agentId);
+
+		expect(broadcastTask(db, task.id, 500)).toBeUndefined();
+		expect(findTaskById(db, task.id)?.broadcastAt).toBeNull();
+	});
+
+	it('answers undefined for a task that is not there', () => {
+		expect(broadcastTask(db, 'nope', 500)).toBeUndefined();
+	});
+});
+
+describe('countBroadcastTasks', () => {
+	it('counts only unassigned todo work that was actually sent out', () => {
+		broadcastTask(db, todo().id, 1);
+		// Not broadcast at all.
+		todo();
+		// Broadcast, then claimed: no longer going spare.
+		const claimed = todo();
+		broadcastTask(db, claimed.id, 1);
+		claimTask(db, claimed.id, agentId);
+		// Broadcast, then assigned to somebody by name.
+		const assigned = todo();
+		broadcastTask(db, assigned.id, 1);
+		assignTask(db, assigned.id, agentId);
+
+		expect(countBroadcastTasks(db)).toBe(1);
+	});
+
+	it('narrows to the projects it is given', () => {
+		const other = insertProject(db, { slug: 'other', name: 'Other' }).id;
+		broadcastTask(db, todo().id, 1);
+		broadcastTask(db, insertTask(db, { projectId: other, title: 'theirs' }).id, 1);
+
+		expect(countBroadcastTasks(db, [projectId])).toBe(1);
+		expect(countBroadcastTasks(db, [projectId, other])).toBe(2);
+	});
+
+	it('counts nothing for an empty list, because "these projects" is not "all of them"', () => {
+		broadcastTask(db, todo().id, 1);
+
+		expect(countBroadcastTasks(db, [])).toBe(0);
+	});
+});
+
+describe('listTasks with a broadcast filter', () => {
+	it('separates work that was offered round from work that was not', () => {
+		const sent = todo({ title: 'offered' });
+		broadcastTask(db, sent.id, 1);
+		todo({ title: 'quiet' });
+
+		expect(listTasks(db, { broadcast: true }).map((task) => task.title)).toEqual(['offered']);
+		expect(listTasks(db, { broadcast: false }).map((task) => task.title)).toEqual(['quiet']);
+		expect(listTasks(db, {})).toHaveLength(2);
 	});
 });

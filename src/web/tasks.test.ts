@@ -115,6 +115,39 @@ describe('going live', () => {
 		expect(api.calls).toHaveLength(asked);
 	});
 
+	/**
+	 * The bug this exists for: the dashboard going deaf after a restart.
+	 *
+	 * `seq` counts from zero in the server's memory and is not persisted, so a
+	 * deployment that restarts starts issuing 1, 2, 3 again. A store that only
+	 * ever raised its cursor kept the figure it held from the previous process —
+	 * so every event the new one published looked like a replay and was dropped,
+	 * silently, until somebody reloaded the page. Which is exactly what "the
+	 * board stops updating and I have to refresh" was.
+	 */
+	it('adopts the seq the server stamps, even when it is lower than the one held', async () => {
+		const { api, stream, tasks } = store({ seq: 41 });
+		tasks.start();
+		await api.settle();
+		expect(tasks.seq).toBe(41);
+
+		// The server restarted: its bus is back at zero, and it says so on the
+		// reconnect that follows.
+		api.replace([aTask({ id: 't1', title: 'before' })], 0);
+		stream.emit('resync', { seq: 0 });
+		await api.settle();
+
+		expect(tasks.seq).toBe(0);
+
+		// And the first event of the new process actually lands.
+		api.replace([aTask({ id: 't2', title: 'after the restart' })], 1);
+		stream.emit('task.created', { seq: 1, payload: { taskId: 't2', projectId: 'p1' } });
+		await api.settle();
+		tasks.stop();
+
+		expect(tasks.items.map((task) => task.title)).toEqual(['after the restart']);
+	});
+
 	it('rebuilds from scratch on resync, whatever seq it carries', async () => {
 		const { api, stream, tasks } = store({ tasks: [aTask({ id: 'gone' })], seq: 9 });
 		tasks.start();

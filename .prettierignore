@@ -12,6 +12,8 @@ bun.lockb
 .svelte-kit/
 build/
 coverage/
+# The plugin's copy of the channel bridge, built by `npm run build:plugin`.
+plugins/agent-dashboard/bin/
 
 # Committed design docs are authored prose, not formatted source
 docs/

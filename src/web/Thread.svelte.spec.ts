@@ -1,7 +1,10 @@
+// The real stylesheet, so the separation is measured rather than asserted by
+// class name: a rule that does not exist would pass a class-name check.
+import '../http/routes/app.css';
 import { render } from 'vitest-browser-svelte';
 import { describe, expect, it, vi } from 'vitest';
 import Thread from './Thread.svelte';
-import { aMessage } from './testing';
+import { aMessage, anAck } from './testing';
 
 /**
  * The conversation on a card (design §7): the thread, and the box the owner
@@ -210,5 +213,113 @@ describe('the send button while a reply is in flight', () => {
 		await expect.element(send).toBeDisabled();
 		release();
 		await vi.waitFor(() => expect(api.sent).toEqual(['once']));
+	});
+});
+
+/**
+ * An acknowledgement lands **under the message it answers** (migration 013).
+ *
+ * Where it goes is the point: the owner is looking at the line they typed, and
+ * a tick anywhere else on the card would be a tick they have to go and find.
+ */
+describe('what an agent said about a message', () => {
+	it('puts the tick under that message and not another', async () => {
+		const screen = render(Thread, {
+			messages: [
+				aMessage({ id: 'm1', body: 'have a look at the migration' }),
+				aMessage({ id: 'm2', body: 'and the other thing' })
+			],
+			acks: { m1: [anAck({ messageId: 'm1', state: 'done' })] },
+			agentNames: { a1: 'scout' },
+			onreply: replies().onreply
+		});
+
+		await expect.element(screen.getByText('scout marked this done')).toBeInTheDocument();
+
+		const items = [...document.querySelectorAll('[data-message]')];
+		expect(items[0].querySelector('[data-ack]')).not.toBeNull();
+		expect(items[1].querySelector('[data-ack]')).toBeNull();
+	});
+
+	it('shows an online agent thinking about it', async () => {
+		const screen = render(Thread, {
+			messages: [aMessage({ id: 'm1' })],
+			acks: { m1: [anAck({ messageId: 'm1', state: 'thinking' })] },
+			agentNames: { a1: 'scout' },
+			onlineIds: ['a1'],
+			onreply: replies().onreply
+		});
+
+		await expect.element(screen.getByText(/scout is thinking/)).toBeInTheDocument();
+	});
+
+	it('leaves a message alone when nobody has said anything', async () => {
+		render(Thread, {
+			messages: [aMessage({ id: 'm1' })],
+			onreply: replies().onreply
+		});
+
+		expect(document.querySelector('[data-ack]')).toBeNull();
+	});
+});
+
+/**
+ * Telling one reply from the next (#feedback: "more visual clarity between
+ * replies").
+ *
+ * The old thread was a run of paragraphs down one shared rail, which read as a
+ * single block the moment two replies ran to a few lines each. Every reply now
+ * has a top and a bottom of its own, and the owner's are marked the way their
+ * posts are — one signal for "mine" across the page.
+ */
+describe('separating the replies', () => {
+	it('gives every reply its own box rather than one shared rail', async () => {
+		render(Thread, {
+			messages: [
+				aMessage({ id: 'm1', author: 'human', body: 'first' }),
+				aMessage({ id: 'm2', author: 'agent:a1', body: 'second' })
+			],
+			agentNames: { a1: 'scout' },
+			onreply: replies().onreply
+		});
+
+		const items = [...document.querySelectorAll('[data-message]')];
+		expect(items).toHaveLength(2);
+		for (const item of items) {
+			// A background of its own is what separates it from the card behind it;
+			// a transparent box would look exactly like the old rail.
+			expect(getComputedStyle(item).backgroundColor).not.toBe('rgba(0, 0, 0, 0)');
+			expect(Number.parseFloat(getComputedStyle(item).borderTopWidth)).toBeGreaterThan(0);
+		}
+	});
+
+	it('marks the owner’s own replies and leaves the agents’ plain', async () => {
+		render(Thread, {
+			messages: [
+				aMessage({ id: 'm1', author: 'human', body: 'mine' }),
+				aMessage({ id: 'm2', author: 'agent:a1', body: 'theirs' })
+			],
+			agentNames: { a1: 'scout' },
+			onreply: replies().onreply
+		});
+
+		const [mine, theirs] = [...document.querySelectorAll('[data-message]')];
+		expect(mine.getAttribute('data-mine')).toBe('true');
+		expect(theirs.getAttribute('data-mine')).toBeNull();
+		// Measured, not asserted by class name: the accent rail is the signal.
+		expect(Number.parseFloat(getComputedStyle(mine).borderLeftWidth)).toBeGreaterThan(
+			Number.parseFloat(getComputedStyle(theirs).borderLeftWidth)
+		);
+	});
+
+	it('still says who spoke and when', async () => {
+		const screen = render(Thread, {
+			messages: [aMessage({ id: 'm1', author: 'agent:a1', body: 'on it' })],
+			agentNames: { a1: 'scout' },
+			onreply: replies().onreply
+		});
+
+		await expect.element(screen.getByText('scout')).toBeInTheDocument();
+		expect(document.querySelector('[data-message] time')).not.toBeNull();
 	});
 });

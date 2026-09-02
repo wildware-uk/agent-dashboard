@@ -14,6 +14,9 @@ test-results
 playwright-report
 blob-report
 
+# The Claude Code plugin ships to agents, not into the server image.
+plugins
+
 .git
 .github
 .vscode

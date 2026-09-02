@@ -19,7 +19,8 @@ import {
 	requestInput,
 	startRequestSweeper,
 	validateAnswer,
-	type CreateRequestInput
+	type CreateRequestInput,
+	type OwnerRequest
 } from './requests';
 
 /**
@@ -493,5 +494,116 @@ describe('rows written before this slice existed', () => {
 			state: 'answered',
 			answer: { kind: 'confirm', value: true }
 		});
+	});
+});
+
+/**
+ * The generic kind (design §5).
+ *
+ * `form` exists because the other five each answer one question, and a real
+ * approval is usually two: "here is the Slack message I am about to send" is a
+ * draft to edit *and* a decision to take. Asking twice means one of the two is
+ * answered about text that has already changed.
+ */
+describe('form requests: an editable draft plus the agent’s own actions', () => {
+	const ask = (over: Partial<CreateRequestInput> = {}): OwnerRequest =>
+		createRequest(h, {
+			agentId,
+			kind: 'form',
+			question: 'Send this to #general?',
+			options: ['Approve', 'Reject'],
+			default: 'Deploy is done. 12 minutes, no rollbacks.',
+			label: 'Message',
+			multiline: true,
+			...over
+		}).request;
+
+	it('stores the actions as options and the draft as the default', () => {
+		expect(ask()).toMatchObject({
+			kind: 'form',
+			options: ['Approve', 'Reject'],
+			config: {
+				default: 'Deploy is done. 12 minutes, no rollbacks.',
+				label: 'Message',
+				multiline: true
+			}
+		});
+	});
+
+	it('needs at least one action, or the owner has no way to answer', () => {
+		expect(() => ask({ options: [] })).toThrow(/at least one option/);
+	});
+
+	it('does not require the draft to be one of the actions', () => {
+		// The check every other listed kind applies would reject this, because for
+		// them the default *is* one of the options. A form's two halves are unrelated.
+		expect(ask({ default: 'anything at all' }).config?.default).toBe('anything at all');
+	});
+
+	it('takes a label, which no other kind has a field to name', () => {
+		expect(() =>
+			createRequest(h, { agentId, kind: 'text', question: 'q?', label: 'Message' })
+		).toThrow(/label/);
+	});
+
+	it('answers with the action taken and the text as the owner left it', () => {
+		const request = ask();
+
+		const answered = answerRequest(h, {
+			requestId: request.id,
+			value: { action: 'Approve', text: '  Deploy done. No rollbacks.  ' }
+		});
+
+		expect(answered.answer).toEqual({
+			kind: 'form',
+			value: { action: 'Approve', text: 'Deploy done. No rollbacks.' }
+		});
+	});
+
+	it('refuses an action it never offered', () => {
+		const request = ask();
+
+		expect(() =>
+			answerRequest(h, { requestId: request.id, value: { action: 'Send anyway', text: 'x' } })
+		).toThrow(/not one of the actions/);
+	});
+
+	it('refuses half an answer, either half', () => {
+		const request = ask();
+
+		expect(() => validateAnswer(request, { action: 'Approve' })).toThrow(/text is a string/);
+		expect(() => validateAnswer(request, { text: 'hello' })).toThrow(/not one of the actions/);
+		expect(() => validateAnswer(request, 'Approve')).toThrow(/{ action, text }/);
+		expect(() => validateAnswer(request, ['Approve'])).toThrow(/{ action, text }/);
+	});
+
+	it('bounds the text with min and max, in characters', () => {
+		const request = ask({ min: 5, max: 20 });
+
+		expect(() => validateAnswer(request, { action: 'Approve', text: 'hi' })).toThrow(
+			/at least 5 characters/
+		);
+		expect(() => validateAnswer(request, { action: 'Approve', text: 'x'.repeat(21) })).toThrow(
+			/at most 20 characters/
+		);
+	});
+
+	it('lets the owner reject without the text having to be valid to send', () => {
+		const request = ask();
+
+		expect(validateAnswer(request, { action: 'Reject', text: '' })).toEqual({
+			kind: 'form',
+			value: { action: 'Reject', text: '' }
+		});
+	});
+
+	it('records the action as the readable scalar, with the text in the answer', () => {
+		const request = ask();
+		answerRequest(h, { requestId: request.id, value: { action: 'Approve', text: 'sent' } });
+
+		const row = h.db
+			.prepare(`SELECT decided_value AS scalar FROM approvals WHERE id = ?`)
+			.get(request.id) as { scalar: string };
+		expect(row.scalar).toBe('Approve');
 	});
 });

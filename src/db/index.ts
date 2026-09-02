@@ -36,6 +36,8 @@ export { isId, newId, ID_LENGTH } from './ids';
 
 // Row shapes.
 export type {
+	AckState,
+	Acknowledgement,
 	Agent,
 	Approval,
 	ApprovalState,
@@ -47,7 +49,10 @@ export type {
 	MediaStatus,
 	Message,
 	Project,
+	BoardColumn,
+	ProjectBoard,
 	ProjectStatus,
+	ProjectTheme,
 	ReadCursor,
 	RequestAnswer,
 	RequestConfig,
@@ -59,15 +64,18 @@ export type {
 	TaskState,
 	Update,
 	UpdateLevel,
+	UpdatePriority,
 	UploadToken
 } from './types';
 
 // Repositories, one module per entity.
 export {
+	countUnseenUpdates,
 	findProjectById,
 	findProjectBySlug,
 	insertProject,
 	listProjects,
+	markProjectSeen,
 	updateProject,
 	type NewProject,
 	type ProjectPatch
@@ -95,6 +103,8 @@ export {
 	findUpdateById,
 	insertUpdate,
 	listUpdates,
+	editUpdate as editUpdateRow,
+	markRepliesSeen as markRepliesSeenRow,
 	setUpdatePinned,
 	softDeleteUpdate,
 	type NewUpdate,
@@ -131,9 +141,11 @@ export {
 } from './upload-tokens';
 export {
 	assignTask,
+	broadcastTask,
 	cancelTask,
 	claimTask,
 	completeTask,
+	countBroadcastTasks,
 	findTaskById,
 	insertTask,
 	listTasks,
@@ -142,6 +154,7 @@ export {
 } from './tasks';
 export {
 	countMessagesAfter,
+	listAgentProjectIds,
 	findMessageById,
 	insertMessage,
 	listMessages,
@@ -149,6 +162,12 @@ export {
 	type NewMessage
 } from './messages';
 export { advanceReadCursor, getReadCursor, readCursorSeq } from './read-cursors';
+export {
+	listAcknowledgements,
+	upsertAcknowledgement,
+	type AcknowledgementQuery,
+	type NewAcknowledgement
+} from './acknowledgements';
 export {
 	countPendingApprovals,
 	decideApproval,
@@ -160,3 +179,27 @@ export {
 	type ApprovalQuery,
 	type NewApproval
 } from './approvals';
+export {
+	countPushSubscriptions,
+	deletePushSubscription,
+	findPushSubscription,
+	listPushSubscriptions,
+	markPushFailed,
+	markPushSent,
+	setPushPrefs,
+	upsertPushSubscription,
+	type NewPushSubscription,
+	type PushPrefs,
+	type PushSubscription
+} from './push';
+export {
+	findLiveShareForUpdate,
+	findShareById,
+	findShareByTokenHash,
+	insertUpdateShare,
+	listSharesForUpdate,
+	recordShareView,
+	revokeSharesForUpdate,
+	type NewUpdateShare,
+	type UpdateShare
+} from './shares';

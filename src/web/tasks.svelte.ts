@@ -26,7 +26,7 @@
  * returns an identical list costs less than holding a second copy of the project
  * map in here to avoid it.
  */
-import type { TaskState, TaskView, TasksSnapshot } from './types';
+import type { AckView, TaskState, TaskView, TasksSnapshot } from './types';
 import type { Fetcher } from './timeline.svelte';
 import {
 	DirectLink,
@@ -38,7 +38,14 @@ import {
 } from './stream';
 
 /** The events that change the list. */
-const WATCHED = ['task.created', 'task.updated', 'resync'] as const;
+const WATCHED = [
+	'task.created',
+	'task.updated',
+	// An agent saying "on it" or "done" against a task (migration 013). It rides
+	// in the same read as the tasks, so it is the same refetch.
+	'ack.updated',
+	'resync'
+] as const;
 
 /** How much the store knows about its connection. */
 export type TasksStatus = 'idle' | 'live' | 'offline';
@@ -61,6 +68,14 @@ const OVER: readonly TaskState[] = ['done', 'cancelled'];
 export class Tasks {
 	/** Every task the server sent, newest first. */
 	items = $state<TaskView[]>([]);
+	/**
+	 * What agents have said about those tasks (migration 013).
+	 *
+	 * Beside the tasks, not on them: an acknowledgement belongs to an agent and a
+	 * task can carry one from each of several, so which to show is the panel's
+	 * decision rather than the wire format's.
+	 */
+	acks = $state<AckView[]>([]);
 	/** The newest event seq this state accounts for. */
 	seq = $state(0);
 	status = $state<TasksStatus>('idle');
@@ -240,9 +255,23 @@ export class Tasks {
 		}
 	}
 
+	/** What agents have said about one task (migration 013). */
+	acksForTask(taskId: string): AckView[] {
+		return this.acks.filter((ack) => ack.taskId === taskId);
+	}
+
 	private apply(snapshot: TasksSnapshot): void {
 		this.items = snapshot.tasks;
-		this.seq = Math.max(this.seq, snapshot.seq);
+		// Defaulted rather than merged: a document with no acknowledgements is
+		// saying there are none, and folding the old list in would leave a tick on
+		// a task whose acknowledgement has gone.
+		this.acks = snapshot.acks ?? [];
+		// Adopted, not raised to the greater of the two: the server's stamp says
+		// where the stream *is*, and a seq below the one held means the deployment
+		// restarted — its bus counts from zero and is never persisted. Keeping the
+		// larger figure would make every event the new process publishes look like a
+		// replay and drop it, silently, until somebody reloaded the page.
+		this.seq = snapshot.seq;
 	}
 
 	private receive(event: StreamMessage): void {

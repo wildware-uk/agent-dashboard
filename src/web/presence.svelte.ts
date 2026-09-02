@@ -289,7 +289,12 @@ export class Presence {
 			...this.names,
 			...Object.fromEntries(snapshot.agents.map((agent) => [agent.agentId, agent.name]))
 		};
-		this.seq = Math.max(this.seq, snapshot.seq);
+		// Adopted, not raised to the greater of the two: the server's stamp says
+		// where the stream *is*, and a seq below the one held means the deployment
+		// restarted — its bus counts from zero and is never persisted. Keeping the
+		// larger figure would make every event the new process publishes look like a
+		// replay and drop it, silently, until somebody reloaded the page.
+		this.seq = snapshot.seq;
 		this.now = this.clock();
 	}
 

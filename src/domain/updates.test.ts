@@ -1,7 +1,15 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { insertSession } from '$db';
 import { createProject } from './projects';
-import { deleteUpdate, listUpdates, postUpdate, setUpdatePinned } from './updates';
+import { createTask } from './tasks';
+import {
+	deleteUpdate,
+	editUpdate,
+	listUpdates,
+	markRepliesSeen,
+	postUpdate,
+	setUpdatePinned
+} from './updates';
 import { FIXED_NOW, harness, type Harness } from './testing';
 
 let h: Harness;
@@ -280,5 +288,230 @@ describe('setUpdatePinned', () => {
 		expect(() => setUpdatePinned(h, 'ghost', true)).toThrowError(
 			expect.objectContaining({ code: 'not_found' })
 		);
+	});
+});
+
+/**
+ * An agent correcting its own card (design §3, §5).
+ *
+ * The rule worth the most tests here is the one that protects the wall: an agent
+ * may only edit what it posted, because a shared timeline whose entries can be
+ * rewritten by anyone is not a record of anything.
+ */
+describe('editUpdate', () => {
+	const post = (over: Record<string, unknown> = {}) =>
+		postUpdate(h, { project: 'agent-dashboard', agentId, body: 'deploying', ...over });
+
+	it('replaces the body and stamps when', () => {
+		const posted = post();
+
+		const edited = editUpdate(h, { updateId: posted.id, agentId, body: 'deployed' });
+
+		expect(edited).toMatchObject({ body: 'deployed', editedAt: FIXED_NOW });
+	});
+
+	it('leaves every field the edit did not name', () => {
+		const posted = post({ title: 'release 1.2', level: 'warn' });
+
+		const edited = editUpdate(h, { updateId: posted.id, agentId, body: 'deployed' });
+
+		expect(edited).toMatchObject({ title: 'release 1.2', level: 'warn' });
+	});
+
+	it('corrects the level, which is the whole point of editing a warning', () => {
+		const posted = post({ level: 'warn' });
+
+		expect(editUpdate(h, { updateId: posted.id, agentId, level: 'success' }).level).toBe('success');
+	});
+
+	it('clears a headline when the edit says null', () => {
+		const posted = post({ title: 'release 1.2' });
+
+		expect(editUpdate(h, { updateId: posted.id, agentId, title: null }).title).toBeNull();
+	});
+
+	it('does not move the card in the timeline', () => {
+		const posted = post();
+
+		const edited = editUpdate(h, { updateId: posted.id, agentId, body: 'deployed' });
+
+		expect(edited.createdAt).toBe(posted.createdAt);
+		expect(edited.seq).toBe(posted.seq);
+	});
+
+	it('leaves the owner’s pin alone', () => {
+		const posted = post();
+		setUpdatePinned(h, posted.id, true);
+
+		expect(editUpdate(h, { updateId: posted.id, agentId, body: 'deployed' }).pinned).toBe(true);
+	});
+
+	it('publishes once, so every open tab refetches the row', () => {
+		const posted = post();
+		h.events.length = 0;
+
+		editUpdate(h, { updateId: posted.id, agentId, body: 'deployed' });
+
+		expect(h.eventNames()).toEqual(['update.updated']);
+		expect(h.events[0].payload).toMatchObject({ updateId: posted.id, projectId });
+	});
+
+	it('refuses another agent’s update rather than ignoring the attempt', () => {
+		const posted = post();
+		const other = h.agent('nova');
+
+		expect(() => editUpdate(h, { updateId: posted.id, agentId: other, body: 'mine now' })).toThrow(
+			/another agent/
+		);
+		expect(listUpdates(h, {}).updates[0].body).toBe('deploying');
+	});
+
+	it('refuses a deleted update rather than resurrecting its text', () => {
+		const posted = post();
+		deleteUpdate(h, posted.id);
+
+		expect(() => editUpdate(h, { updateId: posted.id, agentId, body: 'back' })).toThrow(
+			/no such update/
+		);
+	});
+
+	it('refuses an update that does not exist', () => {
+		expect(() => editUpdate(h, { updateId: 'nope', agentId, body: 'x' })).toThrow(/no such update/);
+	});
+
+	it('refuses an edit that names no field, which is a caller bug', () => {
+		const posted = post();
+
+		expect(() => editUpdate(h, { updateId: posted.id, agentId })).toThrow(/must change/);
+	});
+
+	it('refuses an empty body, the same as posting one', () => {
+		const posted = post();
+
+		expect(() => editUpdate(h, { updateId: posted.id, agentId, body: '   ' })).toThrow(/body/);
+	});
+
+	it('refuses a level the card could not colour', () => {
+		const posted = post();
+
+		expect(() =>
+			editUpdate(h, { updateId: posted.id, agentId, level: 'critical' as never })
+		).toThrow(/level must be/);
+	});
+
+	it('is never quiet: an edit that changes nothing is still stamped', () => {
+		const posted = post();
+
+		expect(editUpdate(h, { updateId: posted.id, agentId, body: 'deploying' }).editedAt).toBe(
+			FIXED_NOW
+		);
+	});
+});
+
+/**
+ * Filing an update against a task (design §7).
+ *
+ * The feed answers "what happened"; a task answers "what is being worked on".
+ * This is the join between them, and the rule that matters is that it cannot
+ * cross a project — the task page and the project timeline would then disagree
+ * about where the work belongs.
+ */
+describe('updates on a task', () => {
+	it('files an update against a task in the same project', () => {
+		const task = createTask(h, { project: 'agent-dashboard', title: 'Ship it' });
+
+		const update = postUpdate(h, {
+			project: 'agent-dashboard',
+			agentId,
+			body: 'step 3 of 7',
+			taskId: task.id
+		});
+
+		expect(update.taskId).toBe(task.id);
+	});
+
+	it('is null for the ordinary update, which is most of them', () => {
+		expect(
+			postUpdate(h, { project: 'agent-dashboard', agentId, body: 'a note' }).taskId
+		).toBeNull();
+	});
+
+	it('refuses a task that does not exist', () => {
+		expect(() =>
+			postUpdate(h, { project: 'agent-dashboard', agentId, body: 'x', taskId: 'nope' })
+		).toThrow(/no such task/);
+	});
+
+	it('refuses a task from another project rather than filing it anyway', () => {
+		const other = createProject(h, { name: 'Other' }).project;
+		const task = createTask(h, { project: other.slug, title: 'Elsewhere' });
+
+		expect(() =>
+			postUpdate(h, { project: 'agent-dashboard', agentId, body: 'x', taskId: task.id })
+		).toThrow(/another project/);
+	});
+
+	it('lists a task’s own updates, newest first', () => {
+		const task = createTask(h, { project: 'agent-dashboard', title: 'Ship it' });
+		postUpdate(h, { project: 'agent-dashboard', agentId, body: 'first', taskId: task.id });
+		postUpdate(h, { project: 'agent-dashboard', agentId, body: 'second', taskId: task.id });
+		postUpdate(h, { project: 'agent-dashboard', agentId, body: 'unrelated' });
+
+		const listed = listUpdates(h, { taskId: task.id }).updates;
+
+		expect(listed.map((update) => update.body)).toEqual(['second', 'first']);
+	});
+});
+
+/**
+ * Marking a card's conversation read (migration 015).
+ *
+ * "Recent replies" lifts a card out of its day while a conversation is live on
+ * it. Without this it only ever grew, and the cards riding above the timeline
+ * became the ones the owner had been ignoring the longest.
+ */
+describe('markRepliesSeen', () => {
+	function post() {
+		return postUpdate(h, { project: projectId, agentId, body: 'shipped it' });
+	}
+
+	it('stamps when the owner read the thread', () => {
+		const update = post();
+
+		expect(markRepliesSeen(h, update.id).repliesSeenAt).toBe(FIXED_NOW);
+	});
+
+	it('starts unread, which is what keeps a fresh conversation at the top', () => {
+		expect(post().repliesSeenAt).toBeNull();
+	});
+
+	it('tells every open tab, so the section clears on both screens', () => {
+		const update = post();
+		h.events.length = 0;
+
+		markRepliesSeen(h, update.id);
+
+		expect(h.eventNames()).toContain('update.updated');
+	});
+
+	it('does not mark the card edited: reading a thread is not editing it', () => {
+		const update = post();
+
+		expect(markRepliesSeen(h, update.id).editedAt).toBeNull();
+	});
+
+	it('is safe to send twice', () => {
+		const update = post();
+		markRepliesSeen(h, update.id);
+
+		expect(markRepliesSeen(h, update.id).repliesSeenAt).toBe(FIXED_NOW);
+	});
+
+	it('refuses an update that is not there, or has been deleted', () => {
+		const update = post();
+		deleteUpdate(h, update.id);
+
+		expect(() => markRepliesSeen(h, update.id)).toThrow();
+		expect(() => markRepliesSeen(h, 'nope')).toThrow();
 	});
 });

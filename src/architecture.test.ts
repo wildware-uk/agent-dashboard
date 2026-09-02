@@ -14,6 +14,12 @@ const MAY_IMPORT: Record<string, readonly string[]> = {
 	media: ['db', 'events'],
 	domain: ['db', 'events', 'media'],
 	mcp: ['domain'],
+	// The Claude Code channel bridge (design §5). It imports nothing from this
+	// tree at all: it runs beside the *agent*, not beside the dashboard, talks to
+	// the deployment over HTTP like any other client, and touches no database.
+	// An import here would be a module that has to be installed on the agent's
+	// machine to read a reply.
+	channel: [],
 	// The design table lists `domain, mcp, media`. Two edges are added.
 	//
 	// `web`, because `src/http/routes/` is the SvelteKit route tree and a route
@@ -38,7 +44,7 @@ const SRC = resolve(import.meta.dirname);
 
 /** `$db` -> `db`. `$lib` is an alias for `src/web`, so it maps to `web`. */
 function moduleForAlias(specifier: string): string | undefined {
-	const match = /^\$(db|events|media|domain|mcp|http|web|lib)(\/|$)/.exec(specifier);
+	const match = /^\$(db|events|media|domain|mcp|channel|http|web|lib)(\/|$)/.exec(specifier);
 	if (!match) return undefined;
 	return match[1] === 'lib' ? 'web' : match[1];
 }
@@ -159,5 +165,63 @@ describe('the boundary checker itself', () => {
 		expect(resolveTarget(file, 'zod')).toBeUndefined();
 		expect(resolveTarget(file, 'node:crypto')).toBeUndefined();
 		expect(resolveTarget(file, '$app/environment')).toBeUndefined();
+	});
+});
+
+/**
+ * The browser's event registration, against the server's vocabulary.
+ *
+ * `src/web/stream.ts` names the event types the leading tab registers on its
+ * `EventSource`, and a type missing from that list is a frame **no store can
+ * ever receive** — the consumer filter never runs, because the listener was
+ * never attached. That failure is silent in exactly the worst way: the feature
+ * works in every unit test, and is simply dead in the browser.
+ *
+ * So the two lists are compared here rather than remembered. This test lives at
+ * the root because `web` may import nothing from the tree (the table above), and
+ * a root test belongs to no module.
+ */
+describe('the event vocabulary', () => {
+	/**
+	 * Events the browser is deliberately not registered for.
+	 *
+	 * `messages.read` moves an *agent's* unread count (`src/http/stream/agent.ts`).
+	 * The owner's dashboard has no unread count of its own, so a frame for it
+	 * would be a wake-up with nothing to do.
+	 */
+	const SERVER_ONLY = new Set(['messages.read']);
+
+	it('registers every event the server can publish', async () => {
+		const { EVENT_TYPES } = await import('./web/stream');
+		const { EventBus } = await import('./events');
+
+		// The bus is typed by `EventPayloads`, and a type map has no runtime
+		// value — so the names are taken from the source of truth that does exist
+		// at runtime: the interface's keys as the file declares them.
+		const types = readFileSync(resolve(SRC, 'events', 'types.ts'), 'utf8');
+		const block = /export interface EventPayloads \{([\s\S]*?)\n\}/.exec(types)?.[1] ?? '';
+		const names = [...block.matchAll(/^\t'([a-z.]+)':/gm)].map((match) => match[1]);
+
+		expect(EventBus, 'the bus should still be importable').toBeTypeOf('function');
+		expect(names.length, 'no event names were found to check').toBeGreaterThan(5);
+
+		const missing = names.filter(
+			(name) => !SERVER_ONLY.has(name) && !(EVENT_TYPES as readonly string[]).includes(name)
+		);
+		expect(missing, 'these events would never reach a browser store').toEqual([]);
+	});
+
+	it('registers nothing the server cannot publish', async () => {
+		const { EVENT_TYPES } = await import('./web/stream');
+		const types = readFileSync(resolve(SRC, 'events', 'types.ts'), 'utf8');
+		const names = new Set([...types.matchAll(/^\t'([a-z.]+)':/gm)].map((match) => match[1]));
+
+		// `resync` is the transport's own frame rather than a bus event, so it is
+		// the one name that is legitimately in the browser's list and not the
+		// server's vocabulary.
+		const unknown = (EVENT_TYPES as readonly string[]).filter(
+			(type) => type !== 'resync' && !names.has(type)
+		);
+		expect(unknown, 'these are registered for and can never arrive').toEqual([]);
 	});
 });

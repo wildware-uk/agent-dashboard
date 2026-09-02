@@ -103,6 +103,15 @@ function defaultFetch(url: string): Promise<Response> {
 export class Timeline {
 	/** Sidebar order comes from the server: pinned first, then newest. */
 	projects = $state<ProjectView[]>([]);
+	/**
+	 * Updates per project id since the owner last opened it — the sidebar badge.
+	 *
+	 * Server-authoritative rather than counted here. Every live event already
+	 * provokes a full-snapshot refetch, so the count arrives recomputed from
+	 * `owner_seen_at`, and a browser that kept its own tally would drift from the
+	 * other tab the moment one of them cleared a badge.
+	 */
+	unseen = $state<Record<string, number>>({});
 	/** Newest first. What the timeline renders. */
 	items = $state<UpdateView[]>([]);
 	/** Arrivals held back while the reader is scrolled away from the top. */
@@ -138,6 +147,14 @@ export class Timeline {
 	private again: 'merge' | 'replace' | null = null;
 
 	private readonly project: string | null;
+	/**
+	 * The task the feed is filtered to, or `null` for everything (design §7).
+	 *
+	 * Not `readonly` like `project`: the project is the page and changing it
+	 * re-keys the whole shell, whereas a task filter is something the owner turns
+	 * on and off while standing still.
+	 */
+	private taskFilter: string | null = null;
 	private readonly limit: number;
 	private readonly fetcher: Fetcher;
 	private readonly schedule: (run: () => void) => void;
@@ -305,6 +322,30 @@ export class Timeline {
 		}
 	}
 
+	/** Which task the feed is filtered to, if any. */
+	get task(): string | null {
+		return this.taskFilter;
+	}
+
+	/**
+	 * Filter the feed to one task's updates, or clear it with `null`.
+	 *
+	 * Refetches with `replace` rather than filtering what is already loaded: the
+	 * browser holds one page of the timeline, and a task's history can easily run
+	 * further back than that page reaches — a client-side filter would quietly
+	 * show a fraction of the work and look like the whole of it.
+	 *
+	 * The pending buffer is dropped for the same reason: those arrivals were
+	 * counted against a feed that no longer exists, and offering "3 new" that
+	 * turn out not to match the filter is worse than not offering it.
+	 */
+	async filterByTask(taskId: string | null): Promise<void> {
+		if (this.taskFilter === taskId) return;
+		this.taskFilter = taskId;
+		this.pending = [];
+		await this.refresh('replace');
+	}
+
 	/**
 	 * The query string for a snapshot request.
 	 *
@@ -315,6 +356,7 @@ export class Timeline {
 	private query(extra: { cursor?: string } = {}): string {
 		const parts = [`limit=${this.limit}`];
 		if (this.project) parts.push(`project=${encodeURIComponent(this.project)}`);
+		if (this.taskFilter) parts.push(`task=${encodeURIComponent(this.taskFilter)}`);
 		if (extra.cursor) parts.push(`cursor=${encodeURIComponent(extra.cursor)}`);
 		return parts.join('&');
 	}
@@ -329,13 +371,23 @@ export class Timeline {
 	 */
 	private apply(snapshot: SnapshotResponse, mode: 'merge' | 'replace'): void {
 		if (snapshot.projects) this.projects = snapshot.projects;
+		// Replaced wholesale rather than merged: a project that has dropped out of
+		// the map has nothing new, and folding the old value in would leave a badge
+		// lit that the server has just said should be dark.
+		if (snapshot.unseen) this.unseen = snapshot.unseen;
 		// Folded in even on `replace`: "this id is called that" is a fact about an
 		// agent, not a row in the timeline, so a document that does not mention an
 		// agent is not saying it has stopped having a name. The updates-only
 		// endpoint carries no names at all, and blanking the headers on the first
 		// "load older" is exactly what a wholesale overwrite would do.
 		if (snapshot.agentNames) this.agentNames = { ...this.agentNames, ...snapshot.agentNames };
-		this.seq = Math.max(this.seq, snapshot.seq);
+		// Adopted on `replace`, raised on `merge`. `replace` is the answer to a
+		// `resync`, so its stamp says where the stream is — and a seq below the one
+		// held means the deployment restarted, its bus counting from zero again.
+		// Keeping the larger figure would make every event the new process
+		// publishes look like a replay and drop it until somebody reloaded. A
+		// `merge` is a page of older updates, which says nothing about the present.
+		this.seq = mode === 'replace' ? snapshot.seq : Math.max(this.seq, snapshot.seq);
 
 		if (mode === 'replace') {
 			this.items = snapshot.updates.items;

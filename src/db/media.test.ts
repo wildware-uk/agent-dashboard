@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { freshDatabase, type Db } from './testing';
 import { insertAgent } from './agents';
-import { insertProject } from './projects';
+import { insertProject, updateProject } from './projects';
 import { insertUpdate } from './updates';
 import {
 	attachMediaToUpdate,
@@ -247,5 +247,65 @@ describe('listMediaByStatus', () => {
 		upload();
 
 		expect(listMediaByStatus(db, { statuses: [] })).toEqual([]);
+	});
+});
+
+/**
+ * A project logo is media that will never have an update (migration 006), so
+ * "no update" stopped meaning "nobody wants this" the day logos existed.
+ *
+ * This is the regression: the sweeper collected every logo an hour after it was
+ * set, and the header went blank with nothing to say why.
+ */
+describe('listOrphanedMedia and project logos', () => {
+	const orphanable = (id: string) =>
+		insertMedia(db, {
+			id,
+			agentId,
+			kind: 'image',
+			mime: 'image/png',
+			bytes: 1,
+			sha256: id,
+			status: 'ready',
+			createdAt: 0
+		});
+
+	it('leaves a logo alone however old it is', () => {
+		orphanable('logo');
+		const project = insertProject(db, { slug: 'logo-holder', name: 'P' });
+		updateProject(db, project.id, { theme: { logoMediaId: 'logo' } });
+
+		const swept = listOrphanedMedia(db, { createdBefore: Date.now() }).map((row) => row.id);
+
+		expect(swept).not.toContain('logo');
+	});
+
+	it('still collects media nothing points at', () => {
+		orphanable('nobody-wants-this');
+
+		const swept = listOrphanedMedia(db, { createdBefore: Date.now() }).map((row) => row.id);
+
+		expect(swept).toContain('nobody-wants-this');
+	});
+
+	it('collects a logo again once the project stops using it', () => {
+		orphanable('logo');
+		const project = insertProject(db, { slug: 'was-holder', name: 'P' });
+		updateProject(db, project.id, { theme: { logoMediaId: 'logo' } });
+		updateProject(db, project.id, { theme: null });
+
+		const swept = listOrphanedMedia(db, { createdBefore: Date.now() }).map((row) => row.id);
+
+		expect(swept).toContain('logo');
+	});
+
+	it('is not confused by a project themed with colours and no logo', () => {
+		orphanable('nobody-wants-this');
+		const project = insertProject(db, { slug: 'colours-only', name: 'P' });
+		updateProject(db, project.id, { theme: { accent: '#ffb300' } });
+
+		const swept = listOrphanedMedia(db, { createdBefore: Date.now() }).map((row) => row.id);
+
+		expect(swept).toContain('nobody-wants-this');
 	});
 });

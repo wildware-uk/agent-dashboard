@@ -68,3 +68,87 @@ describe('deleting an update', () => {
 		await expect.element(screen.getByText(/no such update/)).toBeInTheDocument();
 	});
 });
+
+/**
+ * Sharing (design §7, §8): the one control here that makes something readable
+ * without a session, so what is asserted is that the URL is shown, that the card
+ * says it is public, and that the owner can take it back.
+ */
+describe('sharing a card', () => {
+	it('mints a link and shows it in full, because it is shown exactly once', async () => {
+		const api = fakeActions();
+		const screen = render(UpdateActions, { update: anUpdate({ id: 'u7' }), actions: api.actions });
+
+		await screen.getByTestId('share-update').click();
+
+		expect(api.calls).toEqual([{ name: 'shareUpdate', args: ['u7'] }]);
+		await expect
+			.element(screen.getByRole('textbox', { name: 'Public link to this update' }))
+			.toHaveValue('https://dash.test/s/token-for-u7');
+	});
+
+	it('warns that anyone with the link can read the card', async () => {
+		const api = fakeActions();
+		const screen = render(UpdateActions, { update: anUpdate(), actions: api.actions });
+
+		await screen.getByTestId('share-update').click();
+
+		await expect.element(screen.getByText(/Anyone with this link/)).toBeInTheDocument();
+	});
+
+	it('says a card is public before anything is clicked, with the view count', async () => {
+		const api = fakeActions();
+		const screen = render(UpdateActions, {
+			update: anUpdate({ share: { views: 3, sharedAt: 1 } }),
+			actions: api.actions
+		});
+
+		await expect.element(screen.getByTestId('share-state')).toHaveTextContent('Public · 3 views');
+	});
+
+	it('counts one view in the singular, because "1 views" reads as a bug', async () => {
+		const api = fakeActions();
+		const screen = render(UpdateActions, {
+			update: anUpdate({ share: { views: 1, sharedAt: 1 } }),
+			actions: api.actions
+		});
+
+		await expect.element(screen.getByTestId('share-state')).toHaveTextContent('Public · 1 view');
+	});
+
+	it('offers no share state at all on a card that is not shared', async () => {
+		const api = fakeActions();
+		const screen = render(UpdateActions, { update: anUpdate(), actions: api.actions });
+
+		await expect.element(screen.getByTestId('share-state')).not.toBeInTheDocument();
+		await expect.element(screen.getByTestId('share-link')).not.toBeInTheDocument();
+	});
+
+	it('stops sharing, and takes the link off screen with it', async () => {
+		const api = fakeActions();
+		const screen = render(UpdateActions, {
+			update: anUpdate({ id: 'u7', share: { views: 0, sharedAt: 1 } }),
+			actions: api.actions
+		});
+
+		await screen.getByTestId('share-update').click();
+		await screen.getByRole('button', { name: 'Stop sharing' }).click();
+
+		expect(api.calls).toEqual([
+			{ name: 'shareUpdate', args: ['u7'] },
+			{ name: 'revokeShare', args: ['u7'] }
+		]);
+		await expect.element(screen.getByTestId('share-link')).not.toBeInTheDocument();
+	});
+
+	it('keeps the card exactly as it was when the server refuses', async () => {
+		const api = fakeActions();
+		const screen = render(UpdateActions, { update: anUpdate(), actions: api.actions });
+		api.fail(new Error('the server said no'));
+
+		await screen.getByTestId('share-update').click();
+
+		await expect.element(screen.getByRole('alert')).toBeInTheDocument();
+		await expect.element(screen.getByTestId('share-link')).not.toBeInTheDocument();
+	});
+});

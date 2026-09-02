@@ -85,3 +85,67 @@ body {
 		animation: none;
 	}
 }
+
+/*
+ * "… is thinking…" (migration 013).
+ *
+ * Three staggered dots rather than a spinner: the owner is reading a line of
+ * text, and a spinner beside it would be a second thing competing for the same
+ * glance. The dots never fade to nothing — 0.25 rather than 0 — because an
+ * ellipsis that disappears reads as text having been cut off.
+ */
+@keyframes thinking-blink {
+	0%,
+	80%,
+	100% {
+		opacity: 0.25;
+	}
+	40% {
+		opacity: 1;
+	}
+}
+
+.thinking-dots span {
+	animation: thinking-blink 1.4s ease-in-out infinite both;
+}
+
+.thinking-dots span:nth-child(2) {
+	animation-delay: 0.2s;
+}
+
+.thinking-dots span:nth-child(3) {
+	animation-delay: 0.4s;
+}
+
+/* An animation nobody asked for is not worth a headache. */
+@media (prefers-reduced-motion: reduce) {
+	.thinking-dots span {
+		animation: none;
+		opacity: 1;
+	}
+}
+
+/*
+ * Stop mobile Safari zooming the page every time a box is focused.
+ *
+ * iOS zooms in on any focused form control whose font-size is under 16px, and
+ * every control on this page is `text-sm` (14px) — so tapping the composer, a
+ * reply box or a project select shoved the whole dashboard sideways, and the
+ * owner had to pinch back out afterwards (#feedback: "stop the site zooming in
+ * on mobile all the time").
+ *
+ * The fix is the font size, not `maximum-scale=1`. Disabling zoom in the
+ * viewport meta stops this too, and takes pinch-to-zoom away from everybody who
+ * needs it to read the screen at all — a fix that breaks accessibility to save a
+ * media query is not a fix.
+ *
+ * Scoped to coarse pointers so desktop typography is untouched: 16px is only
+ * required where the auto-zoom exists, which is a touch screen.
+ */
+@media (pointer: coarse) {
+	input,
+	select,
+	textarea {
+		font-size: 16px;
+	}
+}

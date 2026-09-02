@@ -15,7 +15,7 @@
  * Like every snapshot it is stamped with the stream cursor it is good to, by the
  * shared handler in `./snapshot.ts`.
  */
-import { context, listTasks, type DomainContext } from '$domain';
+import { acknowledgementsFor, context, listTasks, type DomainContext } from '$domain';
 import type { SnapshotQuery } from './snapshot';
 
 /**
@@ -26,8 +26,19 @@ import type { SnapshotQuery } from './snapshot';
  */
 export type SnapshotTasks = ReturnType<typeof listTasks>;
 
+/**
+ * What agents have said about these tasks without saying it in words
+ * (migration 013).
+ *
+ * Beside the tasks rather than folded into each one: an acknowledgement belongs
+ * to an *agent*, and a task can carry one from each of several. Flattening it
+ * onto the row would mean picking which agent's opinion is the task's, which is
+ * a decision the panel is better placed to make than the wire format.
+ */
+export type SnapshotAcks = ReturnType<typeof acknowledgementsFor>;
+
 /** Everything the task panel renders. */
-export type TasksSnapshot = { tasks: SnapshotTasks };
+export type TasksSnapshot = { tasks: SnapshotTasks; acks: SnapshotAcks };
 
 /**
  * How much finished work rides along.
@@ -54,5 +65,7 @@ export function readTasksSnapshot(
 
 	// One list, newest first: four queries are an implementation detail, and a
 	// client sorting them itself would be a second place the order is decided.
-	return { tasks: [...open, ...over].sort((left, right) => right.seq - left.seq) };
+	const tasks = [...open, ...over].sort((left, right) => right.seq - left.seq);
+
+	return { tasks, acks: acknowledgementsFor(ctx, { taskIds: tasks.map((task) => task.id) }) };
 }

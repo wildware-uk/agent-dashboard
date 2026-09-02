@@ -8,6 +8,7 @@ import { harness, FIXED_NOW, type Harness } from './testing';
 import {
 	TASK_MAX_LIMIT,
 	assignTask,
+	broadcastTask,
 	cancelTask,
 	claimTask,
 	completeTask,
@@ -377,5 +378,153 @@ describe('the insert this domain does not do', () => {
 		insertTask(h.db, { projectId: project.id, title: 'raw' });
 
 		expect(listTasks(h, { project: project.slug }).map((task) => task.title)).toEqual(['raw']);
+	});
+});
+
+describe('broadcastTask', () => {
+	it('stamps the task and publishes task.updated, so every open tab hears it', () => {
+		const { h, project } = setup();
+		const task = createTask(h, { project: project.slug, title: 'somebody take this' });
+
+		const sent = broadcastTask(h, task.id);
+
+		expect(sent.broadcastAt).toBe(FIXED_NOW);
+		expect(h.eventNames()).toContain('task.updated');
+	});
+
+	it('takes it back off the wire', () => {
+		const { h, project } = setup();
+		const task = createTask(h, { project: project.slug, title: 'never mind' });
+		broadcastTask(h, task.id);
+
+		expect(broadcastTask(h, task.id, false).broadcastAt).toBeNull();
+	});
+
+	it('refuses work somebody already holds, rather than starting a race nobody can win', () => {
+		const { h, project, agentId } = setup();
+		const task = createTask(h, { project: project.slug, title: 'taken' });
+		claimTask(h, { taskId: task.id, agentId });
+
+		expect(codeOf(() => broadcastTask(h, task.id))).toBe('conflict');
+		expect(findTaskById(h.db, task.id)?.broadcastAt).toBeNull();
+	});
+
+	it('says which task it could not find', () => {
+		const { h } = setup();
+
+		expect(codeOf(() => broadcastTask(h, 'nope'))).toBe('not_found');
+	});
+});
+
+describe('countOpenTasks and broadcast work', () => {
+	it('counts a broadcast task for an agent that works the project', () => {
+		const { h, project, agentId } = setup();
+		// Gives the agent a history in this project, so it is one of "its" projects.
+		createTask(h, { project: project.slug, title: 'mine', agentId });
+		const offered = createTask(h, { project: project.slug, title: 'anybody?' });
+
+		expect(countOpenTasks(h, agentId)).toBe(1);
+		broadcastTask(h, offered.id);
+		expect(countOpenTasks(h, agentId)).toBe(2);
+	});
+
+	it('stops counting it the moment somebody claims it', () => {
+		const { h, project, agentId } = setup();
+		createTask(h, { project: project.slug, title: 'mine', agentId });
+		const offered = createTask(h, { project: project.slug, title: 'anybody?' });
+		broadcastTask(h, offered.id);
+		const other = h.agent('other');
+
+		claimTask(h, { taskId: offered.id, agentId: other });
+
+		// One each: the claimant holds it, and it is no longer going spare.
+		expect(countOpenTasks(h, agentId)).toBe(1);
+		expect(countOpenTasks(h, other)).toBe(1);
+	});
+
+	it('does not count an unassigned task nobody was told about', () => {
+		const { h, project, agentId } = setup();
+		createTask(h, { project: project.slug, title: 'mine', agentId });
+		createTask(h, { project: project.slug, title: 'quietly unassigned' });
+
+		expect(countOpenTasks(h, agentId)).toBe(1);
+	});
+
+	it('does not reach into a project the agent has never touched', () => {
+		const { h, project, agentId } = setup();
+		createTask(h, { project: project.slug, title: 'mine', agentId });
+		const { project: elsewhere } = createProject(h, { name: 'Somebody Else' });
+		broadcastTask(h, createTask(h, { project: elsewhere.slug, title: 'theirs' }).id);
+
+		expect(countOpenTasks(h, agentId)).toBe(1);
+	});
+
+	it('tells an agent with no history at all about every broadcast', () => {
+		const { h, project } = setup();
+		const fresh = h.agent('brand-new');
+		broadcastTask(h, createTask(h, { project: project.slug, title: 'anybody?' }).id);
+
+		expect(countOpenTasks(h, fresh)).toBe(1);
+	});
+
+	it('honours an explicit subscription over what the agent has done', () => {
+		const { h, project, agentId } = setup();
+		createTask(h, { project: project.slug, title: 'mine', agentId });
+		broadcastTask(h, createTask(h, { project: project.slug, title: 'anybody?' }).id);
+		const { project: elsewhere } = createProject(h, { name: 'Elsewhere' });
+
+		// The session says it is working somewhere else: the assignment still
+		// counts, the broadcast in a project it did not name does not.
+		expect(countOpenTasks(h, agentId, [elsewhere.id])).toBe(1);
+		expect(countOpenTasks(h, agentId, [project.id])).toBe(2);
+	});
+});
+
+/**
+ * Handing work to a project in one act (design §7).
+ *
+ * The board's composer creates and broadcasts together, because two writes
+ * would publish a `task.created` no agent should act on followed by a
+ * `task.updated` they should — a race for anything listening.
+ */
+describe('createTask with broadcast', () => {
+	it('is on the wire the moment it exists', () => {
+		const { h, project, agentId } = setup();
+
+		const task = createTask(h, {
+			project: project.slug,
+			title: 'somebody look at this',
+			broadcast: true
+		});
+
+		expect(task.broadcastAt).toBe(FIXED_NOW);
+		expect(task.agentId).toBeNull();
+		// It counts for the project's agents straight away, with no second write.
+		expect(countOpenTasks(h, agentId, [project.id])).toBe(1);
+	});
+
+	it('publishes one event, not a create and then an update', () => {
+		const { h, project } = setup();
+
+		createTask(h, { project: project.slug, title: 'one act', broadcast: true });
+
+		expect(h.eventNames().filter((name) => name.startsWith('task.'))).toEqual(['task.created']);
+	});
+
+	it('leaves a task alone when nothing asked for a broadcast', () => {
+		const { h, project } = setup();
+
+		expect(createTask(h, { project: project.slug, title: 'quiet' }).broadcastAt).toBeNull();
+	});
+
+	it('refuses to assign and broadcast at once, rather than racing the assignee', () => {
+		const { h, project, agentId } = setup();
+
+		expect(
+			codeOf(() =>
+				createTask(h, { project: project.slug, title: 'both', agentId, broadcast: true })
+			)
+		).toBe('invalid_argument');
+		expect(listTasks(h, {})).toEqual([]);
 	});
 });

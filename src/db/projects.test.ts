@@ -1,12 +1,16 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { freshDatabase, type Db } from './testing';
 import {
+	countUnseenUpdates,
 	findProjectById,
 	findProjectBySlug,
 	insertProject,
 	listProjects,
+	markProjectSeen,
 	updateProject
 } from './projects';
+import { insertAgent } from './agents';
+import { insertUpdate, softDeleteUpdate } from './updates';
 
 let db: Db;
 beforeEach(() => {
@@ -50,7 +54,14 @@ describe('insertProject', () => {
 			status: 'archived',
 			pinned: true,
 			createdAt: 10,
-			updatedAt: 20
+			updatedAt: 20,
+			// Migration 006: a project starts with the dashboard's own styling.
+			theme: null,
+			// Migration 009: and with the board's default three columns.
+			board: null,
+			// Migration 011: never opened, which badges its whole history rather
+			// than nothing.
+			ownerSeenAt: null
 		});
 	});
 
@@ -128,5 +139,108 @@ describe('updateProject', () => {
 		const project = insertProject(db, { slug: 'a', name: 'A' });
 
 		expect(updateProject(db, project.id, {})).toEqual(project);
+	});
+});
+
+describe('the theme column (migration 006)', () => {
+	it('starts null, which is the dashboard’s own styling', () => {
+		expect(insertProject(db, { slug: 'p', name: 'P' }).theme).toBeNull();
+	});
+
+	it('stores and reads back a theme as an object, not as text', () => {
+		const project = insertProject(db, { slug: 'p', name: 'P' });
+
+		const updated = updateProject(db, project.id, {
+			theme: { background: '#101820', accent: '#ffb300', logoMediaId: 'm1' }
+		});
+
+		expect(updated?.theme).toEqual({
+			background: '#101820',
+			accent: '#ffb300',
+			logoMediaId: 'm1'
+		});
+		expect(findProjectBySlug(db, 'p')?.theme).toEqual(updated?.theme);
+	});
+
+	it('clears it when the patch says null', () => {
+		const project = insertProject(db, { slug: 'p', name: 'P' });
+		updateProject(db, project.id, { theme: { accent: '#ffb300' } });
+
+		expect(updateProject(db, project.id, { theme: null })?.theme).toBeNull();
+	});
+
+	it('leaves it alone when the patch does not mention it', () => {
+		const project = insertProject(db, { slug: 'p', name: 'P' });
+		updateProject(db, project.id, { theme: { accent: '#ffb300' } });
+
+		expect(updateProject(db, project.id, { name: 'Renamed' })?.theme).toEqual({
+			accent: '#ffb300'
+		});
+	});
+});
+
+describe('markProjectSeen', () => {
+	it('stamps when the owner looked, and leaves updated_at alone', () => {
+		const project = insertProject(db, { slug: 'p', name: 'P', createdAt: 10, updatedAt: 10 });
+
+		const seen = markProjectSeen(db, project.id, 900);
+
+		expect(seen).toMatchObject({ ownerSeenAt: 900, updatedAt: 10 });
+		expect(findProjectById(db, project.id)?.ownerSeenAt).toBe(900);
+	});
+
+	it('answers undefined for a project that is not there', () => {
+		expect(markProjectSeen(db, 'nope', 900)).toBeUndefined();
+	});
+});
+
+describe('countUnseenUpdates', () => {
+	let agentId: string;
+	let projectId: string;
+	beforeEach(() => {
+		agentId = insertAgent(db, { name: 'claude', tokenHash: 'h1' }).id;
+		projectId = insertProject(db, { slug: 'p', name: 'P' }).id;
+	});
+
+	const post = (at: number, project = projectId) =>
+		insertUpdate(db, { projectId: project, agentId, body: 'x', createdAt: at });
+
+	it('counts a never-opened project’s whole history, not nothing', () => {
+		post(100);
+		post(200);
+
+		expect(countUnseenUpdates(db)).toEqual({ [projectId]: 2 });
+	});
+
+	it('counts only what landed after the owner last looked', () => {
+		post(100);
+		markProjectSeen(db, projectId, 150);
+		post(200);
+
+		expect(countUnseenUpdates(db)).toEqual({ [projectId]: 1 });
+	});
+
+	it('leaves a project out entirely once it is caught up', () => {
+		post(100);
+		markProjectSeen(db, projectId, 150);
+
+		expect(countUnseenUpdates(db)).toEqual({});
+	});
+
+	it('ignores deleted updates, so a badge cannot count a card nobody can open', () => {
+		const update = post(100);
+		post(200);
+		softDeleteUpdate(db, update.id);
+
+		expect(countUnseenUpdates(db)).toEqual({ [projectId]: 1 });
+	});
+
+	it('keeps projects apart', () => {
+		const other = insertProject(db, { slug: 'other', name: 'Other' }).id;
+		post(100);
+		post(200, other);
+		markProjectSeen(db, other, 300);
+
+		expect(countUnseenUpdates(db)).toEqual({ [projectId]: 1 });
 	});
 });

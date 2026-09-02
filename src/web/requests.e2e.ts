@@ -11,7 +11,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
  *
  * This is the only test in the tree where all three halves of the slice are
  * real at once: a **real MCP client** asks over HTTP with a real minted token, a
- * **real browser** answers in the banner, and the value the agent receives is
+ * **real browser** answers on the card, and the value the agent receives is
  * the one the human clicked. Everything below the browser is production code —
  * the Node-adapter server, the session cookie, SQLite, the event bus, the SSE
  * stream — because a gate that only works in unit tests is not a gate.
@@ -159,7 +159,7 @@ test('all five kinds round-trip: an agent asks, a human answers, the agent gets 
 }) => {
 	await signIn(page);
 	const client = await agent();
-	const banner = page.getByTestId('request-banner');
+	const waiting = page.getByTestId('request-section');
 
 	// 1. text — the agent needs a string it cannot invent.
 	const text = call(client, 'request_input', {
@@ -168,8 +168,8 @@ test('all five kinds round-trip: an agent asks, a human answers, the agent gets 
 		detail: 'Two files changed in the parser.',
 		placeholder: 'fix: …'
 	});
-	await expect(banner).toContainText('What should the commit message be?', { timeout: 20_000 });
-	await expect(banner).toContainText('Two files changed in the parser.', { timeout: 20_000 });
+	await expect(waiting).toContainText('What should the commit message be?', { timeout: 20_000 });
+	await expect(waiting).toContainText('Two files changed in the parser.', { timeout: 20_000 });
 	await page.getByLabel('Your answer').fill('fix: the parser drops trailing commas');
 	await page.getByRole('button', { name: 'Send' }).click();
 
@@ -183,7 +183,7 @@ test('all five kinds round-trip: an agent asks, a human answers, the agent gets 
 		kind: 'confirm',
 		question: 'Push to main?'
 	});
-	await expect(banner).toContainText('Push to main?', { timeout: 20_000 });
+	await expect(waiting).toContainText('Push to main?', { timeout: 20_000 });
 	await page.getByRole('button', { name: 'Approve' }).click();
 
 	expect(await keepWaiting(client, await confirm)).toMatchObject({
@@ -197,7 +197,7 @@ test('all five kinds round-trip: an agent asks, a human answers, the agent gets 
 		question: 'The build failed. What now?',
 		options: ['retry', 'skip', 'abort']
 	});
-	await expect(banner).toContainText('The build failed. What now?', { timeout: 20_000 });
+	await expect(waiting).toContainText('The build failed. What now?', { timeout: 20_000 });
 	await page.getByRole('button', { name: 'skip', exact: true }).click();
 
 	expect(await keepWaiting(client, await buttons)).toMatchObject({
@@ -211,7 +211,7 @@ test('all five kinds round-trip: an agent asks, a human answers, the agent gets 
 		question: 'Which branch should I target?',
 		options: ['main', 'next', 'release/1.2']
 	});
-	await expect(banner).toContainText('Which branch should I target?', { timeout: 20_000 });
+	await expect(waiting).toContainText('Which branch should I target?', { timeout: 20_000 });
 	await page.getByRole('radio', { name: 'release/1.2' }).click();
 	await page.getByRole('button', { name: 'Send' }).click();
 
@@ -228,7 +228,7 @@ test('all five kinds round-trip: an agent asks, a human answers, the agent gets 
 		min: 1,
 		max: 2
 	});
-	await expect(banner).toContainText('Which of these files should I delete?', { timeout: 20_000 });
+	await expect(waiting).toContainText('Which of these files should I delete?', { timeout: 20_000 });
 	await page.getByRole('checkbox', { name: 'a.ts' }).click();
 	await page.getByRole('checkbox', { name: 'c.ts' }).click();
 	await page.getByRole('button', { name: 'Send' }).click();
@@ -239,15 +239,15 @@ test('all five kinds round-trip: an agent asks, a human answers, the agent gets 
 	});
 
 	// Nothing is left waiting on the owner.
-	await expect(banner).toBeHidden();
+	await expect(waiting).toBeHidden();
 	await client.close();
 });
 
-test('several blocked agents queue in the banner, and none is lost', async ({ page }) => {
+test('several blocked agents each get their own card, and none is lost', async ({ page }) => {
 	await signIn(page);
 	const first = await agent();
 	const second = await agent();
-	const banner = page.getByTestId('request-banner');
+	const waiting = page.getByTestId('request-section');
 
 	const one = call(first, 'request_input', { kind: 'confirm', question: 'Deploy the migration?' });
 	const two = call(second, 'request_input', {
@@ -256,13 +256,12 @@ test('several blocked agents queue in the banner, and none is lost', async ({ pa
 		options: ['retry', 'give up']
 	});
 
-	// Both are on screen at once: the front of the queue with its control, the
-	// other as a chip that promotes it (design §7).
-	await expect(banner).toContainText('Deploy the migration?', { timeout: 20_000 });
-	await expect(banner.getByRole('button', { name: /Retry the flaky test\?/ })).toBeVisible({
-		timeout: 20_000
-	});
-	await expect(banner).toContainText('2 requests waiting', { timeout: 20_000 });
+	// Both are answerable where they sit: two cards, each with its own control,
+	// rather than one on screen and the rest reduced to chips (design §7).
+	await expect(waiting).toContainText('Deploy the migration?', { timeout: 20_000 });
+	await expect(waiting).toContainText('Retry the flaky test?', { timeout: 20_000 });
+	await expect(page.getByTestId('request-card')).toHaveCount(2, { timeout: 20_000 });
+	await expect(waiting.getByTestId('request-count')).toContainText('(2)', { timeout: 20_000 });
 
 	await page.getByRole('button', { name: 'Approve' }).click();
 	expect(await keepWaiting(first, await one)).toMatchObject({
@@ -270,8 +269,9 @@ test('several blocked agents queue in the banner, and none is lost', async ({ pa
 		response: { value: true }
 	});
 
-	// Answering the first promotes the second rather than losing it.
-	await expect(banner).toContainText('Retry the flaky test?', { timeout: 20_000 });
+	// Answering one takes its card off the feed and leaves the other alone.
+	await expect(page.getByTestId('request-card')).toHaveCount(1, { timeout: 20_000 });
+	await expect(waiting).toContainText('Retry the flaky test?', { timeout: 20_000 });
 	await page.getByRole('button', { name: 'give up' }).click();
 	expect(await keepWaiting(second, await two)).toMatchObject({
 		state: 'answered',
@@ -290,7 +290,7 @@ test('a dismissal reaches the agent as cancelled, not as permission', async ({ p
 		kind: 'confirm',
 		question: 'Force-push over main?'
 	});
-	await expect(page.getByTestId('request-banner')).toContainText('Force-push over main?', {
+	await expect(page.getByTestId('request-section')).toContainText('Force-push over main?', {
 		timeout: 20_000
 	});
 	await page.getByRole('button', { name: 'Dismiss' }).click();
@@ -315,7 +315,7 @@ test('an answer that violates the request is refused by the server, not by the p
 		question: 'Which branch should I release from?',
 		options: ['main', 'next']
 	});
-	await expect(page.getByTestId('request-banner')).toContainText('Which branch should I release', {
+	await expect(page.getByTestId('request-section')).toContainText('Which branch should I release', {
 		timeout: 20_000
 	});
 	const pending = await asked;
@@ -373,7 +373,7 @@ test('a fresh client resumes a wait it never started', async ({ page }) => {
 		})
 	);
 
-	await expect(page.getByTestId('request-banner')).toContainText(
+	await expect(page.getByTestId('request-section')).toContainText(
 		'What should I name the release?',
 		{ timeout: 20_000 }
 	);

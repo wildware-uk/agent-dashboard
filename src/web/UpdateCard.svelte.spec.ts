@@ -215,3 +215,80 @@ describe('the thread on a card (design §7)', () => {
 		await expect.element(screen.getByText('release bot')).toBeInTheDocument();
 	});
 });
+
+describe('an update the agent corrected (design §3)', () => {
+	it('says so, rather than changing under a reader who saw it earlier', async () => {
+		const screen = render(UpdateCard, {
+			update: anUpdate({ body: 'deployed', editedAt: Date.UTC(2026, 7, 25, 11) })
+		});
+
+		await expect.element(screen.getByTestId('update-edited')).toHaveTextContent('edited');
+	});
+
+	it('says nothing on a card nobody has touched', async () => {
+		const screen = render(UpdateCard, { update: anUpdate() });
+
+		await expect.element(screen.getByTestId('update-edited')).not.toBeInTheDocument();
+	});
+});
+
+/**
+ * The timestamp (design §7): how long ago on the face, the exact instant behind
+ * it. A timeline is read as "what is happening", and `14:02` makes the reader do
+ * that arithmetic.
+ */
+describe('when a card was posted', () => {
+	it('says how long ago rather than what o’clock', async () => {
+		const screen = render(UpdateCard, {
+			update: anUpdate({ createdAt: Date.now() - 4 * 60_000 })
+		});
+
+		await expect.element(screen.getByTestId('update-time')).toHaveTextContent('4m ago');
+	});
+
+	it('says "now" for something that has only just landed', async () => {
+		const screen = render(UpdateCard, { update: anUpdate({ createdAt: Date.now() }) });
+
+		await expect.element(screen.getByTestId('update-time')).toHaveTextContent('now');
+	});
+
+	it('keeps the exact instant on hover, and in the markup', async () => {
+		const at = Date.UTC(2026, 7, 25, 13, 2);
+		const screen = render(UpdateCard, { update: anUpdate({ createdAt: at }) });
+
+		const time = screen.getByTestId('update-time').element();
+		expect(time.getAttribute('title')).toMatch(/25 August 2026 at/);
+		expect(time.getAttribute('datetime')).toBe(new Date(at).toISOString());
+	});
+});
+
+/**
+ * A card that is progress on a task links to it (design §7).
+ *
+ * A feed entry is "what happened"; the task is "what is being worked on", and
+ * one is only useful next to the other.
+ */
+describe('a card filed against a task', () => {
+	it('offers a way into the task, named where the name is known', async () => {
+		const screen = render(UpdateCard, {
+			update: anUpdate({ taskId: 't1' }),
+			taskTitle: 'Ship the parser'
+		});
+
+		const link = screen.getByTestId('update-task').element();
+		expect(link.getAttribute('href')).toBe('/tasks/t1');
+		expect(link.textContent?.trim()).toBe('Ship the parser');
+	});
+
+	it('still offers the way in when the title is not to hand', async () => {
+		const screen = render(UpdateCard, { update: anUpdate({ taskId: 't1' }) });
+
+		await expect.element(screen.getByTestId('update-task')).toHaveTextContent('View task');
+	});
+
+	it('says nothing about tasks on an ordinary update', async () => {
+		const screen = render(UpdateCard, { update: anUpdate() });
+
+		await expect.element(screen.getByTestId('update-task')).not.toBeInTheDocument();
+	});
+});

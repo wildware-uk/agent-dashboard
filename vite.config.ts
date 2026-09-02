@@ -32,6 +32,7 @@ export default defineConfig({
 				$events: 'src/events',
 				$media: 'src/media',
 				$mcp: 'src/mcp',
+				$channel: 'src/channel',
 				$http: 'src/http',
 				$web: 'src/web',
 				$config: 'src/config.ts'

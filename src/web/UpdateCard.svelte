@@ -16,12 +16,23 @@
 	import Thread from './Thread.svelte';
 	import UpdateActions from './UpdateActions.svelte';
 	import type { OwnerActions } from './actions';
-	import { timeLabel } from './days';
+	import { onMount } from 'svelte';
+	import { resolve } from '$app/paths';
+	import { absoluteLabel, relativeLabel } from './days';
+	import { clock } from './clock.svelte';
 	import { levelStyle } from './levels';
-	import type { MessageView, UpdateView } from './types';
+	import type { AckView, MessageView, UpdateView } from './types';
 
 	let {
 		update,
+		/**
+		 * What to call the task this update is filed against, when it has one.
+		 *
+		 * Handed in rather than looked up: a card renders from the row it was given
+		 * and nothing else, and fifty cards resolving task titles would be fifty
+		 * lookups for a chip.
+		 */
+		taskTitle,
 		/**
 		 * What to call the poster.
 		 *
@@ -63,16 +74,36 @@
 		 * `agentName` names this card's poster; a thread can hold replies from any
 		 * agent, and an unnamed one would print as a ULID.
 		 */
-		agentNames = {}
+		agentNames = {},
+		/**
+		 * What agents have said about each message in this thread, by message id
+		 * (migration 013). Handed down with the thread it annotates.
+		 */
+		acks = {},
+		/** Ids of the agents beating right now, so a stale "thinking" is not shown. */
+		onlineIds = []
 	}: {
 		update: UpdateView;
+		taskTitle?: string;
 		agentName?: string;
 		isNew?: boolean;
 		media?: Snippet<[UpdateView]>;
 		actions?: OwnerActions;
 		messages?: MessageView[];
 		agentNames?: Record<string, string>;
+		acks?: Record<string, AckView[]>;
+		onlineIds?: string[];
 	} = $props();
+
+	/**
+	 * The page's one ticking clock (design §7).
+	 *
+	 * Held for as long as this card is mounted so "4m ago" stops being a lie a
+	 * minute after it is rendered, and released with the card — fifty cards share
+	 * one timer rather than holding fifty.
+	 */
+	const ticking = clock();
+	onMount(() => ticking.hold());
 
 	const level = $derived(levelStyle(update.level));
 	const poster = $derived(agentLabel(update.agentId, agentName));
@@ -106,6 +137,19 @@
 		<header class="flex flex-wrap items-baseline gap-x-2 gap-y-1 text-sm">
 			<span class="font-medium text-content">{poster}</span>
 			<span class="rounded px-1.5 py-0.5 text-xs font-medium {level.badge}">{level.label}</span>
+			{#if update.priority === 'high'}
+				<!--
+					Only high is stated. `medium` is every card and would be noise;
+					`low` is the agent saying "do not look at this now", which a badge
+					insisting on attention would contradict.
+				-->
+				<span
+					class="rounded bg-rose-500/15 px-1.5 py-0.5 text-xs font-medium text-rose-600 dark:text-rose-300"
+					data-testid="update-priority"
+				>
+					High
+				</span>
+			{/if}
 			{#if update.pinned}
 				<!--
 					Stated on the card itself, not only in the ordering: a reader who
@@ -120,11 +164,34 @@
 					Pinned
 				</span>
 			{/if}
+			{#if update.editedAt}
+				<!--
+					Stated, not silent. An owner who read this card earlier has to be able
+					to tell that what it says now is not what it said then — a timeline
+					that rewrites itself quietly is one nobody can rely on (design §3).
+				-->
+				<span
+					class="text-xs text-content-muted italic"
+					data-testid="update-edited"
+					title="Edited {absoluteLabel(update.editedAt)}"
+				>
+					edited
+				</span>
+			{/if}
+			<!--
+				How long ago, not what o'clock. A timeline is read as "what is
+				happening", and `14:02` makes the reader do that arithmetic themselves.
+				The exact instant is still here — in the `title` for a hover and in
+				`datetime` for anything reading the markup — so nothing is lost by
+				saying the useful thing first.
+			-->
 			<time
-				class="ml-auto text-xs text-content-muted"
+				class="ml-auto text-xs whitespace-nowrap text-content-muted"
 				datetime={new Date(update.createdAt).toISOString()}
+				title={absoluteLabel(update.createdAt)}
+				data-testid="update-time"
 			>
-				{timeLabel(update.createdAt)}
+				{relativeLabel(update.createdAt, ticking.now)}
 			</time>
 			{#if actions}
 				<UpdateActions {update} {actions} />
@@ -136,6 +203,24 @@
 		{/if}
 
 		<Markdown body={update.body} />
+
+		{#if update.taskId}
+			<!--
+				The card says what long-running work it is part of, and goes there. A
+				feed entry on its own is "what happened"; the task is "what is being
+				worked on", and one is only useful next to the other (design §7).
+			-->
+			<a
+				href={resolve('/tasks/[id]', { id: update.taskId })}
+				data-testid="update-task"
+				class="flex w-fit items-center gap-1.5 rounded border border-border-subtle bg-surface px-2 py-1 text-xs text-content-muted hover:text-content"
+			>
+				<svg class="size-3 shrink-0" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+					<path d="M2 3h12v2H2zM2 7h12v2H2zM2 11h8v2H2z" />
+				</svg>
+				{taskTitle ?? 'View task'}
+			</a>
+		{/if}
 
 		<!--
 			Media region (design §7): the grid, sized from the stored dimensions, and
@@ -161,7 +246,7 @@
 			to write as.
 		-->
 		{#if actions}
-			<Thread {messages} {agentNames} onreply={reply} />
+			<Thread {messages} {agentNames} {acks} {onlineIds} onreply={reply} />
 		{/if}
 	</div>
 </article>

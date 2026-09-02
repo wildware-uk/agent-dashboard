@@ -19,7 +19,7 @@
  * other field only the server gets to decide.
  */
 import { bus as sharedBus, type EventBus } from '$events';
-import { invalid, listThread, postMessage, type ThreadQuery } from '$domain';
+import { acknowledgementsFor, invalid, listThread, postMessage, type ThreadQuery } from '$domain';
 import {
 	ownerAction,
 	readOwnerJson,
@@ -72,9 +72,18 @@ export function listMessagesHandler(options: MessageHandlerOptions = {}): OwnerH
 		const seq = bus.lastSeq;
 		const query = readThreadQuery(new URL(event.request.url));
 
+		const messages = listThread(ctx, query);
+
 		return Promise.resolve({
 			status: 200,
-			body: { seq, at: new Date().toISOString(), messages: listThread(ctx, query) }
+			body: {
+				seq,
+				at: new Date().toISOString(),
+				messages,
+				// In the same read as the messages, so a tick can never paint a beat
+				// after the reply it belongs to (migration 013).
+				acks: acknowledgementsFor(ctx, { messageIds: messages.map((message) => message.id) })
+			}
 		});
 	});
 }
@@ -85,12 +94,22 @@ export function readReply(body: Body): {
 	project?: string;
 	updateId?: string;
 	taskId?: string;
+	replyTo?: string;
 } {
-	const input: { body: string; project?: string; updateId?: string; taskId?: string } = {
+	const input: {
+		body: string;
+		project?: string;
+		updateId?: string;
+		taskId?: string;
+		replyTo?: string;
+	} = {
 		body: text(body.body, 'body')
 	};
 	if ('update' in body) input.updateId = text(body.update, 'update');
 	if ('task' in body) input.taskId = text(body.task, 'task');
+	// The owner's own feed post (migration 014): it anchors to nothing else, so a
+	// reply names it directly.
+	if ('replyTo' in body) input.replyTo = text(body.replyTo, 'replyTo');
 	if ('project' in body) input.project = text(body.project, 'project');
 	return input;
 }

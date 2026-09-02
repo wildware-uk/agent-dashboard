@@ -10,6 +10,10 @@ const gitignorePath = path.resolve(import.meta.dirname, '.gitignore');
 
 export default defineConfig(
 	includeIgnoreFile(gitignorePath),
+	// The plugin's copy of the channel bridge is a committed build artefact
+	// (`npm run build:plugin`), not source. It is deliberately not gitignored —
+	// a plugin is cloned rather than built — so it has to be excluded here.
+	{ ignores: ['plugins/*/bin/'] },
 	js.configs.recommended,
 	ts.configs.recommended,
 	svelte.configs.recommended,

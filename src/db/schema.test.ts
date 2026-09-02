@@ -25,7 +25,22 @@ const indexColumns = (index: string) =>
 
 /** The columns the design's §3 table gives each entity, beyond `id` and `seq`. */
 const DESIGN_COLUMNS: Record<string, string[]> = {
-	projects: ['slug', 'name', 'description', 'status', 'pinned', 'created_at', 'updated_at'],
+	// `theme` is appended by migration 006: a logo and two colours (design §7).
+	projects: [
+		'slug',
+		'name',
+		'description',
+		'status',
+		'pinned',
+		'created_at',
+		'updated_at',
+		'theme',
+		// Appended by migration 009: how the owner wants their tasks laid out (§7).
+		'board',
+		// Appended by migration 011: when the owner last opened this project, which
+		// is what the sidebar's "new" badge counts from.
+		'owner_seen_at'
+	],
 	agents: ['name', 'token_hash', 'created_at', 'revoked_at', 'last_seen_at'],
 	sessions: ['agent_id', 'started_at', 'last_heartbeat_at', 'ended_at', 'meta'],
 	updates: [
@@ -37,7 +52,18 @@ const DESIGN_COLUMNS: Record<string, string[]> = {
 		'level',
 		'pinned',
 		'created_at',
-		'deleted_at'
+		'deleted_at',
+		// Appended by migration 004: an agent may correct its own card, and the
+		// timeline says so rather than changing under the reader (design §3).
+		'edited_at',
+		// Appended by migration 007: how much the owner needs to care now, which is
+		// a different axis from `level` (design §3, §7).
+		'priority',
+		// Appended by migration 008: the task this is progress on, if any (§3, §7).
+		'task_id',
+		// Appended by migration 015: when the owner last read the conversation on
+		// this card, which is what lets it leave "Recent replies".
+		'replies_seen_at'
 	],
 	media: [
 		'agent_id',
@@ -63,9 +89,23 @@ const DESIGN_COLUMNS: Record<string, string[]> = {
 		'created_at',
 		'claimed_at',
 		'done_at',
-		'result'
+		'result',
+		// Appended by migration 010: when the owner sent this task out to the
+		// project's agents, so unassigned work can notify without every unassigned
+		// task notifying.
+		'broadcast_at'
 	],
-	messages: ['project_id', 'update_id', 'task_id', 'author', 'body', 'created_at'],
+	messages: [
+		'project_id',
+		'update_id',
+		'task_id',
+		'author',
+		'body',
+		'created_at',
+		// Appended by migration 014: the post this answers, for the owner's own
+		// feed cards, which anchor to nothing else.
+		'reply_to'
+	],
 	read_cursors: ['agent_id', 'last_seen_message_seq'],
 	// The four columns migration 002 appends carry the other four request kinds
 	// (design §5). They are listed after the 001 columns because `ALTER TABLE ADD
@@ -84,7 +124,24 @@ const DESIGN_COLUMNS: Record<string, string[]> = {
 		'detail',
 		'config',
 		'answer'
-	]
+	],
+	// Where a notification is delivered when the dashboard is not open (design §7).
+	// A public link to one card, the only unauthenticated read in the product (§8).
+	update_shares: ['update_id', 'token_hash', 'created_at', 'revoked_at', 'views', 'last_viewed_at'],
+	push_subscriptions: [
+		'endpoint',
+		'p256dh',
+		'auth',
+		'label',
+		'created_at',
+		'last_sent_at',
+		'failures',
+		// Appended by migration 007: what this one device wants to hear about.
+		'prefs'
+	],
+	// Migration 013: an agent saying "seen it" / "done" against one message or
+	// one task, so a card the owner replied to is not silent.
+	acknowledgements: ['agent_id', 'message_id', 'task_id', 'state', 'created_at', 'updated_at']
 };
 
 describe('schema', () => {

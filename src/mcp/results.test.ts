@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { createProject, invalid, notFound, postUpdate } from '$domain';
+import { createProject, editUpdate, invalid, notFound, postUpdate } from '$domain';
 import { harness, type Harness } from '$domain/testing';
 import { failed, guard, ok, projectView, updateView } from './results';
 import { toolText } from './testing';
@@ -87,7 +87,9 @@ describe('projectView', () => {
 			status: 'active',
 			pinned: false,
 			created_at: '2026-08-25T09:30:00.000Z',
-			updated_at: '2026-08-25T09:30:00.000Z'
+			updated_at: '2026-08-25T09:30:00.000Z',
+			// Migration 006: a project starts with the dashboard's own styling.
+			theme: null
 		});
 	});
 });
@@ -115,7 +117,20 @@ describe('updateView', () => {
 			level: 'success',
 			pinned: false,
 			body_chars: 5_000,
-			created_at: '2026-08-25T09:30:00.000Z'
+			created_at: '2026-08-25T09:30:00.000Z',
+			edited_at: null,
+			// Migration 008: most updates are not progress on a task.
+			task_id: null
 		});
+	});
+
+	it('stamps an edit, so the agent can see the correction landed', () => {
+		createProject(h, { name: 'Feed' });
+		const agentId = h.agent();
+		const posted = postUpdate(h, { project: 'feed', agentId, body: 'nearly done' });
+
+		const edited = editUpdate(h, { updateId: posted.id, agentId, body: 'done' });
+
+		expect(updateView(edited).edited_at).toBe('2026-08-25T09:30:00.000Z');
 	});
 });

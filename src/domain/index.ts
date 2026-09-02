@@ -30,6 +30,8 @@ export { context, type Clock, type DomainContext } from './context';
  * reach a repository.
  */
 export type {
+	AckState,
+	Acknowledgement,
 	Agent,
 	Message,
 	Project,
@@ -70,15 +72,31 @@ export {
 	type MintedAgentToken
 } from './agents';
 export {
+	ACK_STATES,
+	acknowledge,
+	acknowledgementsFor,
+	type AcknowledgeInput,
+	type AcknowledgementScope
+} from './acknowledgements';
+export {
 	DESCRIPTION_MAX_LENGTH,
 	NAME_MAX_LENGTH,
 	createProject,
 	findProject,
 	listProjects,
+	markProjectSeen,
 	resolveProject,
+	unseenUpdateCounts,
+	BOARD_COLUMNS_MAX,
+	COLUMN_TITLE_MAX_LENGTH,
+	DEFAULT_BOARD,
+	THEME_COLOUR,
+	assertBoard,
+	mergeTheme,
 	updateProject,
 	type CreateProjectInput,
 	type CreateProjectResult,
+	type ProjectThemeInput,
 	type UpdateProjectInput
 } from './projects';
 export {
@@ -112,7 +130,9 @@ export {
 	TITLE_MAX_LENGTH,
 	deleteUpdate,
 	listUpdates,
+	markRepliesSeen,
 	postUpdate,
+	editUpdate,
 	setUpdatePinned,
 	type ListUpdatesInput,
 	type PostUpdateInput,
@@ -156,6 +176,9 @@ export {
 	MESSAGE_BODY_MAX_LENGTH,
 	authorText,
 	countUnreadMessages,
+	countUnreadMessagesInScope,
+	projectsForAgent,
+	unreadMessagesInScope,
 	listThread,
 	parseAuthor,
 	postMessage,
@@ -210,10 +233,12 @@ export {
 	TASK_RESULT_MAX_LENGTH,
 	TASK_TITLE_MAX_LENGTH,
 	assignTask,
+	broadcastTask,
 	cancelTask,
 	claimTask,
 	completeTask,
 	countOpenTasks,
+	findTask,
 	createTask,
 	listTasks,
 	type ClaimTaskInput,
@@ -222,3 +247,61 @@ export {
 	type CreateTaskInput,
 	type ListTasksInput
 } from './tasks';
+/**
+ * Web Push (design §5, §7): the one channel that reaches an owner whose
+ * dashboard is closed. Off unless a VAPID keypair is configured.
+ */
+export {
+	DEFAULT_PUSH_TYPES,
+	MAX_PUSH_ACTIONS,
+	MAX_PUSH_FAILURES,
+	PUSH_TYPES,
+	assertPushPrefs,
+	notifies,
+	repliesToOwner,
+	replyMessage,
+	setDevicePrefs,
+	updateMessage,
+	PUSH_LABEL_MAX_LENGTH,
+	PUSH_TTL_S,
+	listPushSubscriptionsFor,
+	requestMessage,
+	sendPush,
+	startRequestPusher,
+	subscribeToPush,
+	unsubscribeFromPush
+} from './push';
+export type {
+	Notifiable,
+	PushAction,
+	PushMessage,
+	PushType,
+	PushResult,
+	PushSettings,
+	PushSubscriptionInput,
+	RequestPusherOptions,
+	SendPushOptions
+} from './push';
+/**
+ * Public share links (design §7, §8): the one unauthenticated read in the
+ * product, scoped to a single card and revocable.
+ */
+export {
+	SHARE_PATH_PREFIX,
+	SHARE_TOKEN_BYTES,
+	findUpdateShare,
+	listUpdateShares,
+	hashShareToken,
+	readShare,
+	revokeUpdateShare,
+	shareGrantsMedia,
+	shareUpdate,
+	shareUrl
+} from './shares';
+export type {
+	MintedShare,
+	ReadShareInput,
+	ShareMediaInput,
+	SharedCard,
+	ShareUpdateInput
+} from './shares';

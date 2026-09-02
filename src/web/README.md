@@ -18,46 +18,87 @@ Notes carried from the design (§7):
 - Desktop is three regions: project sidebar, update timeline, live agents +
   open tasks rail. Mobile is one column with the sidebar as a drawer and the rail
   as a second drawer, so nothing that only lives in the rail is lost on a phone.
-- **Pending requests get a sticky top banner, not a rail item** — a request is
-  the one case where an agent is stopped dead waiting on the owner. Each of the
-  five kinds renders its own control, and several outstanding requests queue
-  rather than overwrite one another: the longest-blocked agent is at the front and
-  the rest are chips beside it, so none can be lost.
+- **Pending requests are cards pinned to the top of the feed, not a rail item
+  and no longer a sticky banner** — a request is the one case where an agent is
+  stopped dead waiting on the owner, so it sits above even the pinned updates.
+  One card per request, so a second blocked agent cannot overwrite the first and
+  every one of them is answerable where it sits. Each of the five kinds renders
+  its own control. The store stays unscoped: the shell shows a project's requests
+  on its feed and all of them on the whole timeline, and the sidebar carries a
+  per-project count so a blocked agent elsewhere is still visible.
+- **Notifications are asked for on a click, never on load** — a denied
+  permission cannot be re-requested from script, only undone in the browser's own
+  site settings, so the one chance to ask is spent deliberately. The toggle hides
+  itself entirely where push cannot work: no VAPID keypair on the deployment, or
+  a browser without the APIs.
+- **A `form` request renders as a field plus the agent's own buttons**, and each
+  button carries the field's current text with it. The answer is one decision —
+  what to do, and what to do it to — so there is no separate "save" step that
+  could leave an approval pointing at text the owner has since changed.
+- **A shared card is its own component**, not `UpdateCard` with the owner bits
+  hidden. The dashboard's card grows controls, a reply box and a thread as the
+  product does, and a public page that reused it would publish each of those the
+  day it was added (§8).
+- **A notification carries buttons for the kinds one tap can settle** — a
+  `confirm`'s approve and reject, a `buttons` or `choice` request's first two
+  options. Not `text`, not `multi_choice`, and deliberately not `form`: approving
+  a draft the owner has not read, let alone edited, is the one way to make that
+  kind dangerous. The service worker answers over the same endpoint the dashboard
+  uses, with the owner's own cookie, and opens the card if that fails.
+- **A replied-to card rides at the top under "Recent replies"**, lifted clear of
+  the day groups exactly as a pinned one is — reordering it inside its own day
+  would put it at the top of Tuesday and nowhere near the top of the feed. Its
+  `created_at` never moves, so it drops back into history the moment it stops
+  being one of the most recently answered. Capped, because on an old board
+  "every card with a reply" is most of them.
+- **Times on cards are relative, with the instant behind them** — "4m ago" is
+  the question a timeline reader is asking; `14:02` makes them work it out. The
+  exact instant lives in the `title` and the `datetime`, so hovering, a screen
+  reader and a copy-paste all still get it. One shared clock ticks them
+  (`clock.svelte.ts`), refcounted, paused while the tab is hidden — fifty cards
+  cost one timer, not fifty.
 - Agent markdown is untrusted: render with raw HTML disabled (§8).
 - New items animate in; if the timeline is scrolled away from the top, show a
   "N new" pill instead of jumping the view.
 
 ## What is in here
 
-| File                                | Job                                                                                          |
-| ----------------------------------- | -------------------------------------------------------------------------------------------- |
-| `Shell.svelte`                      | The three-region layout, the header, the mobile drawer, and the one store instance per page. |
-| `Sidebar.svelte`                    | Projects, pinned first, archived behind a toggle.                                            |
-| `Timeline.svelte`                   | The scroll container, the day groups, and the "N new" pill.                                  |
-| `UpdateCard.svelte`                 | One update: level colour, avatar, markdown, media grid.                                      |
-| `MediaGrid.svelte`                  | The grid on a card, and the lightbox it opens (§7).                                          |
-| `MediaTile.svelte`                  | One cell: the placeholder, the failed state, the image, the inline video.                    |
-| `Lightbox.svelte`                   | Full-size viewing, keyboard navigable, focus trapped and returned.                           |
-| `media.ts`                          | Pure media decisions: addresses, cell shapes, sources, labels.                               |
-| `Markdown.svelte`                   | The only `{@html}` in the client.                                                            |
-| `RequestBanner.svelte`              | The sticky top banner: the queue, and a control per request kind (§5, §7).                   |
-| `requests.svelte.ts`                | What is waiting on the owner, live. Never scoped to a project.                               |
-| `RightRail.svelte`                  | Live agents with their session metadata (§7).                                                |
-| `Tasks.svelte`                      | The task list — todo, claimed, done — plus creating, assigning and cancelling (§7).          |
-| `tasks.svelte.ts`                   | The task store: the list, live on `task.created` and `task.updated` (§5, §7).                |
-| `stream.ts`                         | The tab's one connection to `/api/stream`, shared by every consumer (§4).                    |
-| `timeline.svelte.ts`                | The client store: snapshot, stream, pending arrivals, paging.                                |
-| `presence.svelte.ts`                | The live-agents store: who is online, derived against a ticking clock (§4).                  |
-| `threads.svelte.ts`                 | The page's message threads: one request for every card, live on `message.created` (§7).      |
-| `Thread.svelte`                     | One card's conversation, and the box the owner replies in (§7).                              |
-| `actions.ts`                        | The owner's write calls: create, rename, pin, archive, delete (§7).                          |
-| `NewProject.svelte`                 | Create a project from the browser.                                                           |
-| `ProjectActions.svelte`             | Per-project menu: pin, rename, re-describe, archive, unarchive.                              |
-| `UpdateActions.svelte`              | Per-card pin, and delete behind a confirmation.                                              |
-| `markdown.ts`                       | markdown-it with **`html: false`**.                                                          |
-| `avatar.ts`, `levels.ts`, `days.ts` | Pure helpers: name hash, level palette, day grouping.                                        |
-| `types.ts`                          | The wire shapes, declared here because this module may not import `$db`.                     |
-| `testing.ts`                        | Test-only fakes: a scripted `EventSource` and a fake snapshot API.                           |
+| File                                | Job                                                                                                               |
+| ----------------------------------- | ----------------------------------------------------------------------------------------------------------------- |
+| `Shell.svelte`                      | The three-region layout, the header, the feed/board tabs, the mobile drawer, and the one store instance per page. |
+| `Sidebar.svelte`                    | Projects, pinned first, archived behind a toggle.                                                                 |
+| `Timeline.svelte`                   | The scroll container, the day groups, and the "N new" pill.                                                       |
+| `UpdateCard.svelte`                 | One update: level colour, avatar, markdown, media grid.                                                           |
+| `MediaGrid.svelte`                  | The grid on a card, and the lightbox it opens (§7).                                                               |
+| `MediaTile.svelte`                  | One cell: the placeholder, the failed state, the image, the inline video.                                         |
+| `Lightbox.svelte`                   | Full-size viewing, keyboard navigable, focus trapped and returned.                                                |
+| `media.ts`                          | Pure media decisions: addresses, cell shapes, sources, labels.                                                    |
+| `Markdown.svelte`                   | The only `{@html}` in the client.                                                                                 |
+| `theme.ts`                          | A project's two colours into a readable palette of CSS custom properties (§7).                                    |
+| `clock.svelte.ts`                   | One ticking clock behind every relative timestamp, refcounted (§7).                                               |
+| `preview.ts`                        | What a shared link unfurls to: the opening text and one image (§7).                                               |
+| `SharedCard.svelte`                 | One card as a public share link shows it: fixed fields, no controls (§7, §8).                                     |
+| `RequestCard.svelte`                | One blocked agent, as a card at the top of the feed: a control per request kind (§5, §7).                         |
+| `requests.svelte.ts`                | What is waiting on the owner, live. Never scoped to a project.                                                    |
+| `NotifyToggle.svelte`               | The header's Web Push switch. Renders nothing where push cannot work (§7).                                        |
+| `push.svelte.ts`                    | Whether _this_ browser is subscribed: deployment, OS grant, subscription (§7).                                    |
+| `RightRail.svelte`                  | Live agents with their session metadata (§7).                                                                     |
+| `Tasks.svelte`                      | The task list — todo, claimed, done — plus creating, assigning and cancelling (§7).                               |
+| `Board.svelte`                      | The kanban tab: lanes over task states, configurable per project. Clicking a card filters the feed (§7).          |
+| `tasks.svelte.ts`                   | The task store: the list, live on `task.created` and `task.updated` (§5, §7).                                     |
+| `stream.ts`                         | The tab's one connection to `/api/stream`, shared by every consumer (§4).                                         |
+| `timeline.svelte.ts`                | The client store: snapshot, stream, pending arrivals, paging.                                                     |
+| `presence.svelte.ts`                | The live-agents store: who is online, derived against a ticking clock (§4).                                       |
+| `threads.svelte.ts`                 | The page's message threads: one request for every card, live on `message.created` (§7).                           |
+| `Thread.svelte`                     | One card's conversation, and the box the owner replies in (§7).                                                   |
+| `actions.ts`                        | The owner's write calls: create, rename, pin, archive, delete (§7).                                               |
+| `NewProject.svelte`                 | Create a project from the browser.                                                                                |
+| `ProjectActions.svelte`             | Per-project menu: pin, rename, re-describe, archive, unarchive.                                                   |
+| `UpdateActions.svelte`              | Per-card pin, and delete behind a confirmation.                                                                   |
+| `markdown.ts`                       | markdown-it with **`html: false`**.                                                                               |
+| `avatar.ts`, `levels.ts`, `days.ts` | Pure helpers: name hash, level palette, day grouping.                                                             |
+| `types.ts`                          | The wire shapes, declared here because this module may not import `$db`.                                          |
+| `testing.ts`                        | Test-only fakes: a scripted `EventSource` and a fake snapshot API.                                                |
 
 ## The task panel
 

@@ -143,20 +143,25 @@ describe('the transport', () => {
 		const { tools } = await client.listTools();
 
 		expect(tools.map((tool) => tool.name).sort()).toEqual([
+			'acknowledge',
 			'attach_media',
 			'await_request',
 			'claim_task',
 			'complete_task',
 			'create_project',
+			'create_task',
 			'create_upload',
+			'edit_update',
 			'end_session',
 			'get_messages',
 			'heartbeat',
 			'list_projects',
 			'list_tasks',
+			'post_message',
 			'post_update',
 			'register_session',
-			'request_input'
+			'request_input',
+			'set_project_theme'
 		]);
 
 		const post = tools.find((tool) => tool.name === 'post_update')!;
@@ -169,8 +174,10 @@ describe('the transport', () => {
 			'body',
 			'level',
 			'media_ids',
+			'priority',
 			'project',
 			'session_id',
+			'task_id',
 			'title'
 		]);
 		for (const [name, schema] of Object.entries(properties)) {
@@ -650,7 +657,9 @@ describe('owner requests over the wire (design §5)', () => {
 		expect(ask.inputSchema).toMatchObject({
 			type: 'object',
 			required: ['kind', 'question'],
-			properties: { kind: { enum: ['text', 'confirm', 'buttons', 'choice', 'multi_choice'] } }
+			properties: {
+				kind: { enum: ['text', 'confirm', 'buttons', 'choice', 'multi_choice', 'form'] }
+			}
 		});
 		expect(ask.description).toContain('await_request');
 		expect(wait.description).toContain('pending');

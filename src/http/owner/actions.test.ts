@@ -5,6 +5,7 @@ import { SESSION_COOKIE, signSession } from '../auth';
 import {
 	createProjectHandler,
 	deleteUpdateHandler,
+	markRepliesSeenHandler,
 	patchProjectHandler,
 	patchUpdateHandler,
 	type OwnerHandler
@@ -279,5 +280,53 @@ describe('curating an update', () => {
 
 		expect(response.status).toBe(401);
 		expect(listUpdates(h).updates).toHaveLength(1);
+	});
+});
+
+/**
+ * Marking a card's conversation read (migration 015), over HTTP.
+ *
+ * Its own route rather than a field on the update patch, because that patch
+ * changes `pinned` and refuses everything else on purpose: an update is what an
+ * agent reported, and reading its replies is not editing it.
+ */
+describe('marking a thread read', () => {
+	function anUpdate() {
+		const project = createProject(h, { name: 'Agent Dashboard' }).project;
+		return postUpdate(h, { project: project.slug, agentId, body: 'shipped it' });
+	}
+
+	it('stamps it and answers the update', async () => {
+		const update = anUpdate();
+
+		const { response, body } = await call(markRepliesSeenHandler, { params: { id: update.id } });
+
+		expect(response.status).toBe(200);
+		expect(body.update.repliesSeenAt).not.toBeNull();
+	});
+
+	it('leaves the card itself alone, so the agent that wrote it is not lied to', async () => {
+		const update = anUpdate();
+
+		const { body } = await call(markRepliesSeenHandler, { params: { id: update.id } });
+
+		expect(body.update).toMatchObject({ editedAt: null, pinned: false, body: 'shipped it' });
+	});
+
+	it('answers 404 for an update that is not there', async () => {
+		const { response } = await call(markRepliesSeenHandler, { params: { id: 'nope' } });
+
+		expect(response.status).toBe(404);
+	});
+
+	it('refuses a caller with no session: what the owner has read is not public', async () => {
+		const update = anUpdate();
+
+		const { response } = await call(markRepliesSeenHandler, {
+			params: { id: update.id },
+			cookie: null
+		});
+
+		expect(response.status).toBe(401);
 	});
 });

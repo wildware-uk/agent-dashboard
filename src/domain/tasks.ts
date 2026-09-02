@@ -37,9 +37,11 @@
  */
 import {
 	assignTask as assignTaskRow,
+	broadcastTask as broadcastTaskRow,
 	cancelTask as cancelTaskRow,
 	claimTask as claimTaskRow,
 	completeTask as completeTaskRow,
+	countBroadcastTasks,
 	findAgentById,
 	findTaskById,
 	insertTask,
@@ -50,6 +52,7 @@ import {
 } from '$db';
 import type { DomainContext } from './context';
 import { conflict, invalid, notFound } from './errors';
+import { projectsForAgent } from './messages';
 import { resolveProject } from './projects';
 import { requiredText, optionalText } from './text';
 import { postUpdate } from './updates';
@@ -81,13 +84,29 @@ export type CreateTaskInput = {
 	title: string;
 	body?: string | null;
 	/**
-	 * The agent this is for, if the owner targeted one (design §7).
+	 * The agent this is for, if whoever created it targeted one (design §7).
 	 *
 	 * Omit — or pass `null` — to leave it on the queue for whoever claims it
-	 * first. Only the owner creates tasks, so unlike every other `agentId` in
-	 * this domain this one is an argument rather than a token identity.
+	 * first. Unlike every other `agentId` in this domain this is an argument
+	 * rather than a token identity, because the caller is naming who the work is
+	 * *for* rather than who they are: the owner assigns, and an agent that has
+	 * discovered work either takes it (its own id) or leaves it for the fleet.
 	 */
 	agentId?: string | null;
+	/**
+	 * Send it to the project's agents the moment it exists (migration 010).
+	 *
+	 * The one-step version of create-then-{@link broadcastTask}, and it exists
+	 * because handing something over is one act: the owner types a sentence and
+	 * expects whoever is around to pick it up. Two writes would publish a
+	 * `task.created` that no agent should act on and then a `task.updated` that
+	 * they should, which is a race for anything listening.
+	 *
+	 * Refused alongside `agentId`: naming an agent and offering it to everybody
+	 * are different instructions, and doing both would mean the assignee's own
+	 * claim races the fleet's.
+	 */
+	broadcast?: boolean;
 };
 
 /** Put a task on a project's list and announce it. */
@@ -99,12 +118,17 @@ export function createTask(ctx: DomainContext, input: CreateTaskInput): Task {
 	// filed against an agent that does not exist.
 	const agentId = assignee(ctx, input.agentId ?? null);
 
+	if (input.broadcast && agentId !== null) {
+		throw invalid('assign a task to an agent or offer it to the project, not both');
+	}
+
 	const task = insertTask(ctx.db, {
 		projectId: project.id,
 		agentId,
 		title,
 		body: body ?? '',
-		createdAt: ctx.now()
+		createdAt: ctx.now(),
+		broadcastAt: input.broadcast ? ctx.now() : null
 	});
 
 	announce(ctx, 'task.created', task);
@@ -277,11 +301,42 @@ export function assignTask(ctx: DomainContext, taskId: string, agentId: string |
  * How much work is waiting for one agent — the `open_tasks` a heartbeat reports
  * (design §5).
  *
- * Its own tasks only: an unassigned task on the queue is not work this agent has
- * been given, and a heartbeat that counted it would tell every agent in the
- * deployment that it had something to do.
+ * Two things, and the second one is newer than the design:
+ *
+ * 1. **Its own tasks.** An unassigned task on the queue is not work this agent
+ *    has been given, and a count that included every one of them would tell
+ *    every agent in the deployment it had something to do.
+ * 2. **Work broadcast to a project it works in.** {@link broadcastTask} is the
+ *    owner saying "somebody on this project take this", which is a different
+ *    act from a task that merely happens to have no assignee — so rule 1 keeps
+ *    its teeth and the owner still has a way to reach a project's agents
+ *    without picking one by hand. `claimTask` settles the fan-out: one winner,
+ *    a clean `conflict` for the rest.
+ *
+ * Which projects an agent "works in" is {@link projectsForAgent}'s derivation —
+ * updates posted, tasks assigned, threads spoken in — the same one the live
+ * stream already scopes unread messages by, so an agent is never woken by a
+ * project it has nothing to do with. An agent with no history at all hears
+ * about every broadcast, for the same reason it hears about every message: a
+ * new agent must not be deaf to the first work ever offered to it.
  */
-export function countOpenTasks(ctx: DomainContext, agentId: string): number {
+export function countOpenTasks(
+	ctx: DomainContext,
+	agentId: string,
+	/**
+	 * What the caller has explicitly subscribed to.
+	 *
+	 * Only the broadcast half is scoped by it — an assignment is work handed to
+	 * this agent by name, and a heartbeat that hid it because the session said it
+	 * was working elsewhere would lose the task rather than defer it.
+	 *
+	 * An explicit answer always wins over the derived one, exactly as it does for
+	 * {@link countUnreadMessagesInScope}: a list means those projects, `null`
+	 * means every project, and `undefined` means "work it out from what I have
+	 * done".
+	 */
+	subscribed?: readonly string[] | null
+): number {
 	let open = 0;
 	for (const state of OPEN_TASK_STATES) {
 		// A count rather than a page, so the limit is "all of them": a heartbeat
@@ -290,7 +345,44 @@ export function countOpenTasks(ctx: DomainContext, agentId: string): number {
 		open += listTaskRows(ctx.db, { agentId, state, limit: Number.MAX_SAFE_INTEGER }).length;
 	}
 
-	return open;
+	// `null` means every project, from a caller that asked for the lot or from a
+	// derivation that found no history — and every project is `undefined` to the
+	// row layer, which takes "these ones" or nothing.
+	const scope = subscribed === undefined ? projectsForAgent(ctx, agentId) : subscribed;
+	return open + countBroadcastTasks(ctx.db, scope ?? undefined);
+}
+
+/**
+ * Send a `todo` task out to the agents of its project, or take it back.
+ *
+ * Only `todo` work can go out. A claimed task already has somebody on it, and
+ * announcing it would put the rest of the fleet into a race they must lose;
+ * `conflict` rather than a silent no-op, because the button that sent it is
+ * about to tell the owner it worked.
+ *
+ * @throws {DomainError} `not_found` for an unknown task, `conflict` for a task
+ *   that is no longer `todo`.
+ */
+export function broadcastTask(ctx: DomainContext, taskId: string, on = true): Task {
+	const task = existing(ctx, taskId);
+	if (task.state !== 'todo') {
+		throw conflict(`task ${task.id} is ${task.state}, so there is nobody left to offer it to`);
+	}
+
+	const broadcast = broadcastTaskRow(ctx.db, task.id, on ? ctx.now() : null)!;
+
+	announce(ctx, 'task.updated', broadcast);
+	return broadcast;
+}
+
+/**
+ * One task, or `null`.
+ *
+ * `null` rather than a throw, because the page that reads it wants a 404 of its
+ * own and an unknown id is a URL somebody typed rather than a bug.
+ */
+export function findTask(ctx: DomainContext, taskId: string): Task | null {
+	return findTaskById(ctx.db, taskId) ?? null;
 }
 
 /** The task, or a `not_found` naming the id the caller asked for. */

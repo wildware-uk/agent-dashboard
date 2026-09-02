@@ -26,16 +26,21 @@ describe('the tool set', () => {
 		expect(TOOL_NAMES).toEqual([
 			'create_project',
 			'list_projects',
+			'set_project_theme',
 			'post_update',
+			'edit_update',
 			'create_upload',
 			'attach_media',
 			'register_session',
 			'heartbeat',
 			'end_session',
 			'list_tasks',
+			'create_task',
 			'claim_task',
 			'complete_task',
 			'get_messages',
+			'post_message',
+			'acknowledge',
 			'request_input',
 			'await_request'
 		]);
@@ -123,16 +128,21 @@ describe('tool argument schemas', () => {
 		expect(required).toEqual({
 			create_project: ['name'],
 			list_projects: [],
+			set_project_theme: ['project'],
 			post_update: ['project', 'body'],
+			edit_update: ['update_id'],
 			create_upload: ['filename', 'mime', 'bytes'],
 			attach_media: ['update_id', 'media_ids'],
 			register_session: [],
 			heartbeat: ['session_id'],
 			end_session: ['session_id'],
 			list_tasks: [],
+			create_task: ['project', 'title'],
 			claim_task: ['task_id'],
 			complete_task: ['task_id', 'result'],
 			get_messages: [],
+			post_message: ['body'],
+			acknowledge: ['state'],
 			request_input: ['kind', 'question'],
 			await_request: ['request_id']
 		});

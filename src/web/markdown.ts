@@ -65,3 +65,59 @@ export function renderMarkdown(body: string): string {
 	if (body.trim() === '') return '';
 	return md.render(body);
 }
+
+/**
+ * How much of a body a link preview carries.
+ *
+ * Long enough to say what the card is about, short enough that Slack, iMessage
+ * and the rest do not truncate it themselves with an ellipsis of their own.
+ */
+export const EXCERPT_MAX_LENGTH = 200;
+
+/**
+ * A plain-text opening for a link preview (design §7).
+ *
+ * Not rendered markdown and not raw markdown either: an unfurled link shows text
+ * in somebody else's chat window, so `## Deployed` reading as "## Deployed" is a
+ * worse answer than "Deployed", and any tag that survived would be shown as
+ * literal characters at best.
+ *
+ * The stripping is deliberately shallow. This is a summary, not a second
+ * renderer — anything it cannot flatten (a table, a nested list) it simply
+ * leaves as the words in it, which still reads. What it must never carry is
+ * markup, which is why tag-shaped runs go too: the renderer escapes those rather
+ * than executing them, but a preview is text in somebody else's app and has no
+ * use for the characters.
+ */
+export function excerpt(body: string, maxLength = EXCERPT_MAX_LENGTH): string {
+	const flattened = body
+		// Fenced code: the fence and the language tag say nothing worth showing.
+		.replace(/```[\s\S]*?```/g, ' ')
+		// Anything tag-shaped. The renderer escapes these rather than executing
+		// them (`html: false`), so they are only ever literal characters — but a
+		// preview reading "<script>alert(1)</script>" in somebody's chat window is
+		// noise at best. Tag-shaped rather than any `<`, so "a < b" survives.
+		.replace(/<\/?[a-zA-Z][^>]*>/g, ' ')
+		.replace(/`([^`]*)`/g, '$1')
+		// Images before links: an image is `![alt](src)` and would otherwise leave
+		// a stray `!` behind when the link body is unwrapped.
+		.replace(/!\[([^\]]*)\]\([^)]*\)/g, '$1')
+		.replace(/\[([^\]]*)\]\([^)]*\)/g, '$1')
+		// Heading hashes, blockquote markers and list bullets, at line starts only,
+		// so a mid-sentence `#` or `-` survives.
+		.replace(/^\s{0,3}(#{1,6}\s+|>\s?|[-*+]\s+|\d+\.\s+)/gm, '')
+		// Emphasis and strikethrough markers around a run of text.
+		.replace(/(\*\*|__|~~|[*_])(\S(?:.*?\S)?)\1/g, '$2')
+		// Horizontal rules leave nothing behind at all.
+		.replace(/^\s*([-*_])\s*(?:\1\s*){2,}$/gm, ' ')
+		.replace(/\s+/g, ' ')
+		.trim();
+
+	if (flattened.length <= maxLength) return flattened;
+
+	// Cut at a word, not mid-word, and only if there is a word boundary worth
+	// cutting at — a 200-character token has no better break than its middle.
+	const cut = flattened.slice(0, maxLength);
+	const space = cut.lastIndexOf(' ');
+	return `${(space > maxLength * 0.6 ? cut.slice(0, space) : cut).trimEnd()}…`;
+}

@@ -25,7 +25,10 @@ import {
 	listProjects,
 	listThread,
 	listUpdateMedia,
+	acknowledgementsFor,
+	listUpdateShares,
 	listUpdates,
+	unseenUpdateCounts,
 	type MediaAttachment
 } from '$domain';
 import type { AuthConfig, SessionCookieReader } from '../auth';
@@ -38,6 +41,15 @@ export const SNAPSHOT_DEFAULT_LIMIT = 50;
 export type SnapshotQuery = {
 	/** A project slug or id. Omit for the whole timeline. */
 	project?: string;
+	/**
+	 * Only the updates filed against this task (design §7).
+	 *
+	 * The feed filtered to one piece of long-running work, which is what clicking
+	 * a task on the board does. Server-side rather than in the browser, because
+	 * the browser has one page of the timeline and the task's history may run
+	 * further back than that page reaches.
+	 */
+	task?: string;
 	/** Restrict the project list. Omit for every project, archived included. */
 	status?: 'active' | 'archived';
 	/** Timeline page size. */
@@ -71,6 +83,15 @@ export type SnapshotProjects = ReturnType<typeof listProjects>;
  */
 export type SnapshotUpdate = ReturnType<typeof listUpdates>['updates'][number] & {
 	media: MediaAttachment[];
+	/**
+	 * The public link on this card, if it has one (design §7, §8).
+	 *
+	 * Present only when the card is shared, so the owner can see at a glance which
+	 * of their timeline is public and how often each link has been opened. Never
+	 * the token: only its HMAC is stored, and there is no endpoint that could hand
+	 * the URL back (`src/domain/shares.ts`).
+	 */
+	share?: { views: number; sharedAt: number };
 };
 
 export type SnapshotUpdates = {
@@ -104,11 +125,32 @@ export type SnapshotAgentNames = Record<string, string>;
  */
 export type SnapshotMessages = ReturnType<typeof listThread>;
 
+/**
+ * Updates per project the owner has not looked at yet, for the sidebar badge.
+ *
+ * Beside the project list rather than a field on each project, because it is not
+ * a property of the project: `list_projects` is the same call agents make over
+ * MCP, and what the owner has read is none of their business. A project with
+ * nothing new is absent rather than zero.
+ */
+export type SnapshotUnseen = Record<string, number>;
+
+/**
+ * What agents have said about the messages in this snapshot (migration 013).
+ *
+ * Rides with the threads for the same reason the threads ride with the timeline:
+ * without it the page paints a reply and then a tick appears a beat later, which
+ * reads as the acknowledgement having just arrived when it is minutes old.
+ */
+export type SnapshotAcks = ReturnType<typeof acknowledgementsFor>;
+
 export type FullSnapshot = {
 	projects: SnapshotProjects;
+	unseen: SnapshotUnseen;
 	updates: SnapshotUpdates;
 	agentNames: SnapshotAgentNames;
 	messages: SnapshotMessages;
+	acks: SnapshotAcks;
 };
 
 /** Just the timeline, for paging and for a scoped refetch. */
@@ -159,11 +201,14 @@ export function readFullSnapshot(
 	// Every agent, not only the ones on this page: paging deeper into the past
 	// must not reach an update whose poster the client cannot name, and the whole
 	// map is smaller than one card's markdown.
+	const messages = listThread(ctx, query.project ? { project: query.project } : {});
 	return {
 		projects,
+		unseen: unseenUpdateCounts(ctx),
 		updates: readUpdates(query, ctx),
 		agentNames: listAgentNames(ctx),
-		messages: listThread(ctx, query.project ? { project: query.project } : {})
+		messages,
+		acks: acknowledgementsFor(ctx, { messageIds: messages.map((message) => message.id) })
 	};
 }
 
@@ -178,6 +223,7 @@ export function readUpdatesSnapshot(
 function readUpdates(query: SnapshotQuery, ctx: DomainContext): SnapshotUpdates {
 	const page = listUpdates(ctx, {
 		project: query.project,
+		taskId: query.task,
 		limit: query.limit,
 		cursor: query.cursor
 	});
@@ -188,7 +234,15 @@ function readUpdates(query: SnapshotQuery, ctx: DomainContext): SnapshotUpdates 
 		ctx,
 		page.updates.map((update) => update.id)
 	);
-	const items = page.updates.map((update) => ({ ...update, media: media[update.id] ?? [] }));
+	const shares = listUpdateShares(
+		ctx,
+		page.updates.map((update) => update.id)
+	);
+	const items = page.updates.map((update) => ({
+		...update,
+		media: media[update.id] ?? [],
+		...(shares[update.id] ? { share: shares[update.id] } : {})
+	}));
 
 	return { items, nextCursor: page.nextCursor, hasMore: page.hasMore };
 }
@@ -242,6 +296,9 @@ export function readSnapshotQuery(url: URL): SnapshotQuery {
 
 	const cursor = params.get('cursor')?.trim();
 	if (cursor) query.cursor = cursor;
+
+	const task = params.get('task')?.trim();
+	if (task) query.task = task;
 
 	const status = params.get('status');
 	if (status === 'active' || status === 'archived') query.status = status;

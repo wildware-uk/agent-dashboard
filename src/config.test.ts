@@ -6,7 +6,8 @@ import {
 	assertClientAddressTrustworthy,
 	CONFIG_VARS,
 	loadConfig,
-	parseBodySizeLimit
+	parseBodySizeLimit,
+	pushConfig
 } from './config';
 
 /** The minimum an operator must set; everything else has a default. */
@@ -72,7 +73,10 @@ describe('loadConfig', () => {
 			'PUBLIC_BASE_URL',
 			'MAX_IMAGE_BYTES',
 			'MAX_VIDEO_BYTES',
-			'HOLD_S'
+			'HOLD_S',
+			'VAPID_PUBLIC_KEY',
+			'VAPID_PRIVATE_KEY',
+			'VAPID_SUBJECT'
 		]);
 	});
 });
@@ -177,5 +181,45 @@ describe('assertBodyLimitAllowsUploads', () => {
 
 	it('leaves an unparseable value for the adapter to complain about', () => {
 		expect(() => assertBodyLimitAllowsUploads({ BODY_SIZE_LIMIT: 'lots' }, config)).not.toThrow();
+	});
+});
+
+/**
+ * Push is optional, and half-configured is a mistake rather than a preference
+ * (design §7). A deployment that set one key plainly meant to switch it on.
+ */
+describe('push notifications', () => {
+	const keys = { VAPID_PUBLIC_KEY: 'pub', VAPID_PRIVATE_KEY: 'priv' };
+
+	it('is off when no keypair is set, which is a valid deployment', () => {
+		expect(pushConfig(loadConfig(required))).toBeNull();
+	});
+
+	it('is on when both keys are set', () => {
+		expect(pushConfig(loadConfig({ ...required, ...keys }))).toMatchObject({
+			publicKey: 'pub',
+			privateKey: 'priv'
+		});
+	});
+
+	it('refuses to start on half a keypair rather than quietly disabling push', () => {
+		expect(() => loadConfig({ ...required, VAPID_PUBLIC_KEY: 'pub' })).toThrow(/together/);
+		expect(() => loadConfig({ ...required, VAPID_PRIVATE_KEY: 'priv' })).toThrow(/together/);
+	});
+
+	it('addresses complaints to this deployment when no subject is given', () => {
+		const config = loadConfig({ ...required, ...keys, PUBLIC_BASE_URL: 'https://agents.test' });
+
+		expect(pushConfig(config)?.subject).toBe('https://agents.test');
+	});
+
+	it('takes a mailto: or an https: subject, and nothing else', () => {
+		expect(
+			pushConfig(loadConfig({ ...required, ...keys, VAPID_SUBJECT: 'mailto:o@example.com' }))
+				?.subject
+		).toBe('mailto:o@example.com');
+		expect(() => loadConfig({ ...required, ...keys, VAPID_SUBJECT: 'owner@example.com' })).toThrow(
+			/mailto:/
+		);
 	});
 });

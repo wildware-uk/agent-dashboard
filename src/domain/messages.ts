@@ -34,7 +34,9 @@
 import {
 	advanceReadCursor,
 	countMessagesAfter,
+	listAgentProjectIds,
 	findAgentById,
+	findMessageById,
 	findTaskById,
 	findUpdateById,
 	insertMessage,
@@ -100,6 +102,16 @@ export type PostMessageInput = {
 	updateId?: string | null;
 	/** The task this is about. */
 	taskId?: string | null;
+	/**
+	 * The message this answers (migration 014).
+	 *
+	 * The owner's own feed posts anchor to nothing else — they are not about an
+	 * update or a task, they *are* the thing being discussed — so a reply to one
+	 * names the post directly. One level: a `replyTo` naming a message that is
+	 * itself a reply is refused, because threads of threads are a shape nobody
+	 * asked for and a renderer nobody wants to write.
+	 */
+	replyTo?: string | null;
 };
 
 /**
@@ -120,8 +132,21 @@ export function postMessage(ctx: DomainContext, input: PostMessageInput): Messag
 
 	const updateId = input.updateId ?? null;
 	const taskId = input.taskId ?? null;
+	const replyTo = input.replyTo ?? null;
 	if (updateId !== null && taskId !== null) {
 		throw invalid('a message hangs off an update or a task, not both');
+	}
+	if (replyTo !== null && (updateId !== null || taskId !== null)) {
+		throw invalid('a reply answers a message, or hangs off an update or a task, not both');
+	}
+
+	// Resolved before anything is written, so a reply cannot be filed against a
+	// post that is not there — and so the one-level rule is a refusal rather than
+	// a nesting nobody renders.
+	const parent = replyTo === null ? null : findMessageById(ctx.db, replyTo);
+	if (replyTo !== null && !parent) throw notFound(`no such message: ${replyTo}`);
+	if (parent && parent.replyTo !== null) {
+		throw invalid('reply to the post itself rather than to another reply');
 	}
 
 	// The named project first, so an unknown slug is refused before anything else,
@@ -129,9 +154,11 @@ export function postMessage(ctx: DomainContext, input: PostMessageInput): Messag
 	// rather than quietly resolved: silently preferring one would file the message
 	// somewhere the caller did not ask for and report success.
 	const named = input.project ? resolveProject(ctx, input.project).id : null;
-	const anchored = anchorProject(ctx, { updateId, taskId });
+	// A reply belongs to whatever its post belonged to, which is the same rule an
+	// update or a task anchor keeps.
+	const anchored = parent ? parent.projectId : anchorProject(ctx, { updateId, taskId });
 	if (anchored !== null && named !== null && anchored !== named) {
-		throw invalid('that update or task belongs to a different project');
+		throw invalid('that update, task or message belongs to a different project');
 	}
 	const projectId = anchored ?? named;
 
@@ -139,6 +166,7 @@ export function postMessage(ctx: DomainContext, input: PostMessageInput): Messag
 		projectId,
 		updateId,
 		taskId,
+		replyTo,
 		author,
 		body,
 		createdAt: ctx.now()
@@ -212,11 +240,14 @@ export function readMessages(ctx: DomainContext, input: ReadMessagesInput): Mess
 
 	const markRead = input.markRead ?? true;
 	if (markRead) {
-		advanceReadCursor(
-			ctx.db,
-			agent.id,
-			readTo(ctx, { cursorSeq, from, mine, limit, projectId, messages })
-		);
+		const to = readTo(ctx, { cursorSeq, from, mine, limit, projectId, messages });
+		advanceReadCursor(ctx.db, agent.id, to);
+		// Announced, unlike every other read in this file, because it is the one
+		// that changes state somebody else is watching: an agent's unread count is
+		// on its own live stream (`src/http/stream/agent.ts`), and a count that
+		// falls in silence leaves every listener holding a stale figure that makes
+		// the *next* real message look like a fall.
+		if (to > cursorSeq) ctx.bus.publish('messages.read', { agentId: agent.id, cursor: to });
 	}
 
 	const last = messages.at(-1);
@@ -239,6 +270,83 @@ export function countUnreadMessages(ctx: DomainContext, agentId: string): number
 	return countMessagesAfter(ctx.db, readCursorSeq(ctx.db, agentId), {
 		excludeAuthor: authorText({ kind: 'agent', agentId })
 	});
+}
+
+/**
+ * The projects one agent actually works in (design §5).
+ *
+ * Derived from what it has done — updates posted, tasks handed to it, threads
+ * it has spoken in — because this product has no notion of membership: an agent
+ * is not added to a project, it simply works in one. Deriving it means nothing
+ * to configure and nothing to forget.
+ *
+ * `null` for an agent with no history at all, which callers read as "everything
+ * is relevant". A new agent must not be deaf to the first message ever sent to
+ * it, and the moment it does anything the list stops being empty.
+ */
+export function projectsForAgent(ctx: DomainContext, agentId: string): string[] | null {
+	const projects = listAgentProjectIds(ctx.db, agentId, authorText({ kind: 'agent', agentId }));
+	return projects.length === 0 ? null : projects;
+}
+
+/**
+ * Unread messages, counting only the projects this agent works in (design §5).
+ *
+ * Deliberately *not* what {@link countUnreadMessages} does, and the difference
+ * is the point. A heartbeat answers "is there anything for me anywhere", which
+ * has to span every project or it would be a no that means yes. A live stream
+ * answers "should I interrupt this agent right now", and waking an agent for a
+ * project it has never touched is the interruption nobody wanted.
+ */
+export function countUnreadMessagesInScope(
+	ctx: DomainContext,
+	agentId: string,
+	/**
+	 * What the caller has explicitly subscribed to.
+	 *
+	 * An explicit answer always wins over the derived one: an agent that once
+	 * posted in another project has no business being woken by it afterwards, and
+	 * only the agent can say what it is currently for.
+	 *
+	 * - a **list** — only those projects.
+	 * - **`null`** — every project, asked for explicitly. Not the same as
+	 *   `undefined`: this is a session that wants the lot, including projects the
+	 *   agent has never touched.
+	 * - **`undefined`** — no opinion, so work it out from what I have done.
+	 */
+	subscribed?: readonly string[] | null
+): number {
+	const projectIds = subscribed === undefined ? projectsForAgent(ctx, agentId) : subscribed;
+	return countMessagesAfter(ctx.db, readCursorSeq(ctx.db, agentId), {
+		excludeAuthor: authorText({ kind: 'agent', agentId }),
+		...(projectIds ? { projectIds } : {})
+	});
+}
+
+/**
+ * The unread messages themselves, scoped as {@link countUnreadMessagesInScope}.
+ *
+ * Read-only: it does not move the cursor, because the caller is a stream
+ * deciding what to announce, not an agent catching up. `get_messages` remains
+ * the only thing that marks anything read.
+ */
+export function unreadMessagesInScope(
+	ctx: DomainContext,
+	agentId: string,
+	limit = 10,
+	/** As {@link countUnreadMessagesInScope}: an explicit subscription wins, and `null` is every project. */
+	subscribed?: readonly string[] | null
+): Message[] {
+	const projectIds = subscribed === undefined ? projectsForAgent(ctx, agentId) : subscribed;
+	const mine = authorText({ kind: 'agent', agentId });
+	const after = readCursorSeq(ctx.db, agentId);
+
+	const messages = listMessages(ctx.db, { afterSeq: after, excludeAuthor: mine, limit });
+	return projectIds === null
+		? messages
+		: messages.filter(
+				(message) => message.projectId !== null && projectIds.includes(message.projectId)
+			);
 }
 
 export type ThreadQuery = {

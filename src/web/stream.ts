@@ -72,6 +72,8 @@ export const EVENT_TYPES = [
 	'task.created',
 	'task.updated',
 	'message.created',
+	// An agent saying "on it" or "done" without words (migration 013).
+	'ack.updated',
 	'request.created',
 	'request.answered',
 	'agent.presence',
@@ -251,7 +253,17 @@ export class SharedStream {
 
 	private readonly handlers: LinkHandlers = {
 		frame: (frame) => {
-			this.cursor = Math.max(this.cursor, frame.seq);
+			// `resync` is the server stating where the stream actually is, so its seq
+			// is adopted rather than raised to the greater of the two. Every other
+			// frame only ever moves forward within one server lifetime.
+			//
+			// The case this exists for is a restart. The bus counts from zero in the
+			// server's memory and is never persisted, so a redeployed process issues
+			// 1, 2, 3 again — and a cursor still holding a figure from the previous
+			// process would resume from a seq that server has not reached, be told
+			// `resync`, and then keep asking for the same impossible cursor on every
+			// reconnect afterwards.
+			this.cursor = frame.type === 'resync' ? frame.seq : Math.max(this.cursor, frame.seq);
 			const message: StreamMessage = {
 				type: frame.type,
 				data: frame.data,
@@ -286,6 +298,48 @@ export class SharedStream {
 	/** Is there a connection behind this, as far as the link can tell? */
 	get connected(): boolean {
 		return this.link.connected;
+	}
+
+	/**
+	 * Bring a tab that may have been asleep back into line (design §4).
+	 *
+	 * The case this exists for is the one nothing else can see. A backgrounded
+	 * tab — a phone with the dashboard on its home screen, a laptop lid closed
+	 * for an hour — can have its connection dropped by the OS, the network or an
+	 * intermediary without the page ever being run to hear about it. `EventSource`
+	 * reconnects by itself when it *notices*, and a frozen page notices nothing:
+	 * it wakes up believing it is connected, and stays silent until somebody
+	 * reloads. Which is exactly what "sometimes I have to refresh" is.
+	 *
+	 * Two halves, and both are needed. **`resync` repairs the data**: every store
+	 * refetches its snapshot, so whatever arrived while this tab was not listening
+	 * is on screen even if the socket was fine. **The reconnect repairs the
+	 * future**: a socket that died quietly is replaced, resuming from this tab's
+	 * cursor, so the next event actually lands. A resync without the reconnect
+	 * leaves a tab correct once and deaf afterwards.
+	 *
+	 * Doing nothing when nobody is subscribed is deliberate: there is no
+	 * connection to repair and no store to tell.
+	 */
+	revive(options: { reconnect?: boolean } = {}): void {
+		if (this.consumers.size === 0) return;
+
+		if (options.reconnect) {
+			this.link.stop();
+			this.link.start(this.handlers, () => this.cursor);
+		}
+
+		// The same frame the server sends when a cursor is too old for the replay
+		// buffer, so the refetch path in every store is the one already written and
+		// already tested (`src/http/README.md`).
+		const message: StreamMessage = {
+			type: 'resync',
+			data: '{}',
+			lastEventId: String(this.cursor)
+		};
+		for (const consumer of [...this.consumers]) {
+			if (consumer.types.includes('resync')) consumer.listener(message);
+		}
 	}
 
 	/**
@@ -593,6 +647,55 @@ export function browserLink(openStream?: OpenStream, env: Platform = platform())
 	return new LeaderLink({ locks, channel: () => channel(CHANNEL_NAME), connect });
 }
 
+/**
+ * How long a tab must have been hidden before waking it warrants a new socket.
+ *
+ * A glance at another window and back is not a connection problem, and tearing
+ * the stream down for one would churn the leader election every time the owner
+ * alt-tabs. Half a minute is past the point where a phone has had time to
+ * suspend the page.
+ */
+export const STALE_HIDDEN_MS = 30_000;
+
+/**
+ * Repair the stream when this tab comes back to life.
+ *
+ * Registered once, on the hub, for as long as the page exists — deliberately not
+ * per store, because the thing being recovered is the connection they share.
+ *
+ * `online` always reconnects: the browser is telling us the previous socket
+ * cannot have survived. `visibilitychange` reconnects only after a long hide,
+ * for the reason {@link STALE_HIDDEN_MS} gives, but resyncs either way — a tab
+ * that was hidden for ten seconds may still have missed something, and one
+ * snapshot refetch is cheap next to a dashboard quietly showing yesterday.
+ */
+function reviveOnWake(hub: SharedStream): void {
+	if (typeof document === 'undefined' || typeof window === 'undefined') return;
+
+	let hiddenAt: number | null = document.visibilityState === 'hidden' ? Date.now() : null;
+
+	document.addEventListener('visibilitychange', () => {
+		if (document.visibilityState === 'hidden') {
+			hiddenAt = Date.now();
+			return;
+		}
+
+		const asleep = hiddenAt === null ? 0 : Date.now() - hiddenAt;
+		hiddenAt = null;
+		hub.revive({ reconnect: asleep >= STALE_HIDDEN_MS || !hub.connected });
+	});
+
+	window.addEventListener('online', () => hub.revive({ reconnect: true }));
+
+	// A page restored from the back-forward cache was never torn down and never
+	// re-run: its `EventSource` is whatever the browser left of it, which on iOS
+	// is usually nothing. `persisted` is the browser saying exactly that, so this
+	// one always takes a fresh socket.
+	window.addEventListener('pageshow', (event) => {
+		if ((event as PageTransitionEvent).persisted) hub.revive({ reconnect: true });
+	});
+}
+
 let shared: SharedStream | null = null;
 
 /**
@@ -603,5 +706,8 @@ let shared: SharedStream | null = null;
  * shared by every request that never connects to anything.
  */
 export function sharedStream(): SharedStream {
-	return (shared ??= new SharedStream(browserLink()));
+	if (shared) return shared;
+	shared = new SharedStream(browserLink());
+	reviveOnWake(shared);
+	return shared;
 }

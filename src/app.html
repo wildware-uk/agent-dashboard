@@ -5,6 +5,43 @@
 		<meta name="viewport" content="width=device-width, initial-scale=1" />
 		<meta name="color-scheme" content="dark light" />
 		<meta name="text-scale" content="scale" />
+		<meta
+			name="description"
+			content="Watch what your coding agents are doing, and answer the questions they stop on."
+		/>
+
+		<!--
+			Installable on a phone (design §7).
+
+			The manifest is what "Add to home screen" reads for the name, the icon and
+			the standalone display; the `apple-` pair beside it is what iOS reads,
+			because Safari does not take the name or the icon from the manifest. Both
+			are needed, and neither is a duplicate of the other.
+
+			`theme-color` is stated twice by media query and then corrected by the
+			script below, so the phone's status bar matches the surface the page
+			actually painted rather than only what the OS prefers.
+
+			The apple-touch icons are stated at three sizes AND the 180 lives at the
+			site root, because iOS looks for `/apple-touch-icon.png` by convention
+			when it does not like what it found in the head — a home screen icon that
+			silently falls back to a letter is the failure this redundancy buys off.
+			The PNG `rel=icon` sizes are for Android, which will not install a
+			manifest icon it cannot rasterise and does not accept an SVG for it.
+		-->
+		<link rel="manifest" href="/manifest.webmanifest" />
+		<meta name="theme-color" content="#111419" media="(prefers-color-scheme: dark)" />
+		<meta name="theme-color" content="#fbfcfd" media="(prefers-color-scheme: light)" />
+		<link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png" />
+		<link rel="apple-touch-icon" sizes="167x167" href="/icons/apple-touch-icon-167.png" />
+		<link rel="apple-touch-icon" sizes="152x152" href="/icons/apple-touch-icon-152.png" />
+		<link rel="icon" type="image/svg+xml" href="/icons/icon.svg" />
+		<link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png" />
+		<link rel="icon" type="image/png" sizes="192x192" href="/icons/icon-192.png" />
+		<meta name="apple-mobile-web-app-capable" content="yes" />
+		<meta name="mobile-web-app-capable" content="yes" />
+		<meta name="apple-mobile-web-app-title" content="Agents" />
+		<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
 		<!--
 			Dark-first with system preference (design §7).
 
@@ -30,6 +67,17 @@
 				const root = document.documentElement;
 				root.dataset.theme = theme;
 				root.classList.toggle('dark', theme === 'dark');
+				// The status bar of an installed app, matched to the theme that just
+				// won. The two media-query copies above cannot do this on their own:
+				// they follow the OS, and an owner who chose light on a dark phone
+				// would get a dark bar above a light page.
+				for (const tag of document.querySelectorAll('meta[name="theme-color"]')) {
+					tag.remove();
+				}
+				const meta = document.createElement('meta');
+				meta.name = 'theme-color';
+				meta.content = theme === 'dark' ? '#111419' : '#fbfcfd';
+				document.head.appendChild(meta);
 			})();
 		</script>
 		%sveltekit.head%

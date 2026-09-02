@@ -1,12 +1,15 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { insertProject } from '$db';
+import { insertMedia, insertProject } from '$db';
 import {
 	createProject,
 	findProject,
 	listProjects,
+	markProjectSeen,
 	resolveProject,
+	unseenUpdateCounts,
 	updateProject
 } from './projects';
+import { postUpdate } from './updates';
 import { DomainError } from './errors';
 import { FIXED_NOW, harness, type Harness } from './testing';
 
@@ -239,5 +242,290 @@ describe('updateProject', () => {
 		expect(() => updateProject(h, 'nope', { pinned: true })).toThrowError(
 			expect.objectContaining({ code: 'not_found' })
 		);
+	});
+});
+
+/**
+ * Per-project styling (design §7, §8).
+ *
+ * The colour check is a security boundary rather than a formatting preference:
+ * these values reach a CSS custom property on the owner's dashboard, and agents
+ * can set them. Most of what is asserted here is what the domain refuses.
+ */
+describe('themes', () => {
+	const themed = (theme: Parameters<typeof updateProject>[2]['theme']) =>
+		updateProject(h, 'dash', { theme });
+
+	beforeEach(() => {
+		createProject(h, { name: 'Dash', slug: 'dash' });
+	});
+
+	it('takes a background, an accent and a logo', () => {
+		const media = readyImage();
+
+		expect(
+			themed({ background: '#101820', accent: '#ffb300', logoMediaId: media.id }).theme
+		).toEqual({ background: '#101820', accent: '#ffb300', logoMediaId: media.id });
+	});
+
+	it('normalises a shorthand colour, so one colour is one string', () => {
+		expect(themed({ accent: '#F0A' }).theme).toEqual({ accent: '#ff00aa' });
+	});
+
+	it('merges rather than replacing, so setting one thing keeps the others', () => {
+		themed({ background: '#101820' });
+
+		expect(themed({ accent: '#ffb300' }).theme).toEqual({
+			background: '#101820',
+			accent: '#ffb300'
+		});
+	});
+
+	it('clears one field when it is explicitly null', () => {
+		themed({ background: '#101820', accent: '#ffb300' });
+
+		expect(themed({ background: null }).theme).toEqual({ accent: '#ffb300' });
+	});
+
+	it('clears the whole theme when the theme itself is null', () => {
+		themed({ background: '#101820' });
+
+		expect(updateProject(h, 'dash', { theme: null }).theme).toBeNull();
+	});
+
+	it('is null rather than empty once the last field goes', () => {
+		themed({ accent: '#ffb300' });
+
+		expect(themed({ accent: null }).theme).toBeNull();
+	});
+
+	it.each([
+		['a named colour', 'red'],
+		['a var reference', 'var(--surface)'],
+		['a url', 'url(https://evil.example/x.png)'],
+		['anything with a semicolon', '#fff; position: fixed'],
+		['a closing brace', '#fff}html{display:none'],
+		['an expression', 'color-mix(in srgb, red, blue)'],
+		['rgb notation', 'rgb(1, 2, 3)'],
+		['too few digits', '#ff'],
+		['too many digits', '#1234567'],
+		['no hash at all', '112233']
+	])('refuses %s', (_name, value) => {
+		expect(() => themed({ accent: value })).toThrow(/hex colour/);
+	});
+
+	it('refuses a logo that is not a media row at all', () => {
+		expect(() => themed({ logoMediaId: 'nope' })).toThrow(/no such media/);
+	});
+
+	it('refuses a logo the pipeline has not finished with', () => {
+		const media = insertMedia(h.db, {
+			agentId: h.agent('uploader'),
+			kind: 'image',
+			mime: 'image/png',
+			bytes: 10,
+			sha256: 'a'.repeat(64),
+			status: 'pending'
+		});
+
+		expect(() => themed({ logoMediaId: media.id })).toThrow(/still being processed/);
+	});
+
+	it('refuses a video as a logo, which has no still to show', () => {
+		const media = insertMedia(h.db, {
+			agentId: h.agent('uploader'),
+			kind: 'video',
+			mime: 'video/mp4',
+			bytes: 10,
+			sha256: 'b'.repeat(64),
+			status: 'ready'
+		});
+
+		expect(() => themed({ logoMediaId: media.id })).toThrow(/must be an image/);
+	});
+
+	it('lets a logo stand in for the name', () => {
+		const media = readyImage();
+
+		expect(themed({ logoMediaId: media.id, logoReplacesName: true }).theme).toEqual({
+			logoMediaId: media.id,
+			logoReplacesName: true
+		});
+	});
+
+	it('refuses the flag without a logo to show instead of the name', () => {
+		expect(() => themed({ logoReplacesName: true })).toThrow(/needs a logo/);
+	});
+
+	it('drops the flag with the logo, so no header renders a name-shaped hole', () => {
+		const media = readyImage();
+		themed({ logoMediaId: media.id, logoReplacesName: true });
+
+		expect(themed({ logoMediaId: null }).theme).toBeNull();
+	});
+
+	it('stores nothing for false, which is the default anyway', () => {
+		const media = readyImage();
+		themed({ logoMediaId: media.id, logoReplacesName: true });
+
+		expect(themed({ logoReplacesName: false }).theme).toEqual({ logoMediaId: media.id });
+	});
+
+	it('publishes once, so every open tab restyles without a reload', () => {
+		h.events.length = 0;
+		themed({ accent: '#ffb300' });
+
+		expect(h.eventNames()).toEqual(['project.updated']);
+	});
+
+	function readyImage() {
+		return insertMedia(h.db, {
+			agentId: h.agent('uploader'),
+			kind: 'image',
+			mime: 'image/png',
+			bytes: 10,
+			sha256: 'c'.repeat(64),
+			status: 'ready'
+		});
+	}
+});
+
+/**
+ * Board columns (design §7).
+ *
+ * A column gathers task states; a state belongs to exactly one column. Anything
+ * else draws the same task in two lanes.
+ */
+describe('the board', () => {
+	beforeEach(() => {
+		if (!findProject(h, 'dash')) createProject(h, { name: 'Dash', slug: 'dash' });
+	});
+
+	const board = (value: unknown) => updateProject(h, 'dash', { board: value });
+
+	it('takes an ordered set of columns', () => {
+		expect(
+			board({
+				columns: [
+					{ title: 'Queue', states: ['todo'] },
+					{ title: 'Doing', states: ['claimed'] }
+				]
+			}).board
+		).toEqual({
+			columns: [
+				{ title: 'Queue', states: ['todo'] },
+				{ title: 'Doing', states: ['claimed'] }
+			]
+		});
+	});
+
+	it('lets one column gather several states', () => {
+		expect(board({ columns: [{ title: 'Over', states: ['done', 'cancelled'] }] }).board).toEqual({
+			columns: [{ title: 'Over', states: ['done', 'cancelled'] }]
+		});
+	});
+
+	it('refuses the same state in two columns, which would draw a task twice', () => {
+		expect(() =>
+			board({
+				columns: [
+					{ title: 'One', states: ['todo'] },
+					{ title: 'Two', states: ['todo'] }
+				]
+			})
+		).toThrow(/already in another column/);
+	});
+
+	it('refuses a column that gathers nothing, which no task could enter', () => {
+		expect(() => board({ columns: [{ title: 'Empty', states: [] }] })).toThrow(/at least one/);
+	});
+
+	it('refuses a state that is not one', () => {
+		expect(() => board({ columns: [{ title: 'X', states: ['blocked'] }] })).toThrow(
+			/must be any of/
+		);
+	});
+
+	it('refuses a board with no columns at all', () => {
+		expect(() => board({ columns: [] })).toThrow(/at least one column/);
+	});
+
+	it('refuses a nameless column', () => {
+		expect(() => board({ columns: [{ title: '  ', states: ['todo'] }] })).toThrow(/title/);
+	});
+
+	it('caps how many columns a board is allowed', () => {
+		const columns = Array.from({ length: 7 }, (_, index) => ({
+			title: `C${index}`,
+			states: []
+		}));
+
+		expect(() => board({ columns })).toThrow(/at most 6 columns/);
+	});
+
+	it('restores the default when set to null', () => {
+		board({ columns: [{ title: 'Queue', states: ['todo'] }] });
+
+		expect(board(null).board).toBeNull();
+	});
+
+	it('replaces wholesale rather than merging, unlike the theme', () => {
+		board({
+			columns: [
+				{ title: 'One', states: ['todo'] },
+				{ title: 'Two', states: ['claimed'] }
+			]
+		});
+
+		expect(board({ columns: [{ title: 'Only', states: ['done'] }] }).board?.columns).toHaveLength(
+			1
+		);
+	});
+});
+
+describe('markProjectSeen', () => {
+	it('stamps the project and tells every open tab, so a badge cannot clear in one window only', () => {
+		const { project } = createProject(h, { name: 'Agent Dashboard' });
+
+		const seen = markProjectSeen(h, project.slug);
+
+		expect(seen.ownerSeenAt).toBe(FIXED_NOW);
+		expect(h.eventNames()).toContain('project.updated');
+	});
+
+	it('does not bump updated_at: reading a project is not editing it', () => {
+		const { project } = createProject(h, { name: 'Agent Dashboard' });
+
+		expect(markProjectSeen(h, project.slug).updatedAt).toBe(project.updatedAt);
+	});
+
+	it('takes a slug or an id, like everything else that names a project', () => {
+		const { project } = createProject(h, { name: 'Agent Dashboard' });
+
+		expect(markProjectSeen(h, project.id).id).toBe(project.id);
+	});
+
+	it('says which project it could not find', () => {
+		expect(() => markProjectSeen(h, 'nope')).toThrow(DomainError);
+	});
+});
+
+describe('unseenUpdateCounts', () => {
+	it('counts what has landed since the owner last looked, per project', () => {
+		const { project } = createProject(h, { name: 'Agent Dashboard' });
+		const agentId = h.agent('scout');
+		postUpdate(h, { project: project.slug, agentId, body: 'one' });
+
+		expect(unseenUpdateCounts(h)).toEqual({ [project.id]: 1 });
+
+		markProjectSeen(h, project.slug);
+
+		expect(unseenUpdateCounts(h)).toEqual({});
+	});
+
+	it('leaves a caught-up project out rather than reporting a zero nobody should badge', () => {
+		createProject(h, { name: 'Quiet' });
+
+		expect(unseenUpdateCounts(h)).toEqual({});
 	});
 });

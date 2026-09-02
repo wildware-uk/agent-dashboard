@@ -67,7 +67,18 @@ export {
 } from './media';
 export { agentLabel, avatarFor, type Avatar } from './avatar';
 export { LEVELS, levelStyle, type LevelStyle } from './levels';
-export { dayKey, dayLabel, groupByDay, timeLabel, type DayGroup, type Dated } from './days';
+export {
+	absoluteLabel,
+	dayKey,
+	dayLabel,
+	groupByDay,
+	relativeLabel,
+	timeLabel,
+	type DayGroup,
+	type Dated
+} from './days';
+/** One ticking clock for every relative timestamp on the page (design §7). */
+export { Clock, TICK_MS, clock, type ClockOptions } from './clock.svelte';
 export type {
 	MediaKind,
 	MediaStatus,
@@ -105,7 +116,8 @@ export { Tasks } from './tasks.svelte';
 export type { TasksOptions, TasksStatus } from './tasks.svelte';
 /**
  * What agents are waiting on the owner for (design §5, §7). One store per page,
- * rendered in the sticky top banner above everything else.
+ * read by two regions: the cards at the top of the feed, and the sidebar's
+ * per-project count.
  */
 export { Requests, browserNotifier } from './requests.svelte';
 export type { Notifier, RequestsOptions, RequestsStatus } from './requests.svelte';
@@ -116,3 +128,10 @@ export type {
 	PresenceOptions,
 	PresenceStatus
 } from './presence.svelte';
+/**
+ * Web Push in the browser (design §7): whether *this* browser will be told that
+ * an agent is waiting, derived from the deployment, the OS grant and the
+ * subscription rather than remembered.
+ */
+export { Push, decodeKey } from './push.svelte';
+export type { PushOptions, PushPermission, PushStatus } from './push.svelte';

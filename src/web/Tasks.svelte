@@ -25,11 +25,13 @@
 	 * it was on a card: every one of them begins `01` until 2039.
 	 */
 	import { onMount } from 'svelte';
+	import { resolve } from '$app/paths';
 	import { actionMessage, type OwnerActions } from './actions';
 	import { Tasks } from './tasks.svelte';
+	import Ack from './Ack.svelte';
 	import Thread from './Thread.svelte';
 	import type { ThreadSource } from './threads.svelte';
-	import type { ProjectView, TaskView } from './types';
+	import type { AckView, ProjectView, TaskView } from './types';
 
 	let {
 		/** The live list. Owned by whoever mounts this; a spec injects its own. */
@@ -50,12 +52,21 @@
 		 * that needed it belonged to #11. Optional so a spec can mount the panel
 		 * without one.
 		 */
-		threads = undefined
+		threads = undefined,
+		/**
+		 * Ids of the agents beating right now (design §4).
+		 *
+		 * A task's "is thinking…" is only shown while the agent that said it is
+		 * alive — a session that died mid-job must stop animating rather than keep
+		 * claiming to be busy (migration 013).
+		 */
+		onlineIds = []
 	}: {
 		tasks?: Tasks;
 		project?: string | null;
 		projects?: ProjectView[];
 		agentNames?: Record<string, string>;
+		onlineIds?: string[];
 		actions: OwnerActions;
 		threads?: ThreadSource;
 	} = $props();
@@ -138,6 +149,40 @@
 
 	function reassign(task: TaskView, value: string): void {
 		void steer(task, () => actions.patchTask(task.id, { agentId: value === '' ? null : value }));
+	}
+
+	/**
+	 * Offer an unclaimed task to the project's agents, or take it back.
+	 *
+	 * Not the same act as assigning it, which is why it is a button beside the
+	 * assignee select rather than an entry inside it: an assignment names who must
+	 * do the work, this says whoever gets there first. Every agent working the
+	 * project is woken, and the first `claim_task` wins.
+	 */
+	function broadcast(task: TaskView, on: boolean): void {
+		void steer(task, () => actions.patchTask(task.id, { broadcast: on }));
+	}
+
+	/**
+	 * The acknowledgements on the task itself, as opposed to on its messages.
+	 *
+	 * Read off the task store, because a task acknowledgement rides in the same
+	 * document as the tasks — `list_tasks` and `acknowledge` are both about the
+	 * task, and a second store for one field would be a second cursor to keep in
+	 * step.
+	 */
+	function acksForTask(taskId: string): AckView[] {
+		return tasks.acksForTask(taskId);
+	}
+
+	/** The acknowledgements on one task's *messages*, keyed by message id. */
+	function ackedMessages(taskId: string): Record<string, AckView[]> {
+		const map: Record<string, AckView[]> = {};
+		for (const message of threads?.forTask(taskId) ?? []) {
+			const said = threads?.acksFor?.(message.id) ?? [];
+			if (said.length > 0) map[message.id] = said;
+		}
+		return map;
 	}
 
 	function nameFor(agentId: string | null): string | null {
@@ -284,9 +329,20 @@
 									shown the way they were typed and never as markup, which is
 									the same rule the timeline keeps for agent markdown (§8).
 								-->
-								<p style="overflow-wrap:anywhere" class="min-w-0 font-medium text-content">
+								<!--
+									The title is the way into the task's own page, where its
+									updates and current status are (design §7). A link rather
+									than a button: it is a place, and the owner should be able
+									to open it in a tab.
+								-->
+								<a
+									href={resolve('/tasks/[id]', { id: task.id })}
+									style="overflow-wrap:anywhere"
+									data-testid="task-link"
+									class="min-w-0 font-medium text-content hover:underline"
+								>
 									{task.title}
-								</p>
+								</a>
 								{#if task.body !== ''}
 									<p style="overflow-wrap:anywhere" class="min-w-0 text-xs text-content-muted">
 										{task.body}
@@ -298,6 +354,15 @@
 										{task.result}
 									</p>
 								{/if}
+
+								<!--
+									What an agent has said about the task without saying it in
+									words (migration 013). Under the brief, above the controls:
+									it answers "has anybody got this", which is the question the
+									owner asks between reading the title and reaching for the
+									assignee select.
+								-->
+								<Ack acks={acksForTask(task.id)} {agentNames} {onlineIds} />
 
 								{#if task.state === 'todo' || task.state === 'claimed'}
 									<div class="flex min-w-0 flex-wrap items-center gap-2">
@@ -317,6 +382,30 @@
 												{/each}
 											</select>
 										</label>
+
+										<!--
+											Only for work nobody holds. A claimed task already has
+											somebody on it, and offering it round would put the rest
+											of the fleet into a race they must lose — the server
+											refuses it too, but a button that exists only to be
+											refused is worse than one that is not there.
+										-->
+										{#if task.state === 'todo' && task.agentId === null}
+											<button
+												type="button"
+												disabled={busy}
+												aria-pressed={task.broadcastAt !== null && task.broadcastAt !== undefined}
+												aria-label={task.broadcastAt
+													? `Recall task ${task.title} from the project's agents`
+													: `Send task ${task.title} to the project's agents`}
+												onclick={() => broadcast(task, !task.broadcastAt)}
+												class="min-h-11 rounded border px-2 text-xs disabled:opacity-50 {task.broadcastAt
+													? 'border-sky-500 text-sky-400'
+													: 'border-border-subtle text-content-muted hover:text-content'}"
+											>
+												{task.broadcastAt ? 'Sent to agents' : 'Send to agents'}
+											</button>
+										{/if}
 
 										<button
 											type="button"
@@ -381,6 +470,8 @@
 								<Thread
 									messages={threads?.forTask(task.id) ?? []}
 									{agentNames}
+									acks={ackedMessages(task.id)}
+									{onlineIds}
 									onreply={async (body) => {
 										await actions.postMessage({ task: task.id, body });
 									}}
