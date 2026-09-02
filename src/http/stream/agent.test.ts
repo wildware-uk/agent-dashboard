@@ -566,6 +566,33 @@ describe('saying each message once', () => {
 	});
 
 	/**
+	 * The regression that took a live session silent.
+	 *
+	 * Every session here shares one bearer token, so they are one agent — and
+	 * "delivered to this agent" meant the first connection handed a message
+	 * consumed the only delivery there was. A dead session's bridge still
+	 * holding a socket open swallowed the owner's messages whole.
+	 */
+	it('tells a second session even though the first was already told', async () => {
+		const mcp = mcpHarness();
+		const { project } = createProject(mcp.h, { name: 'Dashboard' });
+		postMessage(mcp.h, { project: project.slug, author: { kind: 'human' }, body: 'both of you' });
+
+		const first = connect(mcp, mcp.token, `?project=${project.slug}&client=session-a`);
+		expect(bodiesOf((await first.take(4)).find((frame) => frame.event === 'message'))).toEqual([
+			'both of you'
+		]);
+
+		// A different session, the same token, the same still-unread message.
+		const second = connect(mcp, mcp.token, `?project=${project.slug}&client=session-b`);
+		const frames = await second.take(4);
+		first.abort.abort();
+		second.abort.abort();
+
+		expect(bodiesOf(frames.find((frame) => frame.event === 'message'))).toEqual(['both of you']);
+	});
+
+	/**
 	 * The half a per-connection memory could not cover.
 	 *
 	 * Delivery is written down (migration 018), so a dropped connection and a
@@ -578,14 +605,14 @@ describe('saying each message once', () => {
 		const { project } = createProject(mcp.h, { name: 'Dashboard' });
 		postMessage(mcp.h, { project: project.slug, author: { kind: 'human' }, body: 'told you' });
 
-		const first = connect(mcp, mcp.token, `?project=${project.slug}`);
+		const first = connect(mcp, mcp.token, `?project=${project.slug}&client=session-a`);
 		expect(bodiesOf((await first.take(4)).find((frame) => frame.event === 'message'))).toEqual([
 			'told you'
 		]);
 		first.abort.abort();
 
-		// Same agent, same still-unread message, a brand new connection.
-		const again = connect(mcp, mcp.token, `?project=${project.slug}`);
+		// The same session reconnecting: same client id, same still-unread message.
+		const again = connect(mcp, mcp.token, `?project=${project.slug}&client=session-a`);
 		const frames = await again.take(3);
 		again.abort.abort();
 
@@ -702,5 +729,64 @@ describe('what the owner answered', () => {
 
 		expect(frames.some((frame) => frame.event === 'answer')).toBe(false);
 		expect(counts(workFrames(frames).at(-1)!)).toEqual([0, 1, 0]);
+	});
+});
+
+/**
+ * Bridges that predate client ids (migration 019).
+ *
+ * They keep working: nothing durable is keyed to them, so they remember within
+ * the connection — which repeats after their own reconnect, and never swallows
+ * a delivery another session needed.
+ */
+describe('a connection that does not name itself', () => {
+	it('is told once per connection rather than once per agent', async () => {
+		const mcp = mcpHarness();
+		const { project } = createProject(mcp.h, { name: 'Dashboard' });
+		postMessage(mcp.h, { project: project.slug, author: { kind: 'human' }, body: 'hear me' });
+
+		const first = connect(mcp, mcp.token, `?project=${project.slug}`);
+		await first.take(4);
+		const second = connect(mcp, mcp.token, `?project=${project.slug}`);
+		const frames = await second.take(4);
+		first.abort.abort();
+		second.abort.abort();
+
+		expect(bodiesOf(frames.find((frame) => frame.event === 'message'))).toEqual(['hear me']);
+	});
+
+	it('does not repeat itself while it stays connected', async () => {
+		const mcp = mcpHarness();
+		const { project } = createProject(mcp.h, { name: 'Dashboard' });
+		const stream = connect(mcp, mcp.token, `?project=${project.slug}`);
+		await stream.take(3);
+
+		postMessage(mcp.h, { project: project.slug, author: { kind: 'human' }, body: 'first' });
+		await stream.take(5);
+		postMessage(mcp.h, { project: project.slug, author: { kind: 'human' }, body: 'second' });
+		const frames = await stream.take(7);
+		stream.abort.abort();
+
+		const messages = frames.filter((frame) => frame.event === 'message');
+		expect(messages.flatMap((frame) => bodiesOf(frame))).toEqual(['first', 'second']);
+	});
+
+	it('leaves one delivery on the card however many sockets were open', async () => {
+		const mcp = mcpHarness();
+		const { project } = createProject(mcp.h, { name: 'Dashboard' });
+		const message = postMessage(mcp.h, {
+			project: project.slug,
+			author: { kind: 'human' },
+			body: 'once on the card'
+		});
+
+		const first = connect(mcp, mcp.token, `?project=${project.slug}`);
+		await first.take(4);
+		const second = connect(mcp, mcp.token, `?project=${project.slug}&client=session-b`);
+		await second.take(4);
+		first.abort.abort();
+		second.abort.abort();
+
+		expect(deliveriesFor(mcp.h, [message.id])).toHaveLength(1);
 	});
 });

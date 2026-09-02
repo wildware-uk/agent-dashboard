@@ -48,6 +48,7 @@
  * rather than a replay (the server sends them on connect). That is what makes
  * this safe to lose: the worst case is a late notification, never a wrong one.
  */
+import { randomUUID } from 'node:crypto';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 
@@ -152,6 +153,18 @@ export const INSTRUCTIONS = [
 	'withdrawn — it is not a prompt to act.'
 ].join('\n');
 
+/**
+ * A name for this bridge process, unique to it.
+ *
+ * Random rather than derived from the token or the machine: sessions share a
+ * token, and two of them answering to one name is the failure this identity
+ * exists to prevent. It lives as long as the process, so every reconnect it
+ * makes is recognisably the same client.
+ */
+export function newClientId(): string {
+	return `bridge-${randomUUID()}`;
+}
+
 /** Seconds to wait before reconnecting, backing off and then holding steady. */
 export const BACKOFF_MS = [1_000, 2_000, 5_000, 10_000, 30_000] as const;
 
@@ -175,6 +188,20 @@ export type BridgeOptions = {
 	 * without it.
 	 */
 	projects: readonly string[];
+	/**
+	 * What this bridge calls itself on the stream, stable for its own lifetime.
+	 *
+	 * The dashboard records deliveries against it, so a reconnect hears nothing
+	 * twice while a *second* session hears everything. Without one the server
+	 * falls back to remembering within the connection, which is correct but
+	 * forgets across a reconnect.
+	 *
+	 * It must not be shared between sessions: two sessions with one id are one
+	 * client as far as the dashboard is concerned, and that is exactly the bug
+	 * this exists to prevent — the sessions here share a bearer token, so the
+	 * token cannot be it.
+	 */
+	clientId?: string;
 	/** Test seam. */
 	fetch?: typeof globalThis.fetch;
 	/** Test seam: how a notification leaves. Defaults to the MCP server's. */
@@ -339,6 +366,11 @@ export async function runBridge(options: BridgeOptions): Promise<void> {
 	for (const project of options.projects) {
 		if (project.trim() !== '') endpoint.searchParams.append('project', project.trim());
 	}
+	// Named once, outside the reconnect loop: every reconnect is the same client,
+	// which is what makes "already delivered" mean "this session has it" rather
+	// than "somebody holding this token has it".
+	const clientId = options.clientId ?? newClientId();
+	endpoint.searchParams.set('client', clientId);
 	const url = endpoint.toString();
 
 	/**

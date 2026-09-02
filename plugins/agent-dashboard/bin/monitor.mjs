@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
+import { randomUUID } from "node:crypto";
 var __defProp = Object.defineProperty;
 var __getOwnPropDesc = Object.getOwnPropertyDescriptor;
 var __getOwnPropNames = Object.getOwnPropertyNames;
@@ -12843,6 +12844,17 @@ var require_limit = /* @__PURE__ */ __commonJSMin(((exports) => {
 	"expected back through it. A count that drops to zero means the work is done or was",
 	"withdrawn — it is not a prompt to act."
 ].join("\n");
+/**
+* A name for this bridge process, unique to it.
+*
+* Random rather than derived from the token or the machine: sessions share a
+* token, and two of them answering to one name is the failure this identity
+* exists to prevent. It lives as long as the process, so every reconnect it
+* makes is recognisably the same client.
+*/
+function newClientId() {
+	return `bridge-${randomUUID()}`;
+}
 /** Seconds to wait before reconnecting, backing off and then holding steady. */
 var BACKOFF_MS = [
 	1e3,
@@ -12926,6 +12938,8 @@ async function runBridge(options) {
 	if (!notify) throw new Error("runBridge needs a notify function");
 	const endpoint = new URL("/api/agent/stream", baseUrl);
 	for (const project of options.projects) if (project.trim() !== "") endpoint.searchParams.append("project", project.trim());
+	const clientId = options.clientId ?? newClientId();
+	endpoint.searchParams.set("client", clientId);
 	const url = endpoint.toString();
 	/**
 	* A rise waiting for the message frame that explains it.

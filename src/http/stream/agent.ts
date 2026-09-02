@@ -101,6 +101,23 @@ export const MESSAGE_LIMIT = 5;
 /** The query parameter an agent subscribes with: `?project=a,b`. */
 export const PROJECT_PARAM = 'project';
 
+/**
+ * The query parameter a bridge names itself with: `?client=<id>`.
+ *
+ * Two sessions can share one bearer token, so the token does not say *who is
+ * connected* — and "delivered to this agent" let the first connection handed a
+ * message consume the only delivery there was. With a dead session's bridge
+ * still holding a socket, the message was marked delivered and reached nobody.
+ *
+ * A client id is stable for the life of a bridge process, so a reconnect is the
+ * same client and hears nothing twice, while a second session is a second
+ * client and hears everything. Opaque here: the server never interprets it.
+ */
+export const CLIENT_PARAM = 'client';
+
+/** As much of a client id as is stored. Longer is a caller bug, not a secret. */
+export const CLIENT_ID_MAX = 200;
+
 /** The wildcard a session sends to say "every project in this deployment". */
 export const ALL_PROJECTS = '*';
 
@@ -263,21 +280,32 @@ function scopedWork(
 function messageFrame(
 	ctx: DomainContext,
 	agentId: string,
-	subscribed: readonly string[] | null | undefined
+	subscribed: readonly string[] | null | undefined,
+	client: { id: string | null; sent: Set<string> }
 ): string {
 	const unread = unreadMessagesInScope(ctx, agentId, MESSAGE_LIMIT, subscribed);
 	if (unread.length === 0) return '';
 
+	// Two sources for the same question, and which one answers depends on whether
+	// this connection has a durable name. A bridge that gave a client id is asked
+	// of the database, so a reconnect or a redeploy does not repeat itself. One
+	// that did not — an older bridge — is asked of this connection only, which
+	// repeats after a reconnect but can never swallow another session's delivery.
 	const sent = alreadyDelivered(
 		ctx,
 		agentId,
+		client.id,
 		unread.map((message) => message.id)
 	);
-	const messages = unread.filter((message) => !sent.has(message.id));
+	const messages = unread.filter(
+		(message) => !sent.has(message.id) && !client.sent.has(message.id)
+	);
 	if (messages.length === 0) return '';
 
+	for (const message of messages) client.sent.add(message.id);
 	markMessagesDelivered(ctx, {
 		agentId,
+		clientId: client.id,
 		messageIds: messages.map((message) => message.id)
 	});
 
@@ -391,6 +419,13 @@ export function createAgentStreamHandler(
 
 		const agentId = auth.agent.id;
 
+		// Opaque, and trimmed to something a log can print. An absent or empty one
+		// means a connection with no durable name, which is handled rather than
+		// refused: older bridges predate this and must keep working.
+		const clientId =
+			new URL(event.request.url).searchParams.get(CLIENT_PARAM)?.trim().slice(0, CLIENT_ID_MAX) ||
+			null;
+
 		let subscribed: string[] | null | undefined;
 		try {
 			subscribed = subscription(ctx, new URL(event.request.url));
@@ -445,11 +480,20 @@ export function createAgentStreamHandler(
 				// the agent's first piece of work happens to arrive.
 				write(`${retryFrame(retryMs)}${commentFrame('connected')}`);
 
+				/**
+				 * This connection, as the message frame knows it.
+				 *
+				 * `sent` is the fallback memory for a client with no id: without it an
+				 * anonymous bridge would be re-sent the whole unread pile on every
+				 * event, since nothing durable is keyed to it.
+				 */
+				const client = { id: clientId, sent: new Set<string>() };
+
 				// The current counts before any event, so a reconnecting agent is
 				// correct without a replay to merge.
 				let last = scopedWork(ctx, agentId, subscribed);
 				write(workFrame(last, ctx.now()));
-				if (last.unreadMessages > 0) write(messageFrame(ctx, agentId, subscribed));
+				if (last.unreadMessages > 0) write(messageFrame(ctx, agentId, subscribed, client));
 
 				unsubscribe = bus.subscribe((published: AppEvent) => {
 					if (!WATCHED.includes(published.type)) return;
@@ -481,7 +525,7 @@ export function createAgentStreamHandler(
 					// The messages themselves, but only when there are more than there
 					// were: a count that fell is the agent reading its own inbox, and
 					// re-sending what it just read would be the same interruption twice.
-					if (rose) write(messageFrame(ctx, agentId, subscribed));
+					if (rose) write(messageFrame(ctx, agentId, subscribed, client));
 				});
 
 				if (heartbeatMs > 0) {

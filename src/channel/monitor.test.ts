@@ -98,7 +98,11 @@ describe('writing to the session', () => {
 	it('asks for the same stream the channel does, with the same subscription', async () => {
 		const { fetcher } = await monitor([work({})]);
 
-		expect(fetcher.mock.calls[0]?.[0]).toBe('https://dash.test/api/agent/stream?project=*');
+		const asked = new URL(fetcher.mock.calls[0]?.[0] as string);
+		expect(asked.origin + asked.pathname).toBe('https://dash.test/api/agent/stream');
+		expect(asked.searchParams.get('project')).toBe('*');
+		// And it names itself, so its deliveries are its own (migration 019).
+		expect(asked.searchParams.get('client')).toMatch(/^bridge-/);
 		expect(fetcher.mock.calls[0]?.[1]?.headers).toMatchObject({
 			authorization: 'Bearer a-token'
 		});
