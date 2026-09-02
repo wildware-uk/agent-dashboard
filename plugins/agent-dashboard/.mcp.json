@@ -1,0 +1,20 @@
+{
+	"mcpServers": {
+		"agent-dashboard": {
+			"type": "http",
+			"url": "${user_config.dashboard_url}/mcp",
+			"headers": {
+				"Authorization": "Bearer ${user_config.agent_token}"
+			}
+		},
+		"agent-dashboard-channel": {
+			"command": "node",
+			"args": ["${CLAUDE_PLUGIN_ROOT}/bin/channel.mjs"],
+			"env": {
+				"AGENT_DASHBOARD_URL": "${user_config.dashboard_url}",
+				"AGENT_DASHBOARD_TOKEN": "${user_config.agent_token}",
+				"AGENT_DASHBOARD_PROJECTS": "${user_config.projects}"
+			}
+		}
+	}
+}
