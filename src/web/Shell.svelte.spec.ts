@@ -455,3 +455,61 @@ describe('posting to the feed', () => {
 		expect(document.querySelector('[data-composer]')).toBeNull();
 	});
 });
+
+/**
+ * Opening the projects with a swipe (design §7).
+ *
+ * The owner asked for a pull in from the left edge to open the project drawer
+ * "instead of going back". Dispatched as real touch events here, because the
+ * decision this is testing is the wiring — `swipe.test.ts` already asserts what
+ * counts as a swipe.
+ */
+describe('the edge swipe', () => {
+	/** One finger, from here to there. */
+	function swipe(from: [number, number], to: [number, number]) {
+		const point = (x: number, y: number) =>
+			new Touch({ identifier: 1, target: document.body, clientX: x, clientY: y });
+
+		window.dispatchEvent(
+			new TouchEvent('touchstart', {
+				bubbles: true,
+				cancelable: true,
+				touches: [point(...from)]
+			})
+		);
+		window.dispatchEvent(
+			new TouchEvent('touchend', {
+				bubbles: true,
+				cancelable: true,
+				changedTouches: [point(...to)]
+			})
+		);
+	}
+
+	it('opens the projects on a pull in from the edge', async () => {
+		const { screen } = mount();
+
+		swipe([4, 400], [140, 405]);
+
+		await expect.element(screen.getByRole('dialog', { name: 'Projects' })).toBeVisible();
+	});
+
+	it('leaves a drag that started mid-screen alone', async () => {
+		const { screen } = mount();
+
+		swipe([200, 400], [340, 405]);
+
+		// Somebody dragging a wide code block sideways, which happens constantly.
+		await expect.element(screen.getByRole('dialog', { name: 'Projects' })).not.toBeInTheDocument();
+	});
+
+	it('closes again on a pull back towards the edge', async () => {
+		const { screen } = mount();
+		swipe([4, 400], [140, 405]);
+		await expect.element(screen.getByRole('dialog', { name: 'Projects' })).toBeVisible();
+
+		swipe([200, 400], [40, 405]);
+
+		await expect.element(screen.getByRole('dialog', { name: 'Projects' })).not.toBeInTheDocument();
+	});
+});
