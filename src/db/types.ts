@@ -367,6 +367,14 @@ export type Approval = Keyed & {
 	projectId: string | null;
 	updateId: string | null;
 	/**
+	 * The thread this was asked in (migration 022).
+	 *
+	 * An agent talking to the owner in a thread and then needing a decision used
+	 * to have to ask somewhere else entirely. This is where the question renders,
+	 * and it changes nothing else about the row.
+	 */
+	messageId: string | null;
+	/**
 	 * Which of the five kinds this is (design §5).
 	 *
 	 * Typed here but not `CHECK`ed in the table: migration 002 appends the column

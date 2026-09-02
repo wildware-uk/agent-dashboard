@@ -19,6 +19,7 @@
 	 * on the screen, not one in the owner's browser.
 	 */
 	import Ack from './Ack.svelte';
+	import RequestCard from './RequestCard.svelte';
 	import Attachments from './Attachments.svelte';
 	import Markdown from './Markdown.svelte';
 	import MediaGrid from './MediaGrid.svelte';
@@ -27,7 +28,7 @@
 	import { onMount } from 'svelte';
 	import { absoluteLabel, relativeLabel } from './days';
 	import { clock } from './clock.svelte';
-	import type { AckView, DeliveryView, MediaView, MessageView } from './types';
+	import type { AckView, DeliveryView, MediaView, MessageView, RequestView } from './types';
 	import type { OwnerActions } from './actions';
 	import { Uploads } from './uploads.svelte';
 
@@ -78,7 +79,20 @@
 		 * message grows a control that asks before it fires — deleting a post
 		 * takes its replies with it, and there is no undo.
 		 */
-		ondelete = undefined
+		ondelete = undefined,
+		/**
+		 * Questions an agent asked *in this thread*, by the message they were
+		 * asked under (migration 022).
+		 *
+		 * The owner asked for this: an agent already talking to them and then
+		 * needing a decision had to ask somewhere else entirely, so the question
+		 * arrived without the conversation that produced it. Rendered under the
+		 * message it followed, with its own controls, so it is answered where it
+		 * was asked.
+		 */
+		requests = {},
+		/** The owner's write calls, for answering a question in the thread. */
+		actions = undefined
 	}: {
 		messages?: MessageView[];
 		onreply: (body: string, mediaIds?: string[], answers?: string) => Promise<void>;
@@ -89,6 +103,8 @@
 		deliveries?: Record<string, DeliveryView[]>;
 		uploader?: Pick<OwnerActions, 'uploadMedia'>;
 		ondelete?: (id: string) => Promise<void>;
+		requests?: Record<string, RequestView[]>;
+		actions?: OwnerActions;
 	} = $props();
 
 	/**
@@ -329,6 +345,17 @@
 							Reply
 						</button>
 					</div>
+
+					{#if actions}
+						{#each requests[message.id] ?? [] as request (request.id)}
+							<!--
+								The question, under the words that led to it. Same card as the
+								feed's, so a question asked in a thread is answered with exactly
+								the controls a question asked anywhere else has.
+							-->
+							<RequestCard {request} agentName={agentNames[request.agentId]} {actions} />
+						{/each}
+					{/if}
 
 					{#if ondelete}
 						{#if confirming === message.id}

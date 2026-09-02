@@ -83,7 +83,16 @@
 		 * exist (a card three pages down arrives with the next read) and only then
 		 * moves the viewport.
 		 */
-		focus = null
+		focus = null,
+		/**
+		 * Questions asked inside a thread, by the message they were asked under
+		 * (migration 022).
+		 *
+		 * They render in the conversation rather than as cards at the top of the
+		 * feed: an agent that has been talking to its owner and then needs a
+		 * decision should be able to ask where the talking happened.
+		 */
+		threadRequests = {}
 	}: {
 		feed: Timeline;
 		requests?: RequestView[];
@@ -95,6 +104,7 @@
 		threads?: ThreadSource;
 		onlineIds?: string[];
 		focus?: string | null;
+		threadRequests?: Record<string, RequestView[]>;
 	} = $props();
 
 	/** The element a focus id names, whichever kind of thing it is. */
@@ -502,6 +512,7 @@
 							acks={acksFor(update.id)}
 							messageMedia={mediaForThread(update.id)}
 							messageDeliveries={deliveriesForThread(update.id)}
+							{threadRequests}
 							{onlineIds}
 						/>
 						{#if actions}
@@ -547,6 +558,7 @@
 						acks={acksFor(update.id)}
 						messageMedia={mediaForThread(update.id)}
 						messageDeliveries={deliveriesForThread(update.id)}
+						{threadRequests}
 						{onlineIds}
 					/>
 				{/each}
@@ -580,6 +592,7 @@
 								replyMedia={mediaForPost(row.post.id)}
 								postDeliveries={threads?.deliveriesFor?.(row.post.id) ?? []}
 								replyDeliveries={deliveriesForPost(row.post.id)}
+								{threadRequests}
 								uploader={actions}
 								{onlineIds}
 								onreply={async (body, mediaIds = [], answers) => {
@@ -617,6 +630,7 @@
 								acks={acksFor(row.update.id)}
 								messageMedia={mediaForThread(row.update.id)}
 								messageDeliveries={deliveriesForThread(row.update.id)}
+								{threadRequests}
 								{onlineIds}
 							/>
 						{/if}

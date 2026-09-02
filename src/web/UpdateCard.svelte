@@ -21,7 +21,14 @@
 	import { absoluteLabel, relativeLabel } from './days';
 	import { clock } from './clock.svelte';
 	import { levelStyle } from './levels';
-	import type { AckView, DeliveryView, MediaView, MessageView, UpdateView } from './types';
+	import type {
+		AckView,
+		DeliveryView,
+		MediaView,
+		MessageView,
+		RequestView,
+		UpdateView
+	} from './types';
 
 	let {
 		update,
@@ -85,7 +92,9 @@
 		/** The images on each message in this thread, by message id (migration 016). */
 		messageMedia = {},
 		/** Which agents each message in this thread has reached (migration 018). */
-		messageDeliveries = {}
+		messageDeliveries = {},
+		/** Questions asked inside this thread, by message id (migration 022). */
+		threadRequests = {}
 	}: {
 		update: UpdateView;
 		taskTitle?: string;
@@ -99,6 +108,7 @@
 		onlineIds?: string[];
 		messageMedia?: Record<string, MediaView[]>;
 		messageDeliveries?: Record<string, DeliveryView[]>;
+		threadRequests?: Record<string, RequestView[]>;
 	} = $props();
 
 	/**
@@ -267,6 +277,8 @@
 				{onlineIds}
 				media={messageMedia}
 				deliveries={messageDeliveries}
+				requests={threadRequests}
+				{actions}
 				uploader={actions}
 				ondelete={async (id) => {
 					await actions?.deleteMessage(id);

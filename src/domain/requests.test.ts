@@ -3,6 +3,7 @@ import { insertApproval, type Db } from '$db';
 import { EventBus } from '$events';
 import { context, type DomainContext } from './context';
 import { createProject } from './projects';
+import { postMessage } from './messages';
 import { postUpdate } from './updates';
 import { harness, FIXED_NOW, type Harness } from './testing';
 import {
@@ -605,5 +606,92 @@ describe('form requests: an editable draft plus the agent’s own actions', () =
 			.prepare(`SELECT decided_value AS scalar FROM approvals WHERE id = ?`)
 			.get(request.id) as { scalar: string };
 		expect(row.scalar).toBe('Approve');
+	});
+});
+
+/**
+ * Asking inside a thread (migration 022).
+ *
+ * The owner's ask: "Allow agents to ask questions in replies." An agent already
+ * talking to them had to leave the conversation to ask for a decision, so the
+ * question arrived with none of the context that produced it.
+ */
+describe('a question asked in a thread', () => {
+	it('takes the thread, the card and the project from the message', () => {
+		const h = harness();
+		const agentId = h.agent('scout');
+		const { project } = createProject(h, { name: 'Agent Dashboard' });
+		const update = postUpdate(h, { project: project.slug, agentId, body: 'shipped' });
+		const said = postMessage(h, {
+			author: { kind: 'human' },
+			updateId: update.id,
+			body: 'does it handle empty input?'
+		});
+
+		const { request } = createRequest(h, {
+			agentId,
+			kind: 'confirm',
+			question: 'Should it refuse empty input, or accept it?',
+			message: said.id
+		});
+
+		expect(request).toMatchObject({
+			messageId: said.id,
+			updateId: update.id,
+			projectId: project.id
+		});
+	});
+
+	it('works in one of the owner’s own feed posts, which is on no card', () => {
+		const h = harness();
+		const agentId = h.agent('scout');
+		const { project } = createProject(h, { name: 'Agent Dashboard' });
+		const post = postMessage(h, {
+			author: { kind: 'human' },
+			project: project.slug,
+			body: 'have a look at the deploy'
+		});
+
+		const { request } = createRequest(h, {
+			agentId,
+			kind: 'buttons',
+			question: 'Which environment?',
+			options: ['staging', 'production'],
+			message: post.id
+		});
+
+		expect(request).toMatchObject({
+			messageId: post.id,
+			updateId: null,
+			projectId: project.id
+		});
+	});
+
+	it('refuses a message that is not there, rather than asking into the void', () => {
+		const h = harness();
+		const agentId = h.agent('scout');
+
+		let code = 'no error';
+		try {
+			createRequest(h, {
+				agentId,
+				kind: 'confirm',
+				question: 'anybody?',
+				message: 'nope'
+			});
+		} catch (error) {
+			code = (error as { code: string }).code;
+		}
+
+		expect(code).toBe('not_found');
+	});
+
+	it('leaves an ordinary request anchored to nothing in particular', () => {
+		const h = harness();
+		const agentId = h.agent('scout');
+
+		const { request } = createRequest(h, { agentId, kind: 'confirm', question: 'Ship it?' });
+
+		expect(request.messageId).toBeNull();
 	});
 });

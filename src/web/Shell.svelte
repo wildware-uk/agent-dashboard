@@ -36,7 +36,7 @@
 	import { Timeline } from './timeline.svelte';
 	import { mediaUrl } from './media';
 	import { themeStyle } from './theme';
-	import type { MediaView, SnapshotResponse, UpdateView } from './types';
+	import type { MediaView, RequestView, SnapshotResponse, UpdateView } from './types';
 
 	/** The centre column's two views (design §7). */
 	type ShellView = 'feed' | 'board';
@@ -337,9 +337,27 @@
 	 * page that cannot say which project it is must not answer "all of them".
 	 */
 	const feedRequests = $derived.by(() => {
-		if (!scoped) return requests.items;
-		const id = activeProject?.id ?? null;
-		return id === null ? [] : requests.items.filter((request) => request.projectId === id);
+		const inScope = !scoped
+			? requests.items
+			: activeProject
+				? requests.items.filter((request) => request.projectId === activeProject.id)
+				: [];
+
+		// A question asked inside a thread is answered inside that thread
+		// (migration 022), so it is not also a card at the top of the feed: one
+		// question, one place to answer it. The sidebar count still includes it, so
+		// a question in a conversation nobody has scrolled to is still findable.
+		return inScope.filter((request) => !request.messageId);
+	});
+
+	/** The questions asked in each thread, by the message they were asked under. */
+	const threadRequests = $derived.by(() => {
+		const map: Record<string, RequestView[]> = {};
+		for (const request of requests.items) {
+			if (!request.messageId) continue;
+			(map[request.messageId] ??= []).push(request);
+		}
+		return map;
 	});
 
 	/**
@@ -661,6 +679,7 @@
 						{threads}
 						{onlineIds}
 						{focus}
+						{threadRequests}
 					/>
 				</div>
 			{:else}

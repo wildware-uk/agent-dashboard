@@ -107,3 +107,10 @@ answer would be worse than no answer.
 Pass `project` (a slug or id) so the banner says what this concerns, and `update`
 (an update id) if you just posted the card it follows from — that supplies the
 project for you.
+
+**If the question came out of a conversation, ask in that conversation.** Pass
+`message_id` — the message you were replying to — and the prompt renders inside
+that thread, under the words that led to it, with its controls right there. It
+supplies the project and the card too, so naming it is enough. A question your
+owner has to reconstruct the context for is a question they answer slowly, or
+wrongly.

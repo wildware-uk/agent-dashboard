@@ -21,7 +21,7 @@
 	import { absoluteLabel, relativeLabel } from './days';
 	import { clock } from './clock.svelte';
 	import { onMount } from 'svelte';
-	import type { AckView, DeliveryView, MediaView, MessageView } from './types';
+	import type { AckView, DeliveryView, MediaView, MessageView, RequestView } from './types';
 	import type { OwnerActions } from './actions';
 
 	let {
@@ -47,6 +47,10 @@
 		postDeliveries = [],
 		/** The same for each reply, by message id. */
 		replyDeliveries = {},
+		/** Questions asked inside this thread, by message id (migration 022). */
+		threadRequests = {},
+		/** The owner's write calls, so a question in the thread can be answered. */
+		actions = undefined,
 		/** Post a reply under this post. Resolves when the server has it. */
 		onreply,
 		/** The images on this post, and on each of its replies (migration 016). */
@@ -75,6 +79,8 @@
 		onlineIds?: string[];
 		postDeliveries?: DeliveryView[];
 		replyDeliveries?: Record<string, DeliveryView[]>;
+		threadRequests?: Record<string, RequestView[]>;
+		actions?: OwnerActions;
 		onreply: (body: string, mediaIds?: string[], answers?: string) => Promise<void>;
 		postMedia?: MediaView[];
 		replyMedia?: Record<string, MediaView[]>;
@@ -234,6 +240,8 @@
 		{onlineIds}
 		media={replyMedia}
 		deliveries={replyDeliveries}
+		requests={threadRequests}
+		{actions}
 		{uploader}
 		{ondelete}
 		{onreply}

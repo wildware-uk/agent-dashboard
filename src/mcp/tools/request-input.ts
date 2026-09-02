@@ -106,6 +106,16 @@ const inputSchema = {
 			'The id of the update this follows from, if you just posted one. Supplies the project ' +
 				'when you omit it.'
 		),
+	message_id: z
+		.string()
+		.optional()
+		.describe(
+			'The thread to ask in: a message_id from get_messages or post_message. Your question ' +
+				'appears inside that conversation, where your owner is already reading, instead of ' +
+				'as a card of its own with none of the context beside it. Ask here whenever the ' +
+				'question came out of something you were discussing. Supplies the project and the ' +
+				'card, so naming it is enough.'
+		),
 	timeout_s: z
 		.number()
 		.int()
@@ -145,6 +155,11 @@ export const requestInputTool: McpTool<typeof inputSchema, Promise<CallToolResul
 			'rest. placeholder, multiline, label, default, min, max are the kind-specific knobs',
 			'listed above.',
 			'project (a slug or id) and update (an update id) say what the request is about.',
+			'message_id asks *inside a thread*: pass the id of the message you were replying to and',
+			'the question appears in that conversation, under the words that led to it, rather than',
+			'as a card of its own. Use it whenever the question came out of something you were',
+			'discussing — it is the difference between "what about this?" answered in context and',
+			'a prompt your owner has to reconstruct.',
 			'timeout_s is how long the request stays answerable, one hour by default.',
 			'',
 			'HOW THE WAITING WORKS. READ THIS BEFORE YOU CALL IT.',
@@ -211,6 +226,7 @@ export const requestInputTool: McpTool<typeof inputSchema, Promise<CallToolResul
 						max: args.max,
 						project: args.project,
 						update: args.update,
+						message: args.message_id,
 						timeoutS: args.timeout_s
 					},
 					{ holdMs }

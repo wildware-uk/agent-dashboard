@@ -56,6 +56,7 @@ import {
 	decideApproval,
 	expireApprovals,
 	findApprovalById,
+	findMessageById,
 	findUpdateById,
 	insertApproval,
 	listApprovals,
@@ -152,6 +153,8 @@ export type OwnerRequest = {
 	agentId: string;
 	projectId: string | null;
 	updateId: string | null;
+	/** The thread it was asked in, for a question raised in a reply (migration 022). */
+	messageId: string | null;
 	kind: RequestKind;
 	question: string;
 	detail: string | null;
@@ -205,6 +208,16 @@ export type CreateRequestInput = {
 	project?: string | null;
 	/** The update this follows from. Supplies the project when that is omitted. */
 	update?: string | null;
+	/**
+	 * The thread this is asked in (migration 022).
+	 *
+	 * An agent already talking to its owner in a thread can ask its question
+	 * *there*, where the conversation that produced it is: the prompt renders
+	 * inside the thread rather than as a card of its own at the top of a feed,
+	 * with none of the context beside it. Supplies the project and the card, so
+	 * naming it is enough.
+	 */
+	message?: string | null;
 	/** Seconds until the request times out. Defaults to {@link DEFAULT_TIMEOUT_S}. */
 	timeoutS?: number;
 };
@@ -271,13 +284,14 @@ export function createRequest(
 	const detail = optionalText(input.detail, 'detail', DETAIL_MAX_LENGTH);
 	const options = assertOptions(kind, input.options);
 	const config = assertConfig(kind, options, input);
-	const { projectId, updateId } = anchor(ctx, input);
+	const { projectId, updateId, messageId } = anchor(ctx, input);
 	const timeoutS = assertTimeout(input.timeoutS);
 
 	const row = insertApproval(ctx.db, {
 		agentId: input.agentId,
 		projectId,
 		updateId,
+		messageId,
 		kind,
 		question,
 		detail,
@@ -629,6 +643,7 @@ function toRequest(row: Approval): OwnerRequest {
 		agentId: row.agentId,
 		projectId: row.projectId,
 		updateId: row.updateId,
+		messageId: row.messageId,
 		kind: row.kind,
 		question: row.question,
 		detail: row.detail,
@@ -767,12 +782,33 @@ function assertTimeout(timeoutS: number | undefined): number {
 function anchor(ctx: DomainContext, input: CreateRequestInput) {
 	const named = input.project?.trim() ? resolveProject(ctx, input.project) : null;
 
-	if (!input.update?.trim()) return { projectId: named?.id ?? null, updateId: null };
+	// A thread first: it is the most specific thing a caller can name, and it
+	// carries the card and the project with it (migration 022).
+	if (input.message?.trim()) {
+		const message = findMessageById(ctx.db, input.message.trim());
+		if (!message || message.deletedAt !== null) {
+			throw notFound(`no such message: ${input.message.trim()}`);
+		}
+		if (named && message.projectId !== null && named.id !== message.projectId) {
+			throw invalid('the message named belongs to a different project');
+		}
+		return {
+			projectId: message.projectId ?? named?.id ?? null,
+			// The card the thread is on, when it is on one: a question asked in a
+			// card's thread belongs to that card as much as to the message.
+			updateId: message.updateId,
+			messageId: message.id
+		};
+	}
+
+	if (!input.update?.trim()) {
+		return { projectId: named?.id ?? null, updateId: null, messageId: null };
+	}
 
 	const update = findUpdateById(ctx.db, input.update.trim());
 	if (!update) throw notFound(`no such update: ${input.update.trim()}`);
 	if (named && named.id !== update.projectId) {
 		throw invalid('the update named belongs to a different project');
 	}
-	return { projectId: update.projectId, updateId: update.id };
+	return { projectId: update.projectId, updateId: update.id, messageId: null };
 }

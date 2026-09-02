@@ -115,6 +115,8 @@ export type RequestView = {
 	options: string[] | null;
 	project_id: string | null;
 	update_id: string | null;
+	/** The thread it was asked in, for a question raised in a reply (migration 022). */
+	message_id: string | null;
 	expires_at: string;
 };
 
@@ -128,6 +130,7 @@ export function requestView(request: OwnerRequest): RequestView {
 		options: request.options,
 		project_id: request.projectId,
 		update_id: request.updateId,
+		message_id: request.messageId,
 		expires_at: iso(request.expiresAt)
 	};
 }
