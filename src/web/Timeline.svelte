@@ -21,6 +21,7 @@
 	import type {
 		AckView,
 		DeliveryView,
+		ReactionView,
 		MediaView,
 		MessageView,
 		RequestView,
@@ -353,6 +354,26 @@
 		return map;
 	}
 
+	/** The emoji on each message in one card's thread (migration 024). */
+	function reactionsForThread(updateId: string): Record<string, ReactionView[]> {
+		const map: Record<string, ReactionView[]> = {};
+		for (const message of threads?.for(updateId) ?? []) {
+			const emoji = threads?.reactionsFor?.(message.id) ?? [];
+			if (emoji.length > 0) map[message.id] = emoji;
+		}
+		return map;
+	}
+
+	/** The same, for the replies under one post. */
+	function reactionsForPost(postId: string): Record<string, ReactionView[]> {
+		const map: Record<string, ReactionView[]> = {};
+		for (const reply of threads?.repliesTo?.(postId) ?? []) {
+			const emoji = threads?.reactionsFor?.(reply.id) ?? [];
+			if (emoji.length > 0) map[reply.id] = emoji;
+		}
+		return map;
+	}
+
 	/** Which agents each message in one card's thread has reached (migration 018). */
 	function deliveriesForThread(updateId: string): Record<string, DeliveryView[]> {
 		const map: Record<string, DeliveryView[]> = {};
@@ -524,6 +545,7 @@
 							messageMedia={mediaForThread(update.id)}
 							messageDeliveries={deliveriesForThread(update.id)}
 							{threadRequests}
+							messageReactions={reactionsForThread(update.id)}
 							{onlineIds}
 						/>
 						{#if actions}
@@ -570,6 +592,7 @@
 						messageMedia={mediaForThread(update.id)}
 						messageDeliveries={deliveriesForThread(update.id)}
 						{threadRequests}
+						messageReactions={reactionsForThread(update.id)}
 						{onlineIds}
 					/>
 				{/each}
@@ -602,6 +625,8 @@
 								postMedia={threads?.mediaFor?.(row.post.id) ?? []}
 								replyMedia={mediaForPost(row.post.id)}
 								postDeliveries={threads?.deliveriesFor?.(row.post.id) ?? []}
+								postReactions={threads?.reactionsFor?.(row.post.id) ?? []}
+								replyReactions={reactionsForPost(row.post.id)}
 								replyDeliveries={deliveriesForPost(row.post.id)}
 								{threadRequests}
 								uploader={actions}
@@ -642,6 +667,7 @@
 								messageMedia={mediaForThread(row.update.id)}
 								messageDeliveries={deliveriesForThread(row.update.id)}
 								{threadRequests}
+								messageReactions={reactionsForThread(row.update.id)}
 								{onlineIds}
 							/>
 						{/if}

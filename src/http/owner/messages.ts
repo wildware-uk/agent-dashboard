@@ -23,10 +23,12 @@ import {
 	acknowledgementsFor,
 	deleteMessage,
 	deliveriesFor,
+	reactionsFor,
 	invalid,
 	listMessageMedia,
 	listThread,
 	postMessage,
+	react,
 	type ThreadQuery
 } from '$domain';
 import {
@@ -106,6 +108,31 @@ export function deleteMessageHandler(options: MessageHandlerOptions = {}): Owner
 }
 
 /**
+ * `POST /api/messages/[id]/reactions` — the owner reacts (migration 024).
+ *
+ * Toggling by default, because that is what a click on a reaction means: the
+ * same emoji twice takes it back. `{ on: true | false }` says which way
+ * explicitly, for a control that knows what it is doing.
+ */
+export function reactHandler(options: MessageHandlerOptions = {}): OwnerHandler {
+	return ownerAction(options, async (event, ctx) => {
+		const body = (await readOwnerJson(event.request).catch(() => ({}))) as {
+			emoji?: unknown;
+			on?: unknown;
+		};
+
+		const result = react(ctx, {
+			messageId: event.params.id ?? '',
+			actor: { kind: 'human' },
+			emoji: text(body.emoji, 'emoji'),
+			...(typeof body.on === 'boolean' ? { on: body.on } : {})
+		});
+
+		return { status: 200, body: { reactions: result.reactions, on: result.on } };
+	});
+}
+
+/**
  * `GET /api/messages` — a thread, or every thread in a project.
  *
  * Stamped with the stream cursor **read before the messages**, for the reason
@@ -141,6 +168,13 @@ export function listMessagesHandler(options: MessageHandlerOptions = {}): OwnerH
 				// invisible: a message nobody had answered looked the same whether an
 				// agent had it and was busy or had never been told.
 				deliveries: deliveriesFor(
+					ctx,
+					messages.map((message) => message.id)
+				),
+				// And the reactions on them (migration 024), in the same read for the
+				// same reason: an emoji that appeared a beat after the words reads as
+				// having just been added to them.
+				reactions: reactionsFor(
 					ctx,
 					messages.map((message) => message.id)
 				)

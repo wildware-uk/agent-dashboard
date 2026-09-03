@@ -14,6 +14,7 @@
 import type {
 	AckView,
 	DeliveryView,
+	ReactionView,
 	MediaView,
 	MessageView,
 	MessagesSnapshot,
@@ -325,6 +326,8 @@ export function fakeActions(): {
 					aMessage({ id: 'new', body: input.body, updateId: input.update ?? null })
 				),
 			deleteMessage: (id) => record('deleteMessage', [id], aMessage({ id })),
+			react: (id, emoji, on) =>
+				record('react', [id, emoji, on], [aReaction({ messageId: id, emoji, actor: 'human' })]),
 			answerRequest: (id, value) =>
 				record(
 					'answerRequest',
@@ -578,6 +581,19 @@ export function anAck(overrides: Partial<AckView> = {}): AckView {
 		state: 'thinking',
 		createdAt: Date.UTC(2026, 7, 25, 11, 1),
 		updatedAt: Date.UTC(2026, 7, 25, 11, 1),
+		...overrides
+	};
+}
+
+/** A reaction with sensible defaults: the owner's, on the default message. */
+export function aReaction(overrides: Partial<ReactionView> = {}): ReactionView {
+	return {
+		id: 'r1',
+		seq: 1,
+		messageId: 'msg1',
+		actor: 'human',
+		emoji: '\u{1f440}',
+		createdAt: Date.UTC(2026, 7, 25, 11, 1),
 		...overrides
 	};
 }

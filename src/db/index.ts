@@ -51,6 +51,7 @@ export type {
 	MessageDelivery,
 	Notification,
 	NotificationKind,
+	Reaction,
 	Project,
 	BoardColumn,
 	ProjectBoard,
@@ -171,6 +172,7 @@ export {
 } from './messages';
 export { advanceReadCursor, getReadCursor, readCursorSeq } from './read-cursors';
 export { deliveredMessageIds, listDeliveries, recordDelivery } from './deliveries';
+export { addReaction, listReactions, removeReaction } from './reactions';
 export {
 	countUnseenNotifications,
 	insertNotification,

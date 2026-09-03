@@ -176,6 +176,20 @@ export interface EventPayloads {
 		kind: 'update' | 'reply' | 'request';
 		projectId: string | null;
 	};
+	/**
+	 * Somebody reacted to a message, or took a reaction back (migration 024).
+	 *
+	 * `on` rides along so a subscriber can tell an arrival from a removal before
+	 * refetching, exactly as `pinned` does on `update.updated`.
+	 */
+	'reaction.updated': {
+		messageId: string;
+		projectId: string | null;
+		/** The literal `human`, or `agent:<agent_id>` (design §3). */
+		actor: string;
+		emoji: string;
+		on: boolean;
+	};
 	/** The owner read them, so every tab's bell clears together. */
 	'notifications.seen': { count: number };
 	/** Presence is derived from heartbeats, never stored as a flag (design §4). */

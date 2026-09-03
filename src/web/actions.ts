@@ -18,6 +18,7 @@
 import type {
 	MediaView,
 	MessageView,
+	ReactionView,
 	ProjectStatus,
 	ProjectView,
 	RequestFormValue,
@@ -218,6 +219,14 @@ export type OwnerActions = {
 	 */
 	deleteMessage(id: string): Promise<MessageView>;
 	/**
+	 * React to a message, or take a reaction back (migration 024).
+	 *
+	 * Toggling: the same emoji twice is off again, which is what clicking one
+	 * means. Nothing is changed here — the server publishes, the tab hears
+	 * `reaction.updated` and refetches, so every window agrees.
+	 */
+	react(id: string, emoji: string, on?: boolean): Promise<ReactionView[]>;
+	/**
 	 * Answer an agent's request (design §5).
 	 *
 	 * `value` is sent exactly as the control produced it — a string, a boolean or
@@ -250,12 +259,9 @@ export type OwnerActions = {
  * handlers.
  */
 export function ownerActions(request: Requester = defaultRequest): OwnerActions {
-	async function send<Key extends 'project' | 'update' | 'task' | 'message' | 'request' | 'agent'>(
-		key: Key,
-		url: string,
-		method: string,
-		body?: unknown
-	): Promise<Sent<Key>> {
+	async function send<
+		Key extends 'project' | 'update' | 'task' | 'message' | 'request' | 'agent' | 'reactions'
+	>(key: Key, url: string, method: string, body?: unknown): Promise<Sent<Key>> {
 		const init: RequestInit = { method, headers: { accept: 'application/json' } };
 		if (body !== undefined) {
 			init.body = JSON.stringify(body);
@@ -344,6 +350,11 @@ export function ownerActions(request: Requester = defaultRequest): OwnerActions 
 			send('agent', `/api/agents/${encodeURIComponent(id)}`, 'PATCH', { name }),
 		postMessage: (input) => send('message', '/api/messages', 'POST', input),
 		deleteMessage: (id) => send('message', `/api/messages/${encodeURIComponent(id)}`, 'DELETE'),
+		react: (id, emoji, on) =>
+			send('reactions', `/api/messages/${encodeURIComponent(id)}/reactions`, 'POST', {
+				emoji,
+				...(on === undefined ? {} : { on })
+			}),
 		answerRequest: (id, value) =>
 			send('request', `/api/requests/${encodeURIComponent(id)}/answer`, 'POST', { value }),
 		dismissRequest: (id) => send('request', `/api/requests/${encodeURIComponent(id)}`, 'DELETE'),
@@ -356,17 +367,23 @@ export function ownerActions(request: Requester = defaultRequest): OwnerActions 
 }
 
 /** Which row an endpoint answers with, keyed by the field it arrives under. */
-type Sent<Key extends 'project' | 'update' | 'task' | 'message' | 'request' | 'agent'> =
-	Key extends 'project'
-		? ProjectView
-		: Key extends 'update'
-			? UpdateView
-			: Key extends 'task'
-				? TaskView
-				: Key extends 'request'
-					? RequestView
-					: Key extends 'agent'
-						? { id: string; name: string }
+type Sent<
+	Key extends 'project' | 'update' | 'task' | 'message' | 'request' | 'agent' | 'reactions'
+> = Key extends 'project'
+	? ProjectView
+	: Key extends 'update'
+		? UpdateView
+		: Key extends 'task'
+			? TaskView
+			: Key extends 'request'
+				? RequestView
+				: Key extends 'agent'
+					? { id: string; name: string }
+					: // The reaction endpoint answers with the whole list on the message
+						// rather than the one row that changed: a count is what the card
+						// renders, and asking for it separately would be a second request.
+						Key extends 'reactions'
+						? ReactionView[]
 						: MessageView;
 
 /**

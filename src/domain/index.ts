@@ -36,6 +36,7 @@ export type {
 	Message,
 	Project,
 	ProjectStatus,
+	Reaction,
 	Session,
 	SessionMeta,
 	Task,
@@ -202,6 +203,15 @@ export {
 	type ReadMessagesInput,
 	type ThreadQuery
 } from './messages';
+export {
+	EMOJI_MAX_LENGTH,
+	SHORTCODES,
+	assertEmoji,
+	react,
+	reactionsFor,
+	type ReactInput,
+	type ReactResult
+} from './reactions';
 export {
 	DEFAULT_NOTIFICATION_LIMIT,
 	countUnseen,

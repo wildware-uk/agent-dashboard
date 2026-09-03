@@ -160,6 +160,7 @@ describe('the transport', () => {
 			'list_tasks',
 			'post_message',
 			'post_update',
+			'react',
 			'register_session',
 			'request_input',
 			'set_project_theme'

@@ -28,7 +28,14 @@
  * no optimistic insert to reconcile, and no path where the tab that replied
  * disagrees with the tab that watched.
  */
-import type { AckView, DeliveryView, MediaView, MessageView, MessagesSnapshot } from './types';
+import type {
+	AckView,
+	DeliveryView,
+	MediaView,
+	MessageView,
+	MessagesSnapshot,
+	ReactionView
+} from './types';
 import type { Fetcher } from './timeline.svelte';
 import {
 	DirectLink,
@@ -68,6 +75,8 @@ export type ThreadSource = {
 	 * can be told from a message that reached nobody at all.
 	 */
 	deliveriesFor?(messageId: string): DeliveryView[];
+	/** The emoji reactions on one message (migration 024). */
+	reactionsFor?(messageId: string): ReactionView[];
 	/**
 	 * What agents have said about one message, newest claim last.
 	 *
@@ -96,6 +105,8 @@ const WATCHED = [
 	// arrival is: the store refetches and the thread is whatever the server now
 	// says it is, so a delete reaches every tab the way a reply does.
 	'message.deleted',
+	// Somebody reacted, or took a reaction back (migration 024).
+	'reaction.updated',
 	// An agent saying "seen it" or "done" (migration 013). Watched here rather
 	// than in a store of its own because an acknowledgement has no life apart
 	// from the message it is on: it arrives in the same read, and a second store
@@ -150,6 +161,14 @@ export class Threads {
 	 * is the card's decision.
 	 */
 	deliveries = $state<DeliveryView[]>([]);
+	/**
+	 * The emoji reactions on those messages (migration 024).
+	 *
+	 * Beside the messages rather than on them, for the same reason
+	 * acknowledgements are: one message carries several, from several reactors,
+	 * and which of them a card groups together is the card's decision.
+	 */
+	reactions = $state<ReactionView[]>([]);
 	/** The newest event seq this state accounts for. */
 	seq = $state(0);
 	status = $state<ThreadsStatus>('idle');
@@ -224,6 +243,11 @@ export class Threads {
 	/** Which agents this message has reached (migration 018). */
 	deliveriesFor(messageId: string): DeliveryView[] {
 		return this.deliveries.filter((delivery) => delivery.messageId === messageId);
+	}
+
+	/** The emoji reactions on this message (migration 024). */
+	reactionsFor(messageId: string): ReactionView[] {
+		return this.reactions.filter((reaction) => reaction.messageId === messageId);
 	}
 
 	/** What agents have said about one message (migration 013). */
@@ -352,6 +376,7 @@ export class Threads {
 		this.acks = snapshot.acks ?? [];
 		this.media = snapshot.media ?? {};
 		this.deliveries = snapshot.deliveries ?? [];
+		this.reactions = snapshot.reactions ?? [];
 		// Adopted, not raised to the greater of the two: the server's stamp says
 		// where the stream *is*, and a seq below the one held means the deployment
 		// restarted — its bus counts from zero and is never persisted. Keeping the

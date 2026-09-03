@@ -15,13 +15,21 @@
 	import Ack from './Ack.svelte';
 	import Markdown from './Markdown.svelte';
 	import MediaGrid from './MediaGrid.svelte';
+	import Reactions from './Reactions.svelte';
 	import Thread from './Thread.svelte';
 	import { actionMessage } from './actions';
 	import { agentLabel } from './avatar';
 	import { absoluteLabel, relativeLabel } from './days';
 	import { clock } from './clock.svelte';
 	import { onMount } from 'svelte';
-	import type { AckView, DeliveryView, MediaView, MessageView, RequestView } from './types';
+	import type {
+		AckView,
+		DeliveryView,
+		MediaView,
+		MessageView,
+		ReactionView,
+		RequestView
+	} from './types';
 	import type { OwnerActions } from './actions';
 
 	let {
@@ -49,6 +57,10 @@
 		replyDeliveries = {},
 		/** Questions asked inside this thread, by message id (migration 022). */
 		threadRequests = {},
+		/** The emoji on this post (migration 024). */
+		postReactions = [],
+		/** And on each of its replies, by message id. */
+		replyReactions = {},
 		/** The owner's write calls, so a question in the thread can be answered. */
 		actions = undefined,
 		/** Post a reply under this post. Resolves when the server has it. */
@@ -80,6 +92,8 @@
 		postDeliveries?: DeliveryView[];
 		replyDeliveries?: Record<string, DeliveryView[]>;
 		threadRequests?: Record<string, RequestView[]>;
+		postReactions?: ReactionView[];
+		replyReactions?: Record<string, ReactionView[]>;
 		actions?: OwnerActions;
 		onreply: (body: string, mediaIds?: string[], answers?: string) => Promise<void>;
 		postMedia?: MediaView[];
@@ -233,6 +247,17 @@
 	-->
 	<Ack acks={postAcks} deliveries={postDeliveries} {agentNames} {onlineIds} />
 
+	<!-- The emoji on the post itself (migration 024). -->
+	<Reactions
+		reactions={postReactions}
+		{agentNames}
+		onreact={actions
+			? async (emoji) => {
+					await actions.react(post.id, emoji);
+				}
+			: undefined}
+	/>
+
 	<Thread
 		messages={replies}
 		{agentNames}
@@ -241,6 +266,7 @@
 		media={replyMedia}
 		deliveries={replyDeliveries}
 		requests={threadRequests}
+		reactions={replyReactions}
 		{actions}
 		{uploader}
 		{ondelete}

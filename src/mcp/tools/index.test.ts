@@ -41,6 +41,7 @@ describe('the tool set', () => {
 			'get_messages',
 			'post_message',
 			'delete_message',
+			'react',
 			'acknowledge',
 			'request_input',
 			'await_request'
@@ -144,6 +145,7 @@ describe('tool argument schemas', () => {
 			get_messages: [],
 			post_message: ['body'],
 			delete_message: ['message_id'],
+			react: ['message_id', 'emoji'],
 			acknowledge: ['state'],
 			request_input: ['kind', 'question'],
 			await_request: ['request_id']

@@ -19,6 +19,7 @@
 	 * on the screen, not one in the owner's browser.
 	 */
 	import Ack from './Ack.svelte';
+	import Reactions from './Reactions.svelte';
 	import RequestCard from './RequestCard.svelte';
 	import Attachments from './Attachments.svelte';
 	import Markdown from './Markdown.svelte';
@@ -28,7 +29,14 @@
 	import { onMount } from 'svelte';
 	import { absoluteLabel, relativeLabel } from './days';
 	import { clock } from './clock.svelte';
-	import type { AckView, DeliveryView, MediaView, MessageView, RequestView } from './types';
+	import type {
+		AckView,
+		DeliveryView,
+		MediaView,
+		MessageView,
+		ReactionView,
+		RequestView
+	} from './types';
 	import type { OwnerActions } from './actions';
 	import { Uploads } from './uploads.svelte';
 
@@ -91,6 +99,8 @@
 		 * was asked.
 		 */
 		requests = {},
+		/** The emoji on each message, by message id (migration 024). */
+		reactions = {},
 		/** The owner's write calls, for answering a question in the thread. */
 		actions = undefined
 	}: {
@@ -104,6 +114,7 @@
 		uploader?: Pick<OwnerActions, 'uploadMedia'>;
 		ondelete?: (id: string) => Promise<void>;
 		requests?: Record<string, RequestView[]>;
+		reactions?: Record<string, ReactionView[]>;
 		actions?: OwnerActions;
 	} = $props();
 
@@ -333,6 +344,21 @@
 						deliveries={deliveries[message.id] ?? []}
 						{agentNames}
 						{onlineIds}
+					/>
+
+					<!--
+						The cheapest thing anybody can say about a line (migration 024).
+						Read-only without an action client, which is what a spec without
+						one renders.
+					-->
+					<Reactions
+						reactions={reactions[message.id] ?? []}
+						{agentNames}
+						onreact={actions
+							? async (emoji) => {
+									await actions.react(message.id, emoji);
+								}
+							: undefined}
 					/>
 
 					<div class="flex flex-wrap items-center gap-1">

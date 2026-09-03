@@ -24,6 +24,7 @@ import {
 	type Message,
 	type OwnerRequest,
 	type Project,
+	type Reaction,
 	type RequestResult,
 	type RequestValue,
 	type Task,
@@ -361,6 +362,26 @@ export function messageView(message: Message): MessageView {
 		// Absent for a live message, which is almost all of them: a key that said
 		// `null` on every message would be noise on every read (migration 017).
 		...(message.deletedAt === null ? {} : { deleted_at: iso(message.deletedAt) })
+	};
+}
+
+/** One emoji reaction as a tool reports it (migration 024). */
+export type ReactionView = {
+	id: string;
+	message_id: string;
+	/** The literal `human`, or `agent:<agent_id>` (design §3). */
+	actor: string;
+	emoji: string;
+	created_at: string;
+};
+
+export function reactionView(reaction: Reaction): ReactionView {
+	return {
+		id: reaction.id,
+		message_id: reaction.messageId,
+		actor: reaction.actor,
+		emoji: reaction.emoji,
+		created_at: iso(reaction.createdAt)
 	};
 }
 

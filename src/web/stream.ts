@@ -80,6 +80,8 @@ export const EVENT_TYPES = [
 	'message.delivered',
 	// An agent saying "on it" or "done" without words (migration 013).
 	'ack.updated',
+	// An emoji arrived on a message, or was taken back (migration 024).
+	'reaction.updated',
 	// Something was recorded for the owner to find, or they cleared the bell
 	// (migration 021). Both are on every tab: a bell cleared on the desk has to
 	// clear on the phone.

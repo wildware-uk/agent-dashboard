@@ -313,6 +313,19 @@ export type Notification = Keyed & {
 	seenAt: number | null;
 };
 
+/**
+ * One emoji reaction on one message (migration 024).
+ *
+ * `actor` is the literal `human` or `agent:<agent_id>`, the same string
+ * `messages.author` uses: the owner is not a row (design §1, §3).
+ */
+export type Reaction = Keyed & {
+	messageId: string;
+	actor: string;
+	emoji: string;
+	createdAt: number;
+};
+
 export type ReadCursor = Keyed & {
 	agentId: string;
 	lastSeenMessageSeq: number;

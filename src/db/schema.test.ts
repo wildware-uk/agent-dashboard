@@ -157,6 +157,9 @@ const DESIGN_COLUMNS: Record<string, string[]> = {
 	// Migration 013: an agent saying "seen it" / "done" against one message or
 	// one task, so a card the owner replied to is not silent.
 	acknowledgements: ['agent_id', 'message_id', 'task_id', 'state', 'created_at', 'updated_at'],
+	// Migration 024: emoji reactions, the quick version of saying something.
+	// `actor` is `human` or `agent:<id>`, the same string `messages.author` is.
+	reactions: ['message_id', 'actor', 'emoji', 'created_at'],
 	// Migration 021: what the owner is told about, kept so it can be read in the
 	// app rather than only as a push nobody caught.
 	notifications: [

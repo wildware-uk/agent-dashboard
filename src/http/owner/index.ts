@@ -77,6 +77,7 @@ export {
 	deleteMessageHandler,
 	listMessagesHandler,
 	postMessageHandler,
+	reactHandler,
 	readReply,
 	readThreadQuery,
 	type MessageHandlerOptions
