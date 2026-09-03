@@ -275,7 +275,10 @@ docker compose exec dashboard agent-dashboard help
 | `backup <destination.db>`              | Online backup of the database, safe against a running server. |
 
 Outside Docker the same commands are `node build/cli.js <command>` after
-`npm run build:all`.
+`npm run build`, which produces the server, the CLI and the channel bridge
+together. `npm run build:app` is the server alone, and it _empties_ `build/` —
+running it on its own leaves every session's `build/channel.js` missing, which
+is a channel that fails to start rather than a channel that is quiet.
 
 ## Configuration
 
