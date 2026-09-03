@@ -25,6 +25,7 @@ import { getMessagesTool } from './get-messages';
 import { acknowledgeTool } from './acknowledge';
 import { deleteMessageTool } from './delete-message';
 import { postMessageTool } from './post-message';
+import { reactTool } from './react';
 import { heartbeatTool } from './heartbeat';
 import { listProjectsTool } from './list-projects';
 import { listTasksTool } from './list-tasks';
@@ -47,6 +48,7 @@ export { getMessagesTool } from './get-messages';
 export { acknowledgeTool } from './acknowledge';
 export { deleteMessageTool } from './delete-message';
 export { postMessageTool } from './post-message';
+export { reactTool } from './react';
 export { heartbeatTool } from './heartbeat';
 export { listProjectsTool } from './list-projects';
 export { listTasksTool } from './list-tasks';
@@ -75,6 +77,7 @@ export const TOOLS: readonly AnyMcpTool[] = [
 	getMessagesTool,
 	postMessageTool,
 	deleteMessageTool,
+	reactTool,
 	acknowledgeTool,
 	requestInputTool,
 	awaitRequestTool
@@ -139,6 +142,7 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
 	server.registerTool(deleteMessageTool.name, deleteMessageTool.config, (args) =>
 		deleteMessageTool.run(deps, args)
 	);
+	server.registerTool(reactTool.name, reactTool.config, (args) => reactTool.run(deps, args));
 	server.registerTool(requestInputTool.name, requestInputTool.config, (args) =>
 		requestInputTool.run(deps, args)
 	);

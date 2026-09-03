@@ -44,7 +44,8 @@ describe('the $db surface', () => {
 			update_shares: 'insertUpdateShare',
 			acknowledgements: 'upsertAcknowledgement',
 			message_deliveries: 'recordDelivery',
-			notifications: 'insertNotification'
+			notifications: 'insertNotification',
+			reactions: 'addReaction'
 		};
 
 		for (const table of TABLES) {

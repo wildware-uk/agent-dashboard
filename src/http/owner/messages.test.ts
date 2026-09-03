@@ -6,6 +6,7 @@ import {
 	deleteMessageHandler,
 	listMessagesHandler,
 	postMessageHandler,
+	reactHandler,
 	type OwnerHandler
 } from './messages';
 
@@ -328,5 +329,71 @@ describe('GET /api/messages — deliveries (migration 018)', () => {
 		const { body } = await call(listMessagesHandler, { query: { project: slug } });
 
 		expect(body.deliveries).toEqual([]);
+	});
+});
+
+describe('POST /api/messages/[id]/reactions (migration 024)', () => {
+	it('adds the owner’s reaction and hands back what is on the message', async () => {
+		const said = postMessage(h, { author: { kind: 'agent', agentId }, body: 'done', updateId });
+
+		const { status, body } = await call(reactHandler, {
+			method: 'POST',
+			params: { id: said.id },
+			body: { emoji: ':tada:' }
+		});
+
+		expect(status).toBe(200);
+		expect(body.on).toBe(true);
+		const reactions = body.reactions as unknown as { emoji: string; actor: string }[];
+		// The shortcode is translated on the way in, so a card renders a character.
+		expect(reactions).toEqual([expect.objectContaining({ emoji: '🎉', actor: 'human' })]);
+	});
+
+	it('toggles it back off on a second call', async () => {
+		const said = postMessage(h, { author: { kind: 'agent', agentId }, body: 'done', updateId });
+		await call(reactHandler, { method: 'POST', params: { id: said.id }, body: { emoji: '👍' } });
+
+		const { body } = await call(reactHandler, {
+			method: 'POST',
+			params: { id: said.id },
+			body: { emoji: '👍' }
+		});
+
+		expect(body.on).toBe(false);
+		expect(body.reactions).toEqual([]);
+	});
+
+	it('refuses a word dressed up as an emoji', async () => {
+		const said = postMessage(h, { author: { kind: 'agent', agentId }, body: 'done', updateId });
+
+		const { status } = await call(reactHandler, {
+			method: 'POST',
+			params: { id: said.id },
+			body: { emoji: 'lgtm' }
+		});
+
+		expect(status).toBe(400);
+	});
+
+	it('refuses a caller with no session', async () => {
+		const said = postMessage(h, { author: { kind: 'agent', agentId }, body: 'done', updateId });
+
+		const { status } = await call(reactHandler, {
+			method: 'POST',
+			params: { id: said.id },
+			body: { emoji: '👍' },
+			cookie: null
+		});
+
+		expect(status).toBe(401);
+	});
+
+	it('serves the reactions with the thread, so nothing paints a beat late', async () => {
+		const said = postMessage(h, { author: { kind: 'agent', agentId }, body: 'done', updateId });
+		await call(reactHandler, { method: 'POST', params: { id: said.id }, body: { emoji: '👀' } });
+
+		const { body } = await call(listMessagesHandler, { query: { project: slug } });
+
+		expect(body.reactions as unknown as unknown[]).toHaveLength(1);
 	});
 });

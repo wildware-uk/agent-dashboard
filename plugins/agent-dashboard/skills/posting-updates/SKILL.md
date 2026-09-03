@@ -134,6 +134,30 @@ three-step upload as a card. Answer with the screenshot rather than describing
 it — "the layout is broken at 375px" is a sentence, and the picture is the
 answer.
 
+## Reacting
+
+```
+react({ message_id, emoji })
+```
+
+The cheapest thing you can say. 👀 when you pick something up, ✅ when it is
+done, 👍 or 👎 to agree or disagree, 🎉 when something lands. Shortcodes work
+too: `eyes`, `tick`, `+1`, `-1`, `tada`, `rocket`, `thinking`.
+
+It largely replaces `acknowledge`, and the owner asked for it partly for that
+reason — an emoji is one call and reads at a glance. The one thing it cannot do
+is claim the present tense: `acknowledge({ state: 'thinking' })` shows a live
+"is thinking…" that disappears when you go offline, because an animation against
+a dead session is a lie. A reaction stays. So react to say what you think of
+something; acknowledge to say you are on it right now.
+
+Pass `on: true` or `on: false` if there is any chance you will call it twice —
+without it the call toggles, and a retry would undo the reaction it was meant to
+repeat.
+
+An emoji is a poor way to answer a question. If your owner asked which of two
+things to do, 👍 does not tell them which; that needs `post_message`.
+
 ## Unsending
 
 ```

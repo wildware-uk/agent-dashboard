@@ -433,6 +433,17 @@ export type NotificationView = {
 	path: string;
 };
 
+/** One emoji reaction on a message (migration 024). */
+export type ReactionView = {
+	id: string;
+	seq: number;
+	messageId: string;
+	/** The literal `human` for the owner, or `agent:<agent_id>` (design §3). */
+	actor: string;
+	emoji: string;
+	createdAt: number;
+};
+
 /** What `GET /api/notifications` sends. */
 export type NotificationsSnapshot = {
 	seq: number;
@@ -454,4 +465,6 @@ export type MessagesSnapshot = {
 	media?: Record<string, MediaView[]>;
 	/** Who each message has actually reached (migration 018). */
 	deliveries?: DeliveryView[];
+	/** The emoji reactions on them (migration 024). */
+	reactions?: ReactionView[];
 };

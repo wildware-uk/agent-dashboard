@@ -26,6 +26,7 @@
 		DeliveryView,
 		MediaView,
 		MessageView,
+		ReactionView,
 		RequestView,
 		UpdateView
 	} from './types';
@@ -94,7 +95,9 @@
 		/** Which agents each message in this thread has reached (migration 018). */
 		messageDeliveries = {},
 		/** Questions asked inside this thread, by message id (migration 022). */
-		threadRequests = {}
+		threadRequests = {},
+		/** The emoji on each message in this thread, by message id (migration 024). */
+		messageReactions = {}
 	}: {
 		update: UpdateView;
 		taskTitle?: string;
@@ -109,6 +112,7 @@
 		messageMedia?: Record<string, MediaView[]>;
 		messageDeliveries?: Record<string, DeliveryView[]>;
 		threadRequests?: Record<string, RequestView[]>;
+		messageReactions?: Record<string, ReactionView[]>;
 	} = $props();
 
 	/**
@@ -278,6 +282,7 @@
 				media={messageMedia}
 				deliveries={messageDeliveries}
 				requests={threadRequests}
+				reactions={messageReactions}
 				{actions}
 				uploader={actions}
 				ondelete={async (id) => {
