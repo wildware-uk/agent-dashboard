@@ -616,6 +616,14 @@
 					</h2>
 					{#each group.items as row (row.id)}
 						{#if row.kind === 'post'}
+							<!--
+								`actions` as well as `uploader`, and the difference was a bug the
+								owner found: the card was handed somewhere to upload images and
+								nothing to write with, so a post had no reaction control, its
+								replies had none either, and a question asked in its thread could
+								not be answered. On a project whose feed is mostly posts, that
+								reads as "I cannot react to anything here".
+							-->
 							<PostCard
 								post={row.post}
 								replies={threads?.repliesTo?.(row.post.id) ?? []}
@@ -630,6 +638,7 @@
 								replyDeliveries={deliveriesForPost(row.post.id)}
 								{threadRequests}
 								uploader={actions}
+								{actions}
 								{onlineIds}
 								onreply={async (body, mediaIds = [], answers) => {
 									// The images go with it: a reply that quietly dropped the
