@@ -173,13 +173,14 @@ describe('reading messages as an agent', () => {
 
 		expect(peek.messages).toHaveLength(1);
 		expect(peek.markedRead).toBe(false);
-		expect(readCursorSeq(h.db, agentId)).toBe(0);
+		expect(readCursorSeq(h.db, agentId, projectId)).toBe(0);
 		// The same messages come back, because nothing was read.
 		expect(readMessages(h, { agentId, markRead: false }).messages).toHaveLength(1);
 
 		const read = readMessages(h, { agentId });
 		expect(read.markedRead).toBe(true);
-		expect(readCursorSeq(h.db, agentId)).toBe(read.messages.at(-1)!.seq);
+		// A cursor per project (migration 025), so it is that project's row that moved.
+		expect(readCursorSeq(h.db, agentId, projectId)).toBe(read.messages.at(-1)!.seq);
 	});
 
 	it('never hands an agent its own messages back', () => {
@@ -197,17 +198,31 @@ describe('reading messages as an agent', () => {
 		const scoped = readMessages(h, { agentId, project: slug });
 
 		expect(scoped.messages.map((message) => message.body)).toEqual(['for dashboard']);
-		// A cursor is one integer per reader (design §3), so it stops short of the
-		// message this read stepped over rather than jumping it. Both are therefore
-		// still unread, and both come back: a filtered read can re-deliver, which is
-		// the tradeoff that makes it impossible for it to *lose* a message.
-		expect(scoped.unread).toBe(2);
+		// A cursor per project (migration 025): this read moved the dashboard's and
+		// left the other project's exactly where it was. The message it stepped over
+		// is still unread and still comes back — the point of the change, since one
+		// shared integer used to make it unreadable for ever once another session
+		// dragged it past.
+		expect(scoped.unread).toBe(1);
 		expect(readMessages(h, { agentId }).messages.map((message) => message.body)).toEqual([
-			'for other',
-			'for dashboard'
+			'for other'
 		]);
-		// And once the cursor has passed both, nothing comes back again.
+		// And once every cursor has passed, nothing comes back again.
 		expect(readMessages(h, { agentId }).messages).toEqual([]);
+	});
+
+	it('does not let a read in one project mark another project’s messages read', () => {
+		const other = createProject(h, { name: 'Other' }).project;
+		fromOwner('for other', { project: other.slug });
+		fromOwner('for dashboard', { project: slug });
+
+		readMessages(h, { agentId, project: slug });
+
+		// The exact failure the owner reported twice: a second session reading its
+		// own project used to leave this one announceable to nobody.
+		expect(
+			unreadMessagesInScope(h, agentId, 10, [other.id]).map((message) => message.body)
+		).toEqual(['for other']);
 	});
 
 	it('resumes from an explicit cursor, and still cannot skip what is unread', () => {

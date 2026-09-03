@@ -77,13 +77,17 @@ Decisions worth knowing before changing them:
   line writes nothing, so going quiet is _observed_ by the rail rather than
   announced.
 - **Unread is a cursor, never a flag** (§3): `read_cursors` holds one integer per
-  reader, so "unread" is `messages.seq` against that integer and a second reader
-  is a row rather than a migration. `readMessages` therefore only ever advances
-  the cursor over messages it actually handed over — a read narrowed to one
-  project, or started from an explicit `since`, stops short of anything it
-  stepped over. The consequence is at-least-once delivery: the same message can
-  come back twice, and cannot silently vanish. The heartbeat's `unreadMessages`
-  count is the same comparison, so the two can never disagree.
+  reader **per project** (migration 025), so "unread" is `messages.seq` against
+  the cursor for that message's own project, and a second reader is a row rather
+  than a migration. Per project because the owner's sessions share one bearer
+  token: with a single integer, a session catching up in its own project dragged
+  the cursor past another project's unread and made it unannounceable — the
+  stream computes what to announce from exactly that comparison. `readMessages`
+  moves only the cursors of the projects it read, and a read started from an
+  explicit `since` still stops short of anything it stepped over. The
+  consequence is at-least-once delivery: the same message can come back twice,
+  and cannot silently vanish. The heartbeat's `unreadMessages` count is the same
+  comparison, so the two can never disagree.
 - **A claim is one statement** (§5): `claimTask` is a single
   `UPDATE tasks SET state='claimed' … WHERE id = ? AND state = 'todo'`, so of two
   agents racing for the same task SQLite picks the winner and the loser's update

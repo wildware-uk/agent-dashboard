@@ -29,6 +29,7 @@ import { sql as notifications } from './021-notifications';
 import { sql as questionsInThreads } from './022-questions-in-threads';
 import { sql as rescueOrphanedReplies } from './023-rescue-orphaned-replies';
 import { sql as reactions } from './024-reactions';
+import { sql as cursorPerProject } from './025-cursor-per-project';
 
 export type Migration = {
 	/** 1-based, contiguous, and permanent once shipped. */
@@ -81,5 +82,6 @@ export const MIGRATIONS: readonly Migration[] = [
 	{ version: 21, name: 'notifications', sql: notifications },
 	{ version: 22, name: 'questions-in-threads', sql: questionsInThreads },
 	{ version: 23, name: 'rescue-orphaned-replies', sql: rescueOrphanedReplies },
-	{ version: 24, name: 'reactions', sql: reactions }
+	{ version: 24, name: 'reactions', sql: reactions },
+	{ version: 25, name: 'cursor-per-project', sql: cursorPerProject, rebuildsTables: true }
 ];
