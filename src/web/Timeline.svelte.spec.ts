@@ -453,6 +453,25 @@ describe('what the owner posted', () => {
 			...over
 		});
 
+	/**
+	 * The bug the owner found: "I can't react to posts, only comments", and on
+	 * the project whose feed is mostly posts, "I can't react to anything here".
+	 *
+	 * The timeline handed this card `uploader` and not `actions`, so every
+	 * control that needs somewhere to write was rendered dead.
+	 */
+	it('gives a post the owner’s controls, not only somewhere to upload', async () => {
+		const fake = fakeActions();
+		mount([anUpdate({ id: 'u1', seq: 2, createdAt: day })], {
+			threads: source([post()]),
+			actions: fake.actions
+		});
+
+		expect(
+			document.querySelector('[data-post="post1"] [aria-label="Add a reaction"]')
+		).not.toBeNull();
+	});
+
 	it('renders a post as a card, attributed to the owner', async () => {
 		const { screen } = mount([anUpdate({ id: 'u1', seq: 2, createdAt: day })], {
 			threads: source([post()])
