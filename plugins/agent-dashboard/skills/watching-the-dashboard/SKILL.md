@@ -55,6 +55,12 @@ replying to a notification.
 | waiting on you           | `await_request` with the `request_id` you are holding                                                                                     |
 | your owner answered      | act on it — the answer is in the line; `await_request` re-reads the typed value in full                                                   |
 
+A **reaction** line is your owner putting an emoji on something you said: ✅
+means read and approved, 👀 means seen, 👎 means stop before you go further. It
+carries the emoji and the start of your own message, so you rarely need to look
+anything up, and nothing is expected back — do not thank them for it. A line
+saying they _removed_ a reaction is news too: they have changed their mind.
+
 A line that ends with `[1 image attached — call get_messages to see it]` means
 exactly that: the picture is real, and `get_messages` is the only thing that can
 show it to you. Do not answer the words alone when there is an image you have

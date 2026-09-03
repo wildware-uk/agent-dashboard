@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
 	answerRequest,
 	broadcastTask,
+	react,
 	cancelRequest,
 	createRequest,
 	createTask,
@@ -788,5 +789,108 @@ describe('a connection that does not name itself', () => {
 		second.abort.abort();
 
 		expect(deliveriesFor(mcp.h, [message.id])).toHaveLength(1);
+	});
+});
+
+/**
+ * The owner's emoji, down the agent's channel (migration 024).
+ *
+ * Their words: "I want to be able to react to messages too, and agents will
+ * receive this down their channel." A tick on a report is approval and costs
+ * them one tap; an agent that never hears it is being managed by silence.
+ */
+describe('a reaction the owner left', () => {
+	it('pushes the emoji, with enough of the message to know which line it was', async () => {
+		const mcp = mcpHarness();
+		const { project } = createProject(mcp.h, { name: 'Dashboard' });
+		const update = postUpdate(mcp.h, {
+			project: project.slug,
+			agentId: mcp.deps.agent.id,
+			body: 'shipped'
+		});
+		const said = postMessage(mcp.h, {
+			author: { kind: 'agent', agentId: mcp.deps.agent.id },
+			updateId: update.id,
+			body: 'the migration is applied and the numbers add up'
+		});
+
+		const stream = connect(mcp, mcp.token, `?project=${project.slug}`);
+		await stream.take(3);
+
+		react(mcp.h, { messageId: said.id, actor: { kind: 'human' }, emoji: '✅' });
+		const frames = await stream.take(4);
+		stream.abort.abort();
+
+		const reaction = frames.find((frame) => frame.event === 'reaction');
+		expect(reaction?.data).toMatchObject({
+			message_id: said.id,
+			emoji: '✅',
+			on: true,
+			project: project.slug,
+			body: 'the migration is applied and the numbers add up'
+		});
+	});
+
+	it('says when one is taken back, which is news of its own', async () => {
+		const mcp = mcpHarness();
+		const { project } = createProject(mcp.h, { name: 'Dashboard' });
+		const said = postMessage(mcp.h, {
+			author: { kind: 'agent', agentId: mcp.deps.agent.id },
+			project: project.slug,
+			body: 'ready to merge'
+		});
+		react(mcp.h, { messageId: said.id, actor: { kind: 'human' }, emoji: '👍', on: true });
+
+		const stream = connect(mcp, mcp.token, `?project=${project.slug}`);
+		await stream.take(3);
+
+		react(mcp.h, { messageId: said.id, actor: { kind: 'human' }, emoji: '👍', on: false });
+		const frames = await stream.take(4);
+		stream.abort.abort();
+
+		expect(frames.find((frame) => frame.event === 'reaction')?.data).toMatchObject({
+			emoji: '👍',
+			on: false
+		});
+	});
+
+	it('keeps another agent’s reactions, and its messages, off this stream', async () => {
+		const mcp = mcpHarness();
+		const { project } = createProject(mcp.h, { name: 'Dashboard' });
+		const other = mcp.mint('other-agent');
+		const theirs = postMessage(mcp.h, {
+			author: { kind: 'agent', agentId: other.agentId },
+			project: project.slug,
+			body: 'not your line'
+		});
+		const mine = postMessage(mcp.h, {
+			author: { kind: 'agent', agentId: mcp.deps.agent.id },
+			project: project.slug,
+			body: 'yours'
+		});
+
+		const stream = connect(mcp, mcp.token, `?project=${project.slug}`);
+		await stream.take(3);
+
+		// On somebody else's message: none of this agent's business.
+		react(mcp.h, { messageId: theirs.id, actor: { kind: 'human' }, emoji: '👀' });
+		// By an agent rather than the owner: not feedback, and not news.
+		react(mcp.h, {
+			messageId: mine.id,
+			actor: { kind: 'agent', agentId: other.agentId },
+			emoji: '👀'
+		});
+		// And one that *is*, so the wait ends on a frame that proves the stream
+		// was live rather than merely quiet.
+		react(mcp.h, { messageId: mine.id, actor: { kind: 'human' }, emoji: '🎉' });
+
+		// Five, not four: the other agent's message is unread for this one too, so
+		// the connection opens with a message frame of its own.
+		const frames = await stream.take(5);
+		stream.abort.abort();
+
+		const reactions = frames.filter((frame) => frame.event === 'reaction');
+		expect(reactions).toHaveLength(1);
+		expect(reactions[0]?.data).toMatchObject({ message_id: mine.id, emoji: '🎉' });
 	});
 });
