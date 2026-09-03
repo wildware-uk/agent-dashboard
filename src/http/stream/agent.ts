@@ -42,6 +42,7 @@ import {
 	countOpenTasks,
 	countUnreadMessagesInScope,
 	countWork,
+	findMessage,
 	findProject,
 	findRequest,
 	listMessageMedia,
@@ -95,6 +96,22 @@ export const MESSAGE_EVENT = 'message';
  * is — so an agent that wants the typed value re-reads it.
  */
 export const ANSWER_EVENT = 'answer';
+
+/**
+ * The reaction frame: the owner put an emoji on something this agent said.
+ *
+ * The owner asked for it in the same breath as reacting itself — "agents will
+ * receive this down their channel" — and it is the cheapest possible piece of
+ * feedback: a tick on a report means read and approved, eyes means seen, a
+ * thumbs-down means stop. None of that is worth a message, and all of it is
+ * worth knowing.
+ *
+ * Only the owner's reactions, and only on messages this agent wrote. An agent
+ * hearing about every emoji in a project it works in would be interrupted by
+ * other agents' conversations, and hearing about its own reactions would be
+ * told what it just did.
+ */
+export const REACTION_EVENT = 'reaction';
 
 /** How many unread messages one frame will describe. */
 export const MESSAGE_LIMIT = 5;
@@ -187,6 +204,10 @@ const WATCHED: readonly AppEvent['type'][] = [
 	'messages.read',
 	'task.created',
 	'task.updated',
+	// The owner reacted to something this agent said (migration 024). Watched
+	// even though it moves none of the three counts: it is feedback the agent
+	// wants and the counts cannot express.
+	'reaction.updated',
 	'request.created',
 	'request.answered'
 ];
@@ -373,6 +394,46 @@ function answerFrame(ctx: DomainContext, agentId: string, requestId: string): st
 	return `event: ${ANSWER_EVENT}\ndata: ${body}\n\n`;
 }
 
+/**
+ * One reaction, as the agent that was reacted to hears it.
+ *
+ * Empty for anything that is not this agent's business: a reaction by anybody
+ * other than the owner, one on a message this agent did not write, or one on a
+ * message that has since gone. The event is broadcast to every connection, so
+ * this is where "is it mine" is decided.
+ *
+ * The body rides along, trimmed: an emoji with no idea what it is *on* would
+ * cost the agent a `get_messages` to find out what its owner just approved.
+ */
+function reactionFrame(
+	ctx: DomainContext,
+	agentId: string,
+	payload: { messageId: string; actor: string; emoji: string; on: boolean }
+): string {
+	// Their own emoji is not news, and neither is another agent's.
+	if (payload.actor !== 'human') return '';
+
+	const message = findMessage(ctx, payload.messageId);
+	if (!message || message.deletedAt !== null) return '';
+	if (message.author !== `agent:${agentId}`) return '';
+
+	const project = message.projectId ? findProject(ctx, message.projectId) : null;
+	const body = JSON.stringify({
+		type: REACTION_EVENT,
+		message_id: message.id,
+		emoji: payload.emoji,
+		on: payload.on,
+		project: project?.slug ?? null,
+		project_name: project?.name ?? null,
+		update_id: message.updateId,
+		task_id: message.taskId,
+		// Enough of what was reacted to that the agent knows which of its lines
+		// this is about, and no more: the message itself is a tool call away.
+		body: message.body.replace(/\s+/g, ' ').trim().slice(0, 160)
+	});
+	return `event: ${REACTION_EVENT}\ndata: ${body}\n\n`;
+}
+
 function same(left: WorkCounts, right: WorkCounts): boolean {
 	return (
 		left.unreadMessages === right.unreadMessages &&
@@ -526,6 +587,13 @@ export function createAgentStreamHandler(
 					// still has to be told.
 					if (published.type === 'request.answered') {
 						write(answerFrame(ctx, agentId, published.payload.requestId));
+					}
+
+					// An emoji the owner put on something this agent said (migration
+					// 024). Like the answer above, it moves no count and is still the
+					// news: a tick on a report is approval, and it arrives free.
+					if (published.type === 'reaction.updated') {
+						write(reactionFrame(ctx, agentId, published.payload));
 					}
 
 					if (same(last, next)) return;

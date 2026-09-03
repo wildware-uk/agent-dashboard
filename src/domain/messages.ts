@@ -457,6 +457,18 @@ export function deliveriesFor(
 	return listDeliveries(ctx.db, messageIds);
 }
 
+/**
+ * One message by id, deleted or not.
+ *
+ * For adapters that hold an id and need the row — the agent stream deciding
+ * whether a reaction is on something this agent wrote, for instance. `$http`
+ * may see the domain and nothing below it (design §2), so the lookup is
+ * exported here rather than reached for in `$db`.
+ */
+export function findMessage(ctx: DomainContext, messageId: string): Message | undefined {
+	return findMessageById(ctx.db, messageId);
+}
+
 export type ReadMessagesInput = {
 	/**
 	 * The agent reading. Adapters resolve this from the bearer token and never

@@ -155,6 +155,11 @@ Pass `on: true` or `on: false` if there is any chance you will call it twice —
 without it the call toggles, and a retry would undo the reaction it was meant to
 repeat.
 
+Your owner reacts too, and you hear about it: an emoji they put on one of your
+messages arrives on your channel as a reaction event. ✅ on a report means read
+and approved — that is the cheapest approval you will ever get, and it needs no
+reply.
+
 An emoji is a poor way to answer a question. If your owner asked which of two
 things to do, 👍 does not tell them which; that needs `post_message`.
 

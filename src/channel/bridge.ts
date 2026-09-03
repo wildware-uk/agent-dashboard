@@ -117,6 +117,30 @@ export type AnswerFrame = {
 	answered_at: string | null;
 };
 
+/**
+ * An `event: reaction` frame: the owner put an emoji on something this agent
+ * said (migration 024).
+ *
+ * The cheapest feedback there is, and the owner asked for it to reach the agent
+ * "down their channel". A tick on a report means read and approved; eyes means
+ * seen; a thumbs-down means stop before you go further. None of it is worth a
+ * message and all of it is worth knowing, which is exactly what a channel is
+ * for.
+ */
+export type ReactionFrame = {
+	type: 'reaction';
+	message_id: string;
+	emoji: string;
+	/** `false` when the owner took the reaction back. */
+	on: boolean;
+	project: string | null;
+	project_name: string | null;
+	update_id: string | null;
+	task_id: string | null;
+	/** The start of what was reacted to, so the agent knows which line it was. */
+	body: string;
+};
+
 export const CHANNEL_NAME = 'agent-dashboard';
 
 /**
@@ -153,6 +177,10 @@ export const INSTRUCTIONS = [
 	'  to you, so somebody else may claim it first — a conflict means move on, not retry.',
 	'- pending_approvals above zero: one of your own request_input calls is still waiting on',
 	'  the owner; call await_request with its request_id.',
+	'- A reaction event is your owner putting an emoji on something you said: a tick means',
+	'  read and approved, eyes means seen, a thumbs-down means stop. It carries the emoji and',
+	'  the start of your own message, so you rarely need to look anything up. Nothing is',
+	'  expected back — do not thank them for it.',
 	'- An answer event is your owner settling one of your request_input calls — a button they',
 	'  clicked, a form they submitted, a prompt they dismissed. It carries the answer itself',
 	'  with request_id and state on the tag, so you can act on it without asking again;',
@@ -309,6 +337,23 @@ export function describeAttachments(media: ChannelAttachment[] | undefined): str
 	return ` [${parts.join(' and ')} attached — call get_messages to see ${
 		media.length === 1 ? 'it' : 'them'
 	}]`;
+}
+
+/**
+ * One reaction as a sentence.
+ *
+ * The emoji first, because that is the content: an agent scanning a
+ * notification sees the tick before it reads the words. A reaction taken back
+ * says so rather than being sent as though it had just arrived — an owner
+ * removing a thumbs-up has changed their mind, and that is worth as much as the
+ * thumbs-up was.
+ */
+export function describeReaction(frame: ReactionFrame): string {
+	const about = frame.body.trim();
+	const where = frame.project_name ?? frame.project ?? 'the dashboard';
+	const verb = frame.on ? 'reacted' : 'removed their reaction';
+
+	return `Your owner ${verb} ${frame.emoji} on your message (${where}): ${about}`;
 }
 
 /**
@@ -484,6 +529,31 @@ export async function runBridge(options: BridgeOptions): Promise<void> {
 		await send(`${describeAnswer(frame)} (${where})`, attributes);
 	};
 
+	/**
+	 * The owner's emoji on something this agent said.
+	 *
+	 * Not deduplicated and not held: a reaction is small, it is already the whole
+	 * news, and there is no message frame coming behind it to wait for.
+	 */
+	const announceReaction = async (
+		send: NonNullable<BridgeOptions['notify']>,
+		frame: ReactionFrame
+	) => {
+		const held = pendingCounts;
+		pendingCounts = null;
+
+		const attributes: Record<string, string> = {
+			message_id: frame.message_id,
+			emoji: frame.emoji
+		};
+		if (frame.project) attributes.project = frame.project;
+		if (frame.update_id) attributes.update_id = frame.update_id;
+		if (frame.task_id) attributes.task_id = frame.task_id;
+		if (held) Object.assign(attributes, meta(held.work));
+
+		await send(describeReaction(frame), attributes);
+	};
+
 	/** Send the messages themselves, one notification each. */
 	const announce = async (send: NonNullable<BridgeOptions['notify']>, all: ChannelMessage[]) => {
 		const held = pendingCounts;
@@ -547,6 +617,14 @@ export async function runBridge(options: BridgeOptions): Promise<void> {
 			attempt = 0;
 
 			for await (const frame of readFrames(response.body)) {
+				if (frame.event === 'reaction' && frame.data) {
+					try {
+						await announceReaction(notify, JSON.parse(frame.data) as ReactionFrame);
+					} catch {
+						// A malformed frame must not drop a working connection.
+					}
+					continue;
+				}
 				if (frame.event === 'answer' && frame.data) {
 					try {
 						await announceAnswer(notify, JSON.parse(frame.data) as AnswerFrame);

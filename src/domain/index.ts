@@ -189,6 +189,7 @@ export {
 	countUnreadMessagesInScope,
 	deleteMessage,
 	deliveriesFor,
+	findMessage,
 	markMessagesDelivered,
 	projectsForAgent,
 	unreadMessagesInScope,

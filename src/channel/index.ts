@@ -11,6 +11,7 @@ export {
 	createChannelServer,
 	describeAnswer,
 	describeAttachments,
+	describeReaction,
 	describeRise,
 	main,
 	newClientId,
@@ -23,6 +24,7 @@ export type {
 	ChannelAttachment,
 	ChannelMessage,
 	MessageFrame,
+	ReactionFrame,
 	Work,
 	WorkFrame
 } from './bridge';

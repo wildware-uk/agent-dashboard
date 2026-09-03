@@ -7,6 +7,7 @@ import {
 	createChannelServer,
 	describeAnswer,
 	describeAttachments,
+	describeReaction,
 	describeRise,
 	main,
 	newClientId,
@@ -14,6 +15,7 @@ import {
 	runBridge,
 	type AnswerFrame,
 	type ChannelMessage,
+	type ReactionFrame,
 	type Work
 } from './index';
 
@@ -728,5 +730,92 @@ describe('a message with something attached', () => {
 	it('adds nothing at all to a message with no attachments', () => {
 		expect(describeAttachments(undefined)).toBe('');
 		expect(describeAttachments([])).toBe('');
+	});
+});
+
+/**
+ * The owner's emoji, arriving as a notification (migration 024).
+ *
+ * Their words: "I want to be able to react to messages too, and agents will
+ * receive this down their channel." A tick on a report is approval that costs
+ * one tap; an agent that never hears it is being managed by silence.
+ */
+describe('a reaction from the owner', () => {
+	const frame = (overrides: Partial<ReactionFrame> = {}): ReactionFrame => ({
+		type: 'reaction',
+		message_id: 'm1',
+		emoji: '✅',
+		on: true,
+		project: 'megamerge',
+		project_name: 'Mega Merge',
+		update_id: null,
+		task_id: null,
+		body: 'the migration is applied and the numbers add up',
+		...overrides
+	});
+
+	async function bridgeOver(body: ReadableStream<Uint8Array>) {
+		const notify = vi.fn().mockResolvedValue(undefined);
+		const abort = new AbortController();
+		const fetcher = vi.fn().mockResolvedValue(new Response(body, { status: 200 }));
+
+		await runBridge({
+			baseUrl: 'https://dash.test',
+			token: 'a-token',
+			projects: ['*'],
+			fetch: fetcher as unknown as typeof globalThis.fetch,
+			notify,
+			sleep: async () => abort.abort(),
+			signal: abort.signal
+		});
+
+		return notify;
+	}
+
+	it('pushes it with the emoji and the ids to act on', async () => {
+		const notify = await bridgeOver(sse(`event: reaction\ndata: ${JSON.stringify(frame())}\n\n`));
+
+		expect(notify).toHaveBeenCalledTimes(1);
+		const [content, meta] = notify.mock.calls[0]!;
+		expect(content).toContain('✅');
+		expect(content).toContain('the migration is applied');
+		expect(meta).toMatchObject({ message_id: 'm1', emoji: '✅' });
+	});
+
+	it('survives a malformed frame rather than dropping the connection', async () => {
+		const notify = await bridgeOver(
+			sse('event: reaction\ndata: {not json\n\n', workFrame({ open_tasks: 1 }))
+		);
+
+		expect(notify).toHaveBeenCalledTimes(1);
+		expect(notify.mock.calls[0]![0]).toContain('1 open task');
+	});
+});
+
+describe('putting one reaction into a sentence', () => {
+	const frame = (overrides: Partial<ReactionFrame> = {}): ReactionFrame => ({
+		type: 'reaction',
+		message_id: 'm1',
+		emoji: '👍',
+		on: true,
+		project: null,
+		project_name: null,
+		update_id: null,
+		task_id: null,
+		body: 'ready to merge',
+		...overrides
+	});
+
+	it('leads with what the owner did and what it was on', () => {
+		const said = describeReaction(frame());
+
+		expect(said).toContain('reacted 👍');
+		expect(said).toContain('ready to merge');
+	});
+
+	it('says when a reaction was taken back, which is news of its own', () => {
+		// An owner removing a thumbs-up has changed their mind, and an agent told
+		// nothing would carry on as though they had not.
+		expect(describeReaction(frame({ on: false }))).toContain('removed their reaction');
 	});
 });
