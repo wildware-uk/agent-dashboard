@@ -940,3 +940,62 @@ describe('answering the owner inside a card’s thread', () => {
 		expect(second.updateId).toBeNull();
 	});
 });
+
+/**
+ * Whose inbox is whose (the owner's report).
+ *
+ * They run two agents — one on a home server, one on a work laptop — and a
+ * message they typed in the work project was handed to the Mega Merge agent,
+ * which answered it: "that isn't me, you've got the wrong agent." It was right,
+ * and it should never have been asked.
+ *
+ * A message belongs to a project, not to an agent, so relevance is derived from
+ * what an agent has actually done — the same rule the live stream already kept,
+ * now kept by the read and the count as well.
+ */
+describe('an agent’s inbox is the projects it works in', () => {
+	it('does not hand one agent another agent’s conversation', () => {
+		const mine = createProject(h, { name: 'Mega Merge' }).project;
+		const theirs = createProject(h, { name: 'Work' }).project;
+		// This agent works in `mine` — an update it posted is what says so.
+		postUpdate(h, { project: mine.slug, agentId, body: 'merging' });
+		fromOwner('for the work agent', { project: theirs.slug });
+		fromOwner('for you', { project: mine.slug });
+
+		const page = readMessages(h, { agentId });
+
+		expect(page.messages.map((message) => message.body)).toEqual(['for you']);
+		expect(page.unread).toBe(0);
+	});
+
+	it('counts the same way the heartbeat does, so a count is never a dead end', () => {
+		const mine = createProject(h, { name: 'Mega Merge' }).project;
+		const theirs = createProject(h, { name: 'Work' }).project;
+		postUpdate(h, { project: mine.slug, agentId, body: 'merging' });
+		fromOwner('not yours', { project: theirs.slug });
+
+		// A count that included it would say "something is waiting" for ever: the
+		// read would never hand it over, so the agent would fetch and fetch.
+		expect(countUnreadMessages(h, agentId)).toBe(0);
+	});
+
+	it('still hears everything before it has done anything', () => {
+		const somewhere = createProject(h, { name: 'Somewhere' }).project;
+		fromOwner('first thing anybody has said to you', { project: somewhere.slug });
+
+		// A brand new agent must not be deaf to the first message ever sent to it.
+		expect(readMessages(h, { agentId }).messages.map((m) => m.body)).toEqual([
+			'first thing anybody has said to you'
+		]);
+	});
+
+	it('lets an agent read a project it works in by name', () => {
+		const mine = createProject(h, { name: 'Mega Merge' }).project;
+		postUpdate(h, { project: mine.slug, agentId, body: 'merging' });
+		fromOwner('for you', { project: mine.slug });
+
+		expect(readMessages(h, { agentId, project: mine.slug }).messages.map((m) => m.body)).toEqual([
+			'for you'
+		]);
+	});
+});

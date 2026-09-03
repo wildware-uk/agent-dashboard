@@ -504,19 +504,51 @@ export function readMessages(ctx: DomainContext, input: ReadMessagesInput): Mess
 	const mine = authorText({ kind: 'agent', agentId: agent.id });
 	const limit = pageLimit(input.limit);
 	const projectId = input.project ? resolveProject(ctx, input.project).id : undefined;
+	/**
+	 * **An agent's inbox is the projects it works in.**
+	 *
+	 * This used to be every message in the deployment, and the owner found what
+	 * that means the moment they had two agents: a message they typed in their
+	 * work project was handed to the Mega Merge agent, which answered it — "that
+	 * isn't me, you've got the wrong agent". It was right, and it should never
+	 * have been asked.
+	 *
+	 * A message belongs to a *project*, not to an agent, so relevance has to be
+	 * derived — and it is derived exactly as the live stream derives it
+	 * ({@link projectsForAgent}): from what this agent has actually done. An
+	 * agent that has done nothing yet still hears everything, because a new agent
+	 * must not be deaf to the first thing ever said to it.
+	 *
+	 * An explicit `project` still wins: asking for one is asking for that one.
+	 */
+	const worksIn = projectsForAgent(ctx, agent.id);
+	const scope = projectId === undefined ? worksIn : [projectId];
 	const cursorSeq = readCursorSeq(ctx.db, agent.id);
 	const from = decodeCursor(input.since) ?? cursorSeq;
 
 	const messages = listMessages(ctx.db, {
 		afterSeq: from,
-		projectId,
 		excludeAuthor: mine,
-		limit
+		limit,
+		...(scope ? { projectIds: scope } : {})
 	});
 
 	const markRead = input.markRead ?? true;
 	if (markRead) {
-		const to = readTo(ctx, { cursorSeq, from, mine, limit, projectId, messages });
+		// The cursor is protected against *this agent's* unread, not against the
+		// narrower slice it happened to ask for: a message in a project it does
+		// not work in is not a message it is waiting for, and refusing to step
+		// over one would freeze the cursor behind another agent's conversation for
+		// ever — which is what left this agent's inbox permanently "unread".
+		const to = readTo(ctx, {
+			cursorSeq,
+			from,
+			mine,
+			limit,
+			projectId,
+			scope: worksIn,
+			messages
+		});
 		advanceReadCursor(ctx.db, agent.id, to);
 		// Announced, unlike every other read in this file, because it is the one
 		// that changes state somebody else is watching: an agent's unread count is
@@ -530,7 +562,10 @@ export function readMessages(ctx: DomainContext, input: ReadMessagesInput): Mess
 	return {
 		messages,
 		cursor: encodeCursor(last ? last.seq : from),
-		unread: countMessagesAfter(ctx.db, readCursorSeq(ctx.db, agent.id), { excludeAuthor: mine }),
+		// Counted in the same scope it was read in: a number that includes messages
+		// this agent will never be handed is a number that says "call me again"
+		// for ever.
+		unread: countUnreadMessages(ctx, agent.id),
 		markedRead: markRead
 	};
 }
@@ -538,13 +573,21 @@ export function readMessages(ctx: DomainContext, input: ReadMessagesInput): Mess
 /**
  * How many messages one agent has not read (design §5).
  *
- * This is the count the heartbeat piggybacks, which is why it is deliberately
- * *not* filtered by project: an agent asks "is there anything for me", and an
- * answer scoped to somewhere it was not looking would be a no that means yes.
+ * The count the heartbeat piggybacks, and it is scoped to the projects this
+ * agent works in — the same scope {@link readMessages} hands over. It used to
+ * span the deployment, on the theory that "is there anything for me anywhere"
+ * must not be answered narrowly; with more than one agent that theory produced
+ * a count of work belonging to somebody else, and an agent that fetched it was
+ * handed another agent's owner conversation.
+ *
+ * An agent with no history counts everything, which is the same "a new agent is
+ * not deaf" rule the read keeps.
  */
 export function countUnreadMessages(ctx: DomainContext, agentId: string): number {
+	const scope = projectsForAgent(ctx, agentId);
 	return countMessagesAfter(ctx.db, readCursorSeq(ctx.db, agentId), {
-		excludeAuthor: authorText({ kind: 'agent', agentId })
+		excludeAuthor: authorText({ kind: 'agent', agentId }),
+		...(scope ? { projectIds: scope } : {})
 	});
 }
 
@@ -703,6 +746,8 @@ function readTo(
 		mine: string;
 		limit: number;
 		projectId: string | undefined;
+		/** The projects this read covered, or `null` for every one. */
+		scope: string[] | null;
 		messages: Message[];
 	}
 ): number {
@@ -710,13 +755,16 @@ function readTo(
 	const narrowed = args.projectId !== undefined || args.from !== args.cursorSeq;
 	if (!narrowed) return last;
 
-	// Everything unread, in order, up to the same page size. If the first `limit`
-	// of those are exactly what was handed over, nothing was stepped over: the
-	// two lists are the same rows.
+	// Everything unread *in this agent's scope*, in order, up to the same page
+	// size. If the first `limit` of those are exactly what was handed over,
+	// nothing was stepped over: the two lists are the same rows. Scoped, because
+	// a message in a project this agent does not work in is not a message it is
+	// waiting for, and stopping the cursor short of one would freeze it for ever.
 	const unread = listMessages(ctx.db, {
 		afterSeq: args.cursorSeq,
 		excludeAuthor: args.mine,
-		limit: args.limit
+		limit: args.limit,
+		...(args.scope ? { projectIds: args.scope } : {})
 	});
 	const handed = new Set(args.messages.map((message) => message.id));
 	const skipped = unread.find((message) => !handed.has(message.id));
