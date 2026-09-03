@@ -854,6 +854,106 @@ describe('a reaction the owner left', () => {
 		});
 	});
 
+	/**
+	 * The gap the owner found by using it: "I am sending reacts and you're not
+	 * receiving them."
+	 *
+	 * They were reacting to their *own* messages — which is how a person marks a
+	 * request approved or done — and the rule only carried an emoji to the agent
+	 * that wrote the line it landed on. An emoji is news to whoever is in the
+	 * conversation, not only to whoever wrote the sentence.
+	 */
+	it('carries an emoji on the owner’s own line in a thread this agent is in', async () => {
+		const mcp = mcpHarness();
+		const { project } = createProject(mcp.h, { name: 'Dashboard' });
+		const asked = postMessage(mcp.h, {
+			author: { kind: 'human' },
+			project: project.slug,
+			body: 'add message reactions'
+		});
+		// The agent is in this conversation because it answered in it.
+		postMessage(mcp.h, {
+			author: { kind: 'agent', agentId: mcp.deps.agent.id },
+			replyTo: asked.id,
+			body: 'shipped'
+		});
+
+		const stream = connect(mcp, mcp.token, `?project=${project.slug}`);
+		await stream.take(4);
+
+		react(mcp.h, { messageId: asked.id, actor: { kind: 'human' }, emoji: '✅' });
+		const frames = await stream.take(5);
+		stream.abort.abort();
+
+		expect(frames.find((frame) => frame.event === 'reaction')?.data).toMatchObject({
+			message_id: asked.id,
+			emoji: '✅'
+		});
+	});
+
+	it('carries one on a comment under a card this agent posted', async () => {
+		const mcp = mcpHarness();
+		const { project } = createProject(mcp.h, { name: 'Dashboard' });
+		const update = postUpdate(mcp.h, {
+			project: project.slug,
+			agentId: mcp.deps.agent.id,
+			body: 'shipped'
+		});
+		const theirs = postMessage(mcp.h, {
+			author: { kind: 'human' },
+			updateId: update.id,
+			body: 'looks right'
+		});
+
+		const stream = connect(mcp, mcp.token, `?project=${project.slug}`);
+		await stream.take(4);
+
+		react(mcp.h, { messageId: theirs.id, actor: { kind: 'human' }, emoji: '🎉' });
+		const frames = await stream.take(5);
+		stream.abort.abort();
+
+		expect(frames.find((frame) => frame.event === 'reaction')?.data).toMatchObject({
+			message_id: theirs.id,
+			emoji: '🎉'
+		});
+	});
+
+	it('stays out of a conversation this agent has never joined', async () => {
+		const mcp = mcpHarness();
+		const { project } = createProject(mcp.h, { name: 'Dashboard' });
+		const other = mcp.mint('other-agent');
+		const theirs = postMessage(mcp.h, {
+			author: { kind: 'human' },
+			project: project.slug,
+			body: 'a conversation with somebody else'
+		});
+		postMessage(mcp.h, {
+			author: { kind: 'agent', agentId: other.agentId },
+			replyTo: theirs.id,
+			body: 'on it'
+		});
+		const mine = postMessage(mcp.h, {
+			author: { kind: 'agent', agentId: mcp.deps.agent.id },
+			project: project.slug,
+			body: 'my own line'
+		});
+
+		const stream = connect(mcp, mcp.token, `?project=${project.slug}`);
+		await stream.take(4);
+
+		react(mcp.h, { messageId: theirs.id, actor: { kind: 'human' }, emoji: '👀' });
+		// And one that is this agent's, so the wait ends on a frame rather than on
+		// a timeout — proving the stream was live and the first went unannounced.
+		react(mcp.h, { messageId: mine.id, actor: { kind: 'human' }, emoji: '🎉' });
+
+		const frames = await stream.take(5);
+		stream.abort.abort();
+
+		const reactions = frames.filter((frame) => frame.event === 'reaction');
+		expect(reactions).toHaveLength(1);
+		expect(reactions[0]?.data).toMatchObject({ message_id: mine.id });
+	});
+
 	it('keeps another agent’s reactions, and its messages, off this stream', async () => {
 		const mcp = mcpHarness();
 		const { project } = createProject(mcp.h, { name: 'Dashboard' });

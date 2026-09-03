@@ -197,6 +197,17 @@ export function listUpdates(ctx: DomainContext, input: ListUpdatesInput = {}): U
  * from every timeline, so a second `update.deleted` would be an event announcing
  * nothing.
  */
+/**
+ * One update by id, deleted or not.
+ *
+ * For adapters holding an id that need the row — the agent stream deciding
+ * whether a reaction is on a card this agent posted. `$http` may see the domain
+ * and nothing below it (design §2), so the lookup lives here.
+ */
+export function findUpdate(ctx: DomainContext, updateId: string): Update | undefined {
+	return findUpdateById(ctx.db, updateId);
+}
+
 export function deleteUpdate(ctx: DomainContext, updateId: string): Update {
 	const update = findUpdateById(ctx.db, updateId);
 	if (!update) throw notFound(`no such update: ${updateId}`);
