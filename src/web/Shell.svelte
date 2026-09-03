@@ -31,7 +31,7 @@
 	import { Push } from './push.svelte';
 	import { Notifications } from './notifications.svelte';
 	import { Requests } from './requests.svelte';
-	import { claimsGesture, readSwipe } from './swipe';
+	import { claimsMove, readSwipe } from './swipe';
 	import { Tasks } from './tasks.svelte';
 	import { Threads } from './threads.svelte';
 	import { Timeline } from './timeline.svelte';
@@ -249,9 +249,28 @@
 		if (!narrow() || event.touches.length !== 1) return;
 		const point = event.touches[0]!;
 		touch = { x: point.clientX, y: point.clientY };
-		// Claimed here or not at all: this is the only moment the back gesture can
-		// be refused, and only for a touch that begins where back begins.
-		if (claimsGesture(point.clientX, drawer) && event.cancelable) event.preventDefault();
+	}
+
+	/**
+	 * Refuse the browser's gesture — but only once there is a gesture.
+	 *
+	 * This used to happen on `touchstart`, which refused the default action of
+	 * every touch it applied to. On a phone that meant the project links in the
+	 * open drawer could be seen and not selected: a tap is a touch with no
+	 * movement, and it was being cancelled before it could become a click. So the
+	 * claim waits for movement, which a tap never has, and still arrives early
+	 * enough to stop a back swipe.
+	 */
+	function ontouchmove(event: TouchEvent): void {
+		const start = touch;
+		if (!start || !narrow() || event.touches.length !== 1) return;
+
+		const point = event.touches[0]!;
+		const claimed = claimsMove(
+			{ startX: start.x, dx: point.clientX - start.x, dy: point.clientY - start.y },
+			drawer
+		);
+		if (claimed && event.cancelable) event.preventDefault();
 	}
 
 	function forgetTouch(): void {
@@ -311,7 +330,11 @@
 		// Svelte registers touch handlers as *passive*, and a passive listener's
 		// `preventDefault` is ignored — which is exactly the call that stops the
 		// browser treating an edge drag as "go back".
-		window.addEventListener('touchstart', ontouchstart, { passive: false, capture: true });
+		window.addEventListener('touchstart', ontouchstart, { passive: true });
+		// Non-passive, because the option is the point: a passive listener's
+		// `preventDefault` is ignored, and that call is what stops the browser
+		// treating a sideways drag from the edge as "go back".
+		window.addEventListener('touchmove', ontouchmove, { passive: false });
 		window.addEventListener('touchend', ontouchend);
 		window.addEventListener('touchcancel', forgetTouch);
 		return () => {
@@ -320,7 +343,8 @@
 			requests.stop();
 			threads.stop();
 			notifications.stop();
-			window.removeEventListener('touchstart', ontouchstart, { capture: true });
+			window.removeEventListener('touchstart', ontouchstart);
+			window.removeEventListener('touchmove', ontouchmove);
 			window.removeEventListener('touchend', ontouchend);
 			window.removeEventListener('touchcancel', forgetTouch);
 		};

@@ -69,13 +69,30 @@ export function readSwipe(gesture: Gesture, open: boolean): SwipeVerdict {
 }
 
 /**
- * Whether a gesture starting here is one this page wants to claim.
+ * How far a finger must have travelled before the gesture is claimed.
  *
- * Called on the *first* touch, before there is any movement to judge, because
- * that is the only moment at which the browser's own back gesture can be
- * refused. Being wrong here costs a scroll that does not navigate back; being
- * silent costs the feature entirely.
+ * Small, because the browser decides early; but not zero, and that is the fix
+ * for a bug this feature caused. Claiming on the *first touch* refused the
+ * default action of every tap it applied to — which on a phone meant the
+ * project links in the open drawer stopped working: the owner could see them and
+ * could not select them. A tap has no movement, so waiting for movement leaves
+ * every tap alone.
  */
-export function claimsGesture(startX: number, open: boolean): boolean {
-	return open || startX <= EDGE_PX;
+export const CLAIM_PX = 10;
+
+/**
+ * Whether this movement is one the page wants, rather than the browser's.
+ *
+ * Called as the finger moves, which is the last moment a back gesture can still
+ * be refused and the first at which a swipe can be told from a tap. Being wrong
+ * costs a scroll that does not navigate back; claiming too eagerly costs every
+ * tap underneath, which is worse.
+ */
+export function claimsMove(
+	gesture: { startX: number; dx: number; dy: number },
+	open: boolean
+): boolean {
+	if (!open && gesture.startX > EDGE_PX) return false;
+	if (Math.abs(gesture.dx) < CLAIM_PX) return false;
+	return Math.abs(gesture.dx) > Math.abs(gesture.dy);
 }
