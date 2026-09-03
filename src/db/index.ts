@@ -161,16 +161,25 @@ export {
 } from './tasks';
 export {
 	countMessagesAfter,
+	countUnreadMessages as countUnreadMessageRows,
 	listAgentProjectIds,
 	findMessageById,
 	insertMessage,
 	listMessages,
 	listRepliesTo,
+	listUnreadMessages,
 	softDeleteMessage,
 	type MessageQuery,
-	type NewMessage
+	type NewMessage,
+	type UnreadQuery
 } from './messages';
-export { advanceReadCursor, getReadCursor, readCursorSeq } from './read-cursors';
+export {
+	advanceReadCursor,
+	getReadCursor,
+	listReadCursors,
+	readCursorSeq,
+	NO_PROJECT
+} from './read-cursors';
 export { deliveredMessageIds, listDeliveries, recordDelivery } from './deliveries';
 export { addReaction, listReactions, removeReaction } from './reactions';
 export {

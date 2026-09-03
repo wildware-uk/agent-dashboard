@@ -34,7 +34,7 @@
 import {
 	advanceReadCursor,
 	attachMediaToMessage,
-	countMessagesAfter,
+	countUnreadMessageRows,
 	deliveredMessageIds,
 	listDeliveries,
 	recordDelivery,
@@ -46,7 +46,8 @@ import {
 	insertMessage,
 	listMessages,
 	listRepliesTo,
-	readCursorSeq,
+	listUnreadMessages,
+	NO_PROJECT,
 	softDeleteMessage,
 	type Message,
 	type MessageDelivery
@@ -555,45 +556,50 @@ export function readMessages(ctx: DomainContext, input: ReadMessagesInput): Mess
 	 */
 	const worksIn = projectsForAgent(ctx, agent.id);
 	const scope = projectId === undefined ? worksIn : [projectId];
-	const cursorSeq = readCursorSeq(ctx.db, agent.id);
-	const from = decodeCursor(input.since) ?? cursorSeq;
+	const since = decodeCursor(input.since);
 
-	const messages = listMessages(ctx.db, {
-		afterSeq: from,
-		excludeAuthor: mine,
-		limit,
-		...(scope ? { projectIds: scope } : {})
-	});
+	// Two ways to choose a page, and which one applies is whether the caller
+	// named a position. Normally it does not, and "unread" is per project
+	// (migration 025): each message is compared against its own project's
+	// cursor, so a session catching up here cannot make a message over there
+	// look read. An explicit `since` is a caller reading from a position it
+	// remembers, which is one number by definition and stays one number.
+	const messages = since
+		? listMessages(ctx.db, {
+				afterSeq: since,
+				excludeAuthor: mine,
+				limit,
+				...(scope ? { projectIds: scope } : {})
+			})
+		: listUnreadMessages(ctx.db, {
+				agentId: agent.id,
+				excludeAuthor: mine,
+				limit,
+				...(scope ? { projectIds: scope } : {})
+			});
 
 	const markRead = input.markRead ?? true;
 	if (markRead) {
-		// The cursor is protected against *this agent's* unread, not against the
-		// narrower slice it happened to ask for: a message in a project it does
-		// not work in is not a message it is waiting for, and refusing to step
-		// over one would freeze the cursor behind another agent's conversation for
-		// ever — which is what left this agent's inbox permanently "unread".
-		const to = readTo(ctx, {
-			cursorSeq,
-			from,
+		const moved = markPageRead(ctx, {
+			agentId: agent.id,
 			mine,
 			limit,
-			projectId,
-			scope: worksIn,
+			scope,
+			since,
 			messages
 		});
-		advanceReadCursor(ctx.db, agent.id, to);
 		// Announced, unlike every other read in this file, because it is the one
 		// that changes state somebody else is watching: an agent's unread count is
 		// on its own live stream (`src/http/stream/agent.ts`), and a count that
 		// falls in silence leaves every listener holding a stale figure that makes
 		// the *next* real message look like a fall.
-		if (to > cursorSeq) ctx.bus.publish('messages.read', { agentId: agent.id, cursor: to });
+		if (moved > 0) ctx.bus.publish('messages.read', { agentId: agent.id, cursor: moved });
 	}
 
 	const last = messages.at(-1);
 	return {
 		messages,
-		cursor: encodeCursor(last ? last.seq : from),
+		cursor: encodeCursor(last ? last.seq : (since ?? 0)),
 		// Counted in the same scope it was read in: a number that includes messages
 		// this agent will never be handed is a number that says "call me again"
 		// for ever.
@@ -617,7 +623,8 @@ export function readMessages(ctx: DomainContext, input: ReadMessagesInput): Mess
  */
 export function countUnreadMessages(ctx: DomainContext, agentId: string): number {
 	const scope = projectsForAgent(ctx, agentId);
-	return countMessagesAfter(ctx.db, readCursorSeq(ctx.db, agentId), {
+	return countUnreadMessageRows(ctx.db, {
+		agentId,
 		excludeAuthor: authorText({ kind: 'agent', agentId }),
 		...(scope ? { projectIds: scope } : {})
 	});
@@ -668,7 +675,8 @@ export function countUnreadMessagesInScope(
 	subscribed?: readonly string[] | null
 ): number {
 	const projectIds = subscribed === undefined ? projectsForAgent(ctx, agentId) : subscribed;
-	return countMessagesAfter(ctx.db, readCursorSeq(ctx.db, agentId), {
+	return countUnreadMessageRows(ctx.db, {
+		agentId,
 		excludeAuthor: authorText({ kind: 'agent', agentId }),
 		...(projectIds ? { projectIds } : {})
 	});
@@ -690,7 +698,6 @@ export function unreadMessagesInScope(
 ): Message[] {
 	const projectIds = subscribed === undefined ? projectsForAgent(ctx, agentId) : subscribed;
 	const mine = authorText({ kind: 'agent', agentId });
-	const after = readCursorSeq(ctx.db, agentId);
 
 	// The scope goes **into the query**, not over its result. Filtering a page
 	// afterwards is how this went silent: the cursor sat behind a run of messages
@@ -698,15 +705,15 @@ export function unreadMessagesInScope(
 	// the scoped read came back empty — while the scoped *count* said there was
 	// something waiting. The channel then held a notification for a message frame
 	// that could never arrive.
-	return listMessages(ctx.db, {
-		afterSeq: after,
+	return listUnreadMessages(ctx.db, {
+		agentId,
 		excludeAuthor: mine,
 		limit,
 		// The **newest** few, not the oldest. A notification is about what just
-		// arrived, and the read cursor only moves when the agent calls
-		// `get_messages` — so on a long unread list the oldest window is frozen,
-		// and every new message lands outside it. That is how the owner's newest
-		// message stopped being announced while five old ones repeated.
+		// arrived, and a cursor only moves when the agent calls `get_messages` —
+		// so on a long unread list the oldest window is frozen, and every new
+		// message lands outside it. That is how the owner's newest message stopped
+		// being announced while five old ones repeated.
 		newest: true,
 		...(projectIds ? { projectIds } : {})
 	});
@@ -758,50 +765,88 @@ export function listThread(ctx: DomainContext, query: ThreadQuery): Message[] {
 }
 
 /**
- * How far this read may move the cursor.
+ * Mark a page read, one project at a time (migration 025).
  *
- * The plain answer is "to the last message handed over". The exception is the
- * point of this function: a read narrowed by a project, or started from an
- * explicit `since`, may have stepped over messages the agent has still never
- * seen, and the cursor may not pass those — the heartbeat's unread count is the
- * same comparison, so a cursor that jumped them would drop them silently.
+ * The rule is per project and it is simple because the cursors are: every
+ * project this read covered moves to the last message the page handed over,
+ * which is safe because the page is ordered by seq across the whole scope —
+ * anything older than the last row, in any project the query covered, was in
+ * the page.
  *
- * So when the read was narrowed, the earliest unread message it did *not* return
- * is looked up and the cursor stops just short of it. That costs one extra
- * indexed query, and only on a narrowed read.
+ * Projects the read did *not* cover are not touched, and that is the whole
+ * point. The owner's sessions share one bearer token, so a session reading its
+ * own project used to drag the single cursor past another project's unread and
+ * make it unannounceable. A row per project cannot do that.
+ *
+ * The exception is a read that named an explicit `since`, which is a caller
+ * looking ahead of itself: that page can step over messages it never saw, and a
+ * cursor that jumped them would drop them in silence. So for such a read each
+ * project's cursor stops just short of the earliest unread it did not hand
+ * over. One extra indexed query per project, and only on a read that asked for
+ * a position.
+ *
+ * Returns the seq the touched cursors now sit at, or 0 when nothing moved — the
+ * number the `messages.read` event carries.
  */
-function readTo(
+function markPageRead(
 	ctx: DomainContext,
 	args: {
-		cursorSeq: number;
-		from: number;
+		agentId: string;
+		/** The reader's own author text, so its own words are not "unread". */
 		mine: string;
 		limit: number;
-		projectId: string | undefined;
 		/** The projects this read covered, or `null` for every one. */
-		scope: string[] | null;
+		scope: readonly string[] | null;
+		/** The position the caller asked to read from, if it named one. */
+		since: number | undefined;
 		messages: Message[];
 	}
 ): number {
-	const last = args.messages.at(-1)?.seq ?? args.from;
-	const narrowed = args.projectId !== undefined || args.from !== args.cursorSeq;
-	if (!narrowed) return last;
+	const last = args.messages.at(-1)?.seq;
+	if (last === undefined) return 0;
 
-	// Everything unread *in this agent's scope*, in order, up to the same page
-	// size. If the first `limit` of those are exactly what was handed over,
-	// nothing was stepped over: the two lists are the same rows. Scoped, because
-	// a message in a project this agent does not work in is not a message it is
-	// waiting for, and stopping the cursor short of one would freeze it for ever.
-	const unread = listMessages(ctx.db, {
-		afterSeq: args.cursorSeq,
-		excludeAuthor: args.mine,
-		limit: args.limit,
-		...(args.scope ? { projectIds: args.scope } : {})
-	});
+	// With no scope the read covered everything, and "everything" is only
+	// knowable from what came back: a project with nothing in the page has
+	// nothing before `last` either, since the page was cut by seq and not by
+	// project.
+	const covered =
+		args.scope ??
+		Array.from(new Set(args.messages.map((message) => message.projectId ?? NO_PROJECT)));
+
+	// A message that belongs to no project still has to become read, and no
+	// scope lists that bucket: it is not a project anybody works in.
+	const projects = args.messages.some((message) => message.projectId === null)
+		? [...covered, NO_PROJECT]
+		: covered;
+
 	const handed = new Set(args.messages.map((message) => message.id));
-	const skipped = unread.find((message) => !handed.has(message.id));
 
-	return skipped ? Math.min(last, skipped.seq - 1) : last;
+	let moved = 0;
+	for (const projectId of new Set(projects)) {
+		const to = args.since === undefined ? last : Math.min(last, unskipped(ctx, args, projectId));
+		if (to <= 0) continue;
+
+		const cursor = advanceReadCursor(ctx.db, args.agentId, projectId, to);
+		moved = Math.max(moved, cursor.lastSeenMessageSeq);
+	}
+
+	return moved;
+
+	/** The last seq in this project that leaves nothing unread behind it. */
+	function unskipped(
+		context: DomainContext,
+		read: { agentId: string; mine: string; limit: number },
+		projectId: string
+	): number {
+		const unread = listUnreadMessages(context.db, {
+			agentId: read.agentId,
+			excludeAuthor: read.mine,
+			limit: read.limit,
+			...(projectId === NO_PROJECT ? {} : { projectIds: [projectId] })
+		});
+		const skipped = unread.find((message) => !handed.has(message.id));
+		return skipped ? skipped.seq - 1 : last!;
+	}
 }
 
 /** A message that heads a thread rather than sitting in one: an id, or null. */

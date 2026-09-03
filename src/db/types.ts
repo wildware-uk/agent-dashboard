@@ -328,6 +328,8 @@ export type Reaction = Keyed & {
 
 export type ReadCursor = Keyed & {
 	agentId: string;
+	/** The project this cursor is for; `''` for messages that belong to none. */
+	projectId: string;
 	lastSeenMessageSeq: number;
 };
 

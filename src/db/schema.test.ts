@@ -117,7 +117,7 @@ const DESIGN_COLUMNS: Record<string, string[]> = {
 		// thread carrying two conversations can still be read.
 		'answers'
 	],
-	read_cursors: ['agent_id', 'last_seen_message_seq'],
+	read_cursors: ['agent_id', 'project_id', 'last_seen_message_seq'],
 	// The four columns migration 002 appends carry the other four request kinds
 	// (design §5). They are listed after the 001 columns because `ALTER TABLE ADD
 	// COLUMN` appends, and appending is exactly what keeps 001 unedited.

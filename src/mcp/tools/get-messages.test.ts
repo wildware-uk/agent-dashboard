@@ -11,6 +11,7 @@ import { getMessagesTool } from './get-messages';
 
 let mcp: McpHarness;
 let slug: string;
+let projectId: string;
 
 /** The owner says something, scoped to a project unless the test says otherwise. */
 function fromOwner(body: string, scope: Record<string, string> = { project: slug }) {
@@ -34,7 +35,9 @@ function payload(result: Awaited<ReturnType<typeof get>>) {
 
 beforeEach(() => {
 	mcp = mcpHarness({ name: 'scout' });
-	slug = createProject(mcp.h, { name: 'Agent Dashboard' }).project.slug;
+	const project = createProject(mcp.h, { name: 'Agent Dashboard' }).project;
+	slug = project.slug;
+	projectId = project.id;
 });
 
 describe('get_messages', () => {
@@ -59,7 +62,7 @@ describe('get_messages', () => {
 		const read = payload(await get());
 
 		expect(read.marked_read).toBe(true);
-		expect(readCursorSeq(mcp.h.db, mcp.deps.agent.id)).toBe(message.seq);
+		expect(readCursorSeq(mcp.h.db, mcp.deps.agent.id, projectId)).toBe(message.seq);
 		expect(read.unread).toBe(0);
 	});
 
@@ -70,7 +73,7 @@ describe('get_messages', () => {
 
 		expect(peek.marked_read).toBe(false);
 		expect(peek.unread).toBe(1);
-		expect(readCursorSeq(mcp.h.db, mcp.deps.agent.id)).toBe(0);
+		expect(readCursorSeq(mcp.h.db, mcp.deps.agent.id, projectId)).toBe(0);
 		expect(payload(await get({ mark_read: false })).messages.map((m) => m.body)).toEqual([
 			'ship it'
 		]);
@@ -84,9 +87,10 @@ describe('get_messages', () => {
 		const scoped = payload(await get({ project: slug }));
 
 		expect(scoped.messages.map((message) => message.body)).toEqual(['for dashboard']);
-		// Not marked read, because the cursor may not step over the message in the
-		// other project that this call never handed over.
-		expect(scoped.unread).toBe(2);
+		// Only this project was marked read: cursors are per project (migration
+		// 025), so the message in the other one is still waiting rather than
+		// stepped over.
+		expect(scoped.unread).toBe(1);
 	});
 
 	it('resumes from a cursor it handed out', async () => {

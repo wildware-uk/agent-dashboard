@@ -257,6 +257,89 @@ export function countMessagesAfter(
 }
 
 /**
+ * What one agent has not read, with a cursor per project (migration 025).
+ *
+ * The comparison is per row: a message is unread when its seq is past *its own
+ * project's* cursor for this reader. Done as a join rather than by asking for
+ * each project in turn, because the answer has to be one ordered page — a
+ * caller announcing the newest few cannot assemble them from several lists
+ * without re-sorting and re-limiting what it just fetched.
+ *
+ * A message belonging to no project is compared against the `''` bucket, which
+ * is why the cursor column is empty-string-defaulted rather than nullable.
+ */
+export type UnreadQuery = {
+	agentId: string;
+	/** Only these projects. An empty list matches nothing, never everything. */
+	projectIds?: readonly string[];
+	/** Ignore messages by this author, typically the reader's own. */
+	excludeAuthor?: string;
+	/** Default 100. */
+	limit?: number;
+	/** Take the newest rather than the oldest; see {@link MessageQuery}. */
+	newest?: boolean;
+};
+
+/** The join every unread question shares: this reader's cursor for each row. */
+const UNREAD = `
+	FROM messages AS m
+	LEFT JOIN read_cursors AS rc
+	  ON rc.agent_id = :agent_id AND rc.project_id = coalesce(m.project_id, '')
+	 WHERE m.seq > coalesce(rc.last_seen_message_seq, 0)
+	   AND m.${LIVE}
+	   AND (:exclude_author IS NULL OR m.author <> :exclude_author)`;
+
+/** Unread messages, oldest first. */
+export function listUnreadMessages(db: Db, query: UnreadQuery): Message[] {
+	if (query.projectIds?.length === 0) return [];
+
+	const params: Record<string, unknown> = {
+		agent_id: query.agentId,
+		exclude_author: orNull(query.excludeAuthor),
+		limit: query.limit ?? 100
+	};
+	const scope = projectScope(query.projectIds, params);
+
+	const rows = db
+		.prepare<typeof params, Row>(
+			`SELECT ${COLUMNS.split(', ')
+				.map((column) => `m.${column}`)
+				.join(', ')}${UNREAD}${scope}
+			 ORDER BY m.seq ${query.newest ? 'DESC' : 'ASC'}
+			 LIMIT :limit`
+		)
+		.all(params)
+		.map(toMessage);
+
+	return query.newest ? rows.reverse() : rows;
+}
+
+/** How many messages this reader has not read: the heartbeat's number. */
+export function countUnreadMessages(db: Db, query: Omit<UnreadQuery, 'limit' | 'newest'>): number {
+	if (query.projectIds?.length === 0) return 0;
+
+	const params: Record<string, unknown> = {
+		agent_id: query.agentId,
+		exclude_author: orNull(query.excludeAuthor)
+	};
+	const scope = projectScope(query.projectIds, params);
+
+	return db
+		.prepare<typeof params, { n: number }>(`SELECT count(*) AS n${UNREAD}${scope}`)
+		.get(params)!.n;
+}
+
+/** `AND m.project_id IN (...)`, with the ids bound; empty for no restriction. */
+function projectScope(
+	projectIds: readonly string[] | undefined,
+	params: Record<string, unknown>
+): string {
+	if (!projectIds) return '';
+	projectIds.forEach((id, index) => (params[`p${index}`] = id));
+	return ` AND m.project_id IN (${projectIds.map((_, index) => `:p${index}`).join(', ')})`;
+}
+
+/**
  * Every project one agent has anything to do with.
  *
  * There is no "assignment" in this product — an agent is not a member of a
