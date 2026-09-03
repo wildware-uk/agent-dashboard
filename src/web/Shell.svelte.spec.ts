@@ -503,6 +503,50 @@ describe('the edge swipe', () => {
 		await expect.element(screen.getByRole('dialog', { name: 'Projects' })).not.toBeInTheDocument();
 	});
 
+	/**
+	 * The regression this feature caused, reported by the owner within the hour:
+	 * "I can't select projects on mobile anymore."
+	 *
+	 * The gesture was claimed on `touchstart`, which cancelled the default action
+	 * of every touch it applied to — and a tap is a touch with no movement, so
+	 * the project links in the open drawer stopped becoming clicks.
+	 */
+	it('never cancels a tap, which is how a project is selected', async () => {
+		const { screen } = mount();
+		swipe([4, 400], [140, 405]);
+		await expect.element(screen.getByRole('dialog', { name: 'Projects' })).toBeVisible();
+
+		const point = (x: number, y: number) =>
+			new Touch({ identifier: 2, target: document.body, clientX: x, clientY: y });
+		const tap = new TouchEvent('touchstart', {
+			bubbles: true,
+			cancelable: true,
+			touches: [point(160, 300)]
+		});
+		window.dispatchEvent(tap);
+
+		expect(tap.defaultPrevented).toBe(false);
+	});
+
+	it('does cancel the browser once the finger actually moves sideways', async () => {
+		mount();
+		const point = (x: number, y: number) =>
+			new Touch({ identifier: 3, target: document.body, clientX: x, clientY: y });
+
+		window.dispatchEvent(
+			new TouchEvent('touchstart', { bubbles: true, cancelable: true, touches: [point(4, 400)] })
+		);
+		const move = new TouchEvent('touchmove', {
+			bubbles: true,
+			cancelable: true,
+			touches: [point(60, 404)]
+		});
+		window.dispatchEvent(move);
+
+		// This is the call that stops the drag being read as "go back".
+		expect(move.defaultPrevented).toBe(true);
+	});
+
 	it('closes again on a pull back towards the edge', async () => {
 		const { screen } = mount();
 		swipe([4, 400], [140, 405]);

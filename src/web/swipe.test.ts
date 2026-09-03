@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { DISTANCE_PX, EDGE_PX, claimsGesture, readSwipe } from './swipe';
+import { CLAIM_PX, DISTANCE_PX, EDGE_PX, claimsMove, readSwipe } from './swipe';
 
 /**
  * Reading an edge swipe.
@@ -52,16 +52,38 @@ describe('closing', () => {
 });
 
 describe('claiming the gesture from the browser', () => {
-	it('claims a touch that starts at the edge, which is where back lives', () => {
-		expect(claimsGesture(3, false)).toBe(true);
-		expect(claimsGesture(EDGE_PX, false)).toBe(true);
+	const move = (startX: number, dx: number, dy: number) => ({ startX, dx, dy });
+
+	it('claims a sideways drag from the edge, which is where back lives', () => {
+		expect(claimsMove(move(3, CLAIM_PX + 5, 2), false)).toBe(true);
 	});
 
-	it('leaves the rest of the screen alone', () => {
-		expect(claimsGesture(EDGE_PX + 1, false)).toBe(false);
+	/**
+	 * The bug this feature caused, and the reason claiming waits for movement.
+	 *
+	 * Claiming on the first touch refused the default action of every tap it
+	 * applied to, so on a phone the project links stopped working: visible, and
+	 * unselectable. A tap has no movement in it.
+	 */
+	it('leaves a tap alone, even one right on the edge', () => {
+		expect(claimsMove(move(3, 0, 0), false)).toBe(false);
+		expect(claimsMove(move(3, 2, 1), false)).toBe(false);
 	});
 
-	it('claims anywhere while the drawer is open, so it can be swiped shut', () => {
-		expect(claimsGesture(300, true)).toBe(true);
+	it('leaves a tap in the open drawer alone, which is how a project is picked', () => {
+		expect(claimsMove(move(200, 0, 0), true)).toBe(false);
+		expect(claimsMove(move(200, 3, 2), true)).toBe(false);
+	});
+
+	it('leaves the rest of the screen alone while the drawer is shut', () => {
+		expect(claimsMove(move(EDGE_PX + 1, 40, 2), false)).toBe(false);
+	});
+
+	it('claims a sideways drag anywhere while the drawer is open, to swipe it shut', () => {
+		expect(claimsMove(move(300, -40, 3), true)).toBe(true);
+	});
+
+	it('leaves a vertical scroll alone', () => {
+		expect(claimsMove(move(3, 12, 60), false)).toBe(false);
 	});
 });
