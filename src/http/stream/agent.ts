@@ -44,10 +44,13 @@ import {
 	countWork,
 	findMessage,
 	findProject,
+	findUpdate,
 	findRequest,
 	listMessageMedia,
 	invalid,
 	isDomainError,
+	threadOf,
+	type Message,
 	markMessagesDelivered,
 	notFound,
 	type Project,
@@ -395,6 +398,34 @@ function answerFrame(ctx: DomainContext, agentId: string, requestId: string): st
 }
 
 /**
+ * Whether a reaction on this message is news for this agent.
+ *
+ * It was "did this agent write the line", and that was too narrow in the way
+ * only use could show: the owner reacted ✅ to *their own* message in a thread
+ * the agent was working in — which is how a person marks a request approved or
+ * done — and the agent heard nothing, because the line was not its own.
+ *
+ * So the unit is the conversation rather than the sentence. An emoji is news to
+ * whoever is in the thread it lands in: the author of the line, the author of
+ * the card it hangs on, or anybody who has spoken there. Still not everybody in
+ * the project — an agent woken by emoji in conversations it has never joined
+ * would learn to ignore the channel, which is the failure this whole surface
+ * keeps guarding against.
+ */
+function concerns(ctx: DomainContext, agentId: string, message: Message): boolean {
+	const mine = `agent:${agentId}`;
+	if (message.author === mine) return true;
+
+	// The card it is on: an emoji on a comment under this agent's own update is
+	// feedback about that update.
+	if (message.updateId !== null && findUpdate(ctx, message.updateId)?.agentId === agentId) {
+		return true;
+	}
+
+	return threadOf(ctx, message).some((line) => line.author === mine);
+}
+
+/**
  * One reaction, as the agent that was reacted to hears it.
  *
  * Empty for anything that is not this agent's business: a reaction by anybody
@@ -415,7 +446,7 @@ function reactionFrame(
 
 	const message = findMessage(ctx, payload.messageId);
 	if (!message || message.deletedAt !== null) return '';
-	if (message.author !== `agent:${agentId}`) return '';
+	if (!concerns(ctx, agentId, message)) return '';
 
 	const project = message.projectId ? findProject(ctx, message.projectId) : null;
 	const body = JSON.stringify({

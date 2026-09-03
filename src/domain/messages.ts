@@ -469,6 +469,26 @@ export function findMessage(ctx: DomainContext, messageId: string): Message | un
 	return findMessageById(ctx.db, messageId);
 }
 
+/**
+ * Every message in the same conversation as this one.
+ *
+ * "The same conversation" is whichever anchor it has: a card's thread, a task's
+ * thread, or a feed post and its replies. Used to decide who a reaction is news
+ * for — an emoji on a line in a thread is feedback for whoever is *in* that
+ * thread, not only for whoever wrote the line it landed on.
+ */
+export function threadOf(ctx: DomainContext, message: Message): Message[] {
+	if (message.updateId !== null) return listThread(ctx, { updateId: message.updateId });
+	if (message.taskId !== null) return listThread(ctx, { taskId: message.taskId });
+
+	// A feed post: the post itself, and everything hanging off it.
+	const root = message.replyTo ?? message.id;
+	const inProject = message.projectId
+		? listMessages(ctx.db, { projectId: message.projectId, limit: MAX_MESSAGE_LIMIT })
+		: [];
+	return inProject.filter((candidate) => candidate.id === root || candidate.replyTo === root);
+}
+
 export type ReadMessagesInput = {
 	/**
 	 * The agent reading. Adapters resolve this from the bearer token and never
