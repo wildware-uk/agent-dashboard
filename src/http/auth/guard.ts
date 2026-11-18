@@ -54,6 +54,11 @@ export function requiresSession(pathname: string): boolean {
 	return ![...TOKEN_AUTHED_PREFIXES, ...PUBLIC_PREFIXES].some((prefix) => under(path, prefix));
 }
 
+/** Is this path under `/api`, whoever it is for? */
+export function isApiPath(pathname: string): boolean {
+	return under(normalise(pathname), '/api');
+}
+
 /** Is this a browser API call, which wants a status code rather than a login page? */
 export function isBrowserApi(pathname: string): boolean {
 	return requiresSession(pathname) && under(normalise(pathname), '/api');

@@ -11,18 +11,22 @@
 import type { Handle, RequestEvent } from '@sveltejs/kit';
 import { bearerToken, type DeviceTokenCheck } from './bearer';
 import { authConfig, type AuthConfig } from './env';
-import { isBrowserApi, loginRedirect, requiresSession } from './guard';
+import { isApiPath, isBrowserApi, loginRedirect, requiresSession } from './guard';
 import { sessionFromCookies } from './session';
+
+function json(status: number, body: unknown): Response {
+	return new Response(JSON.stringify(body), {
+		status,
+		headers: { 'content-type': 'application/json' }
+	});
+}
 
 /** What an unauthenticated request gets back. */
 function refuse(event: RequestEvent): Response {
 	if (isBrowserApi(event.url.pathname)) {
 		// A `fetch` from the dashboard wants a status it can branch on, not the
 		// HTML of a login page.
-		return new Response(JSON.stringify({ error: 'unauthenticated' }), {
-			status: 401,
-			headers: { 'content-type': 'application/json' }
-		});
+		return json(401, { error: 'unauthenticated' });
 	}
 	// 303: whatever the method was, the browser should GET the login page.
 	return new Response(null, { status: 303, headers: { location: loginRedirect(event.url) } });
@@ -36,21 +40,33 @@ export function createAuthHandle({
 	/** Injected because this module may not reach the database that knows the keys. */
 	device?: DeviceTokenCheck;
 } = {}): Handle {
+	/** Is this the owner, by device key or by cookie? */
+	const owner = (event: RequestEvent): boolean => {
+		// A bearer decides on its own: a stale key must not ride on a cookie.
+		const bearer = bearerToken(event.request.headers);
+		if (bearer !== null) return device(bearer);
+		const secrets = config();
+		return Boolean(secrets && sessionFromCookies(event.cookies, secrets.sessionSecret));
+	};
+
 	return async ({ event, resolve }) => {
+		const { pathname } = event.url;
+
 		// `route.id` is null for anything that matched no route — static assets and
 		// 404s. Those carry nothing to protect, and guarding them would turn a
 		// missing file into a redirect loop.
-		if (event.route.id !== null && requiresSession(event.url.pathname)) {
-			// A bearer decides on its own: a stale key must not ride on a cookie.
-			const bearer = bearerToken(event.request.headers);
-			if (bearer !== null) {
-				if (!device(bearer)) return refuse(event);
-			} else {
-				const secrets = config();
-				const session = secrets && sessionFromCookies(event.cookies, secrets.sessionSecret);
-				if (!session) return refuse(event);
-			}
+		if (event.route.id === null) {
+			// Except under `/api`: SvelteKit would render its HTML error page there,
+			// through the root layout, which sends a visitor with no session to the
+			// login page. An API caller wants a status. On the owner's paths a caller
+			// who is not the owner gets the same 401 a real route gives, so a
+			// stranger cannot tell which routes exist.
+			if (!isApiPath(pathname)) return resolve(event);
+			if (requiresSession(pathname) && !owner(event)) return refuse(event);
+			return json(404, { error: 'not_found', message: `no such API route: ${pathname}` });
 		}
+
+		if (requiresSession(pathname) && !owner(event)) return refuse(event);
 
 		return resolve(event);
 	};

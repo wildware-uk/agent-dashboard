@@ -110,6 +110,54 @@ describe('the route guard hook', () => {
 		expect(resolve).toHaveBeenCalledTimes(1);
 	});
 
+	it('answers an unknown API path with a JSON 404 for the owner', async () => {
+		const resolve = resolver();
+
+		for (const auth of [
+			{ cookie: signSession(SESSION_SECRET) },
+			{ bearer: 'good' }
+		] satisfies EventOverrides[]) {
+			const response = await createAuthHandle({ config, device: (token) => token === 'good' })({
+				event: fakeEvent({ path: '/api/does-not-exist', routeId: null, ...auth }),
+				resolve
+			});
+
+			expect(response.status).toBe(404);
+			expect(response.headers.get('content-type')).toContain('application/json');
+			await expect(response.json()).resolves.toEqual({
+				error: 'not_found',
+				message: 'no such API route: /api/does-not-exist'
+			});
+		}
+		expect(resolve).not.toHaveBeenCalled();
+	});
+
+	it('answers an unknown API path with a JSON 401 for anybody else, never a login redirect', async () => {
+		const resolve = resolver();
+
+		for (const auth of [{}, { bearer: 'stale' }] satisfies EventOverrides[]) {
+			const response = await createAuthHandle({ config, device: () => false })({
+				event: fakeEvent({ path: '/api/does-not-exist/', routeId: null, ...auth }),
+				resolve
+			});
+
+			expect(response.status).toBe(401);
+			expect(response.headers.get('location')).toBeNull();
+			await expect(response.json()).resolves.toEqual({ error: 'unauthenticated' });
+		}
+		expect(resolve).not.toHaveBeenCalled();
+	});
+
+	it('answers an unknown path on an agent surface with a JSON 404, whoever asks', async () => {
+		const response = await createAuthHandle({ config })({
+			event: fakeEvent({ path: '/api/agent/nope', routeId: null }),
+			resolve: resolver()
+		});
+
+		expect(response.status).toBe(404);
+		await expect(response.json()).resolves.toMatchObject({ error: 'not_found' });
+	});
+
 	it('fails closed when the deployment has no session secret configured', async () => {
 		const resolve = resolver();
 
