@@ -23,10 +23,13 @@
  * owner types them — so a refetch that returns an identical list costs less than
  * holding a second copy of the project map in here to avoid it.
  *
- * Writes are not here. `actions.ts` posts the reply and the event brings it
- * back, which is the same consistency rule every other control keeps: there is
- * no optimistic insert to reconcile, and no path where the tab that replied
- * disagrees with the tab that watched.
+ * Writes are not here, but they are heard. `actions.ts` posts the reply and
+ * announces it (`./outgoing.ts`): the store shows the owner's words at once,
+ * marked as sending, then the row the server stored as soon as the write
+ * answers. The event still brings it to every tab, and a read replaces the
+ * copy by id, so the tab that replied and the tab that watched end up holding
+ * the same thing. Waiting for the event alone left the owner's own reply
+ * invisible whenever the stream was slow or dead, until they reloaded.
  */
 import type {
 	AckView,
@@ -38,6 +41,7 @@ import type {
 	ReactionView
 } from './types';
 import type { Fetcher } from './timeline.svelte';
+import { SENDING_PREFIX, isSending, outgoing, type OutgoingMessages } from './outgoing';
 import {
 	DirectLink,
 	SharedStream,
@@ -146,6 +150,8 @@ export type ThreadsOptions = {
 	openStream?: OpenStream;
 	/** Coalescing hook: a burst of events becomes one request. Tests run it by hand. */
 	schedule?: (run: () => void) => void;
+	/** Where the owner's own sends are announced. Defaults to the tab's one hub. */
+	outgoing?: OutgoingMessages;
 };
 
 export class Threads {
@@ -206,6 +212,20 @@ export class Threads {
 
 	private readonly project: string | null;
 	private readonly fetcher: Fetcher;
+	private readonly outgoing: OutgoingMessages;
+	private unlisten: (() => void) | null = null;
+	/** The last read's messages; `messages` is these plus what this tab just sent. */
+	private read_: MessageView[] = [];
+	/** Lines still on their way, by ticket. */
+	private sendingLines: { ticket: string; line: MessageView }[] = [];
+	/**
+	 * What the server stored for this tab's sends, by id, with the number of the
+	 * read that was the newest started when it landed. Held until a read that
+	 * started later answers: that read either has it, or the server no longer does.
+	 */
+	private adopted: { message: MessageView; after: number }[] = [];
+	/** How many reads have started: what tells an answer from before a send from one after. */
+	private readsStarted = 0;
 	private readonly schedule: (run: () => void) => void;
 	private readonly listener = (event: StreamMessage) => this.receive(event);
 	private readonly onOpen = () => {
@@ -224,6 +244,63 @@ export class Threads {
 			options.stream ??
 			(options.openStream ? new SharedStream(new DirectLink(options.openStream)) : null);
 		this.schedule = options.schedule ?? ((run) => setTimeout(run, 0));
+		this.outgoing = options.outgoing ?? outgoing;
+	}
+
+	/** Whether this line is the owner's, still on its way: drawn faded, with no controls. */
+	isSending(messageId: string): boolean {
+		return isSending(messageId);
+	}
+
+	private listenToSends(): void {
+		this.unlisten?.();
+		this.unlisten = this.outgoing.listen({
+			sending: ({ ticket, input, at }) => {
+				// Replies only. A new post's card waits the moment the write takes:
+				// which project page it belongs on is the server's to say.
+				if (!input.update && !input.replyTo && !input.request && !input.task) return;
+				const line: MessageView = {
+					id: `${SENDING_PREFIX}${ticket}`,
+					seq: 0,
+					projectId: null,
+					updateId: input.update ?? null,
+					taskId: input.task ?? null,
+					replyTo: input.replyTo ?? null,
+					requestId: input.request ?? null,
+					answers: input.answers ?? null,
+					author: 'human',
+					body: input.body,
+					createdAt: at
+				};
+				this.sendingLines = [...this.sendingLines, { ticket, line }];
+				this.show();
+			},
+			sent: (ticket, message) => {
+				this.sendingLines = this.sendingLines.filter((held) => held.ticket !== ticket);
+				this.adopted = [
+					...this.adopted.filter((held) => held.message.id !== message.id),
+					{ message, after: this.readsStarted }
+				];
+				this.show();
+			},
+			failed: (ticket) => {
+				const before = this.sendingLines.length;
+				this.sendingLines = this.sendingLines.filter((held) => held.ticket !== ticket);
+				if (this.sendingLines.length !== before) this.show();
+			}
+		});
+	}
+
+	/** The last read, then what this tab sent that the read doesn't have yet. */
+	private show(): void {
+		// A handful at most, so a scan rather than an index.
+		const adopted = this.adopted
+			.map((held) => held.message)
+			.filter((message) => !this.read_.some((read) => read.id === message.id));
+		this.messages =
+			adopted.length === 0 && this.sendingLines.length === 0
+				? this.read_
+				: [...this.read_, ...adopted, ...this.sendingLines.map((held) => held.line)];
 	}
 
 	/** One card's thread, oldest first. Empty for a card nobody has replied to. */
@@ -308,6 +385,7 @@ export class Threads {
 	start(): void {
 		if (this.live) return;
 		this.live = true;
+		this.listenToSends();
 
 		const hub = (this.hub ??= sharedStream());
 		this.held = hub.subscribe({
@@ -329,6 +407,8 @@ export class Threads {
 	/** Let go of the stream. Safe to call twice; the page calls it on unmount. */
 	stop(): void {
 		this.live = false;
+		this.unlisten?.();
+		this.unlisten = null;
 		// A refetch queued a moment ago must not fire after the page has gone.
 		this.queued = false;
 		// Only this store's hold: the connection outlives it if the timeline is
@@ -371,9 +451,10 @@ export class Threads {
 
 	private async run(): Promise<void> {
 		this.loading = true;
+		const started = (this.readsStarted += 1);
 		try {
 			const snapshot = await this.read(this.url());
-			if (snapshot) this.apply(snapshot);
+			if (snapshot) this.apply(snapshot, started);
 		} finally {
 			this.loading = false;
 		}
@@ -407,8 +488,15 @@ export class Threads {
 		}
 	}
 
-	private apply(snapshot: MessagesSnapshot): void {
-		this.messages = snapshot.messages;
+	private apply(snapshot: MessagesSnapshot, started = this.readsStarted): void {
+		this.read_ = snapshot.messages;
+		// Kept until the read has it, or a read that started after the send landed answers.
+		this.adopted = this.adopted.filter(
+			(held) =>
+				started <= held.after &&
+				!snapshot.messages.some((message) => message.id === held.message.id)
+		);
+		this.show();
 		// Defaulted rather than merged: a document that carried messages and no
 		// acknowledgements is saying there are none, and folding the old list in
 		// would leave a tick on a message whose acknowledgement has gone.

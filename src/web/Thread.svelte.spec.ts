@@ -733,3 +733,19 @@ it('keeps its own box in a plain browser', async () => {
 
 	expect(document.querySelector('[data-thread] textarea')).not.toBeNull();
 });
+
+describe('a reply still on its way', () => {
+	it('shows faded as sending, with nothing to do to it until the server has it', async () => {
+		const screen = render(Thread, {
+			messages: [aMessage({ id: 'sending:t1', author: 'human', body: 'On my way' })],
+			onreply: replies().onreply,
+			actions: fakeActions().actions,
+			ondelete: () => Promise.resolve()
+		});
+
+		await expect.element(screen.getByText('On my way')).toBeInTheDocument();
+		await expect.element(screen.getByTestId('message-sending')).toHaveTextContent('Sending…');
+		expect(document.querySelector('[data-sending="true"]')).not.toBeNull();
+		expect(document.querySelector('[data-message] button')).toBeNull();
+	});
+});

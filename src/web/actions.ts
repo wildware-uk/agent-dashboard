@@ -15,6 +15,7 @@
  * The returned row is still handed back, because a control needs to know the
  * call succeeded before it closes its form.
  */
+import { outgoing, type OutgoingMessages } from './outgoing';
 import type {
 	MediaView,
 	MessageView,
@@ -278,8 +279,14 @@ export type OwnerActions = {
  * Injectable so a component test can drive a control without a server, and so
  * the two-tab test in `src/http/owner/` can point it straight at the real
  * handlers.
+ *
+ * Every message it posts is announced on `messages` (`./outgoing.ts`), so the
+ * thread store can show it at once rather than when the stream echoes it.
  */
-export function ownerActions(request: Requester = defaultRequest): OwnerActions {
+export function ownerActions(
+	request: Requester = defaultRequest,
+	messages: OutgoingMessages = outgoing
+): OwnerActions {
 	async function send<
 		Key extends
 			| 'project'
@@ -473,7 +480,17 @@ export function ownerActions(request: Requester = defaultRequest): OwnerActions 
 			),
 		renameAgent: (id, name) =>
 			send('agent', `/api/agents/${encodeURIComponent(id)}`, 'PATCH', { name }),
-		postMessage: (input) => send('message', '/api/messages', 'POST', input),
+		postMessage: async (input) => {
+			const ticket = messages.begin(input);
+			try {
+				const stored = await send('message', '/api/messages', 'POST', input);
+				messages.sent(ticket, stored);
+				return stored;
+			} catch (cause) {
+				messages.failed(ticket);
+				throw cause;
+			}
+		},
 		deleteMessage: (id) => send('message', `/api/messages/${encodeURIComponent(id)}`, 'DELETE'),
 		react: (id, emoji, on) =>
 			send('reactions', `/api/messages/${encodeURIComponent(id)}/reactions`, 'POST', {

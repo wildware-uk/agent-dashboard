@@ -27,6 +27,7 @@
 	import Embeds from './Embeds.svelte';
 	import MediaGrid from './MediaGrid.svelte';
 	import { actionMessage } from './actions';
+	import { isSending } from './outgoing';
 	import { agentLabel } from './avatar';
 	import { onMount } from 'svelte';
 	import { absoluteLabel, relativeLabel } from './days';
@@ -430,10 +431,11 @@
 					data-message
 					data-message-id={message.id}
 					data-mine={message.author === 'human' ? 'true' : undefined}
+					data-sending={isSending(message.id) ? 'true' : undefined}
 					class="flex min-w-0 flex-col gap-1 rounded-md border border-border-subtle bg-surface px-2.5 py-1.5 {message.author ===
 					'human'
 						? 'border-l-2 border-l-accent'
-						: ''}"
+						: ''} {isSending(message.id) ? 'opacity-60' : ''}"
 				>
 					<p class="flex flex-wrap items-baseline gap-x-2 text-xs">
 						<span data-message-author class="font-medium text-content">
@@ -463,13 +465,24 @@
 								edited
 							</span>
 						{/if}
-						<time
-							class="ml-auto text-content-muted"
-							datetime={new Date(message.createdAt).toISOString()}
-							title={absoluteLabel(message.createdAt)}
-						>
-							{relativeLabel(message.createdAt, ticking.now)}
-						</time>
+						{#if isSending(message.id)}
+							<!--
+								The owner's own words, shown the moment they were sent and still on
+								their way. Nothing can be done to a line the server has not stored,
+								so it carries no controls until it has (./outgoing.ts).
+							-->
+							<span class="ml-auto text-content-muted" data-testid="message-sending">
+								Sending…
+							</span>
+						{:else}
+							<time
+								class="ml-auto text-content-muted"
+								datetime={new Date(message.createdAt).toISOString()}
+								title={absoluteLabel(message.createdAt)}
+							>
+								{relativeLabel(message.createdAt, ticking.now)}
+							</time>
+						{/if}
 					</p>
 					<Markdown body={message.body} />
 					{#if (media[message.id] ?? []).length > 0}
@@ -496,95 +509,97 @@
 						Read-only without an action client, which is what a spec without
 						one renders.
 					-->
-					<Reactions
-						reactions={reactions[message.id] ?? []}
-						{agentNames}
-						onreact={actions
-							? async (emoji) => {
-									await actions.react(message.id, emoji);
-								}
-							: undefined}
-					/>
+					{#if !isSending(message.id)}
+						<Reactions
+							reactions={reactions[message.id] ?? []}
+							{agentNames}
+							onreact={actions
+								? async (emoji) => {
+										await actions.react(message.id, emoji);
+									}
+								: undefined}
+						/>
 
-					<div class="flex flex-wrap items-center gap-1">
-						<button
-							type="button"
-							aria-label="Reply to {speaker(message.author)}"
-							onclick={() => replyTo(message.id)}
-							class="w-fit rounded px-1 py-0.5 text-xs text-content-muted hover:bg-surface-raised hover:text-content"
-						>
-							Reply
-						</button>
-					</div>
+						<div class="flex flex-wrap items-center gap-1">
+							<button
+								type="button"
+								aria-label="Reply to {speaker(message.author)}"
+								onclick={() => replyTo(message.id)}
+								class="w-fit rounded px-1 py-0.5 text-xs text-content-muted hover:bg-surface-raised hover:text-content"
+							>
+								Reply
+							</button>
+						</div>
 
-					{#if actions}
-						{#each requests[message.id] ?? [] as request (request.id)}
-							<!--
+						{#if actions}
+							{#each requests[message.id] ?? [] as request (request.id)}
+								<!--
 								The question, under the words that led to it. Same card as the
 								feed's, so a question asked in a thread is answered with exactly
 								the controls a question asked anywhere else has.
 							-->
-							<!--
+								<!--
 								No discussion of its own (migration 032): this question is
 								already inside a conversation, and the box for talking it over
 								is the one this thread ends with.
 							-->
-							<RequestCard
-								{request}
-								agentName={agentNames[request.agentId]}
-								{actions}
-								discussable={false}
-							/>
-						{/each}
-					{/if}
+								<RequestCard
+									{request}
+									agentName={agentNames[request.agentId]}
+									{actions}
+									discussable={false}
+								/>
+							{/each}
+						{/if}
 
-					{#if ondelete}
-						{#if confirming === message.id}
-							<div
-								role="group"
-								aria-label="Confirm delete"
-								class="flex flex-wrap items-center gap-2 text-xs"
-							>
-								<span class="text-content">Delete this message?</span>
-								<button
-									type="button"
-									disabled={deleting !== null}
-									onclick={() => remove(message.id)}
-									class="rounded bg-rose-600 px-2 py-0.5 font-medium text-white disabled:opacity-50"
+						{#if ondelete}
+							{#if confirming === message.id}
+								<div
+									role="group"
+									aria-label="Confirm delete"
+									class="flex flex-wrap items-center gap-2 text-xs"
 								>
-									Confirm delete
-								</button>
-								<button
-									type="button"
-									disabled={deleting !== null}
-									onclick={() => {
-										confirming = null;
-										deleteError = null;
-									}}
-									class="rounded border border-border-subtle px-2 py-0.5 text-content-muted hover:text-content"
-								>
-									Cancel
-								</button>
-							</div>
-							{#if deleteError}
-								<p role="alert" class="text-xs text-rose-400">{deleteError}</p>
-							{/if}
-						{:else}
-							<!--
+									<span class="text-content">Delete this message?</span>
+									<button
+										type="button"
+										disabled={deleting !== null}
+										onclick={() => remove(message.id)}
+										class="rounded bg-rose-600 px-2 py-0.5 font-medium text-white disabled:opacity-50"
+									>
+										Confirm delete
+									</button>
+									<button
+										type="button"
+										disabled={deleting !== null}
+										onclick={() => {
+											confirming = null;
+											deleteError = null;
+										}}
+										class="rounded border border-border-subtle px-2 py-0.5 text-content-muted hover:text-content"
+									>
+										Cancel
+									</button>
+								</div>
+								{#if deleteError}
+									<p role="alert" class="text-xs text-rose-400">{deleteError}</p>
+								{/if}
+							{:else}
+								<!--
 								Always on the row, never behind a hover: a phone cannot hover
 								(design §7), and this is the control the owner asked for.
 							-->
-							<button
-								type="button"
-								aria-label="Delete this message"
-								onclick={() => {
-									confirming = message.id;
-									deleteError = null;
-								}}
-								class="w-fit rounded px-1 py-0.5 text-xs text-content-muted hover:bg-surface-raised hover:text-rose-400"
-							>
-								Delete
-							</button>
+								<button
+									type="button"
+									aria-label="Delete this message"
+									onclick={() => {
+										confirming = message.id;
+										deleteError = null;
+									}}
+									class="w-fit rounded px-1 py-0.5 text-xs text-content-muted hover:bg-surface-raised hover:text-rose-400"
+								>
+									Delete
+								</button>
+							{/if}
 						{/if}
 					{/if}
 				</li>
