@@ -45,6 +45,7 @@ import { sql as anAppThatLivesSomewhereElse } from './042-an-app-that-lives-some
 import { sql as ownerDevices } from './043-owner-devices';
 import { sql as mentions } from './044-mentions';
 import { sql as alertProjects } from './045-alert-projects';
+import { sql as mediaIndexesComeBack } from './046-media-indexes-come-back';
 import { sql as oldTasksAreNotNews } from './036-old-tasks-are-not-news';
 import { sql as workLivesInTheFeed } from './035-work-lives-in-the-feed';
 import { sql as oneKindOfCard } from './034-one-kind-of-card';
@@ -140,5 +141,6 @@ export const MIGRATIONS: readonly Migration[] = [
 	},
 	{ version: 43, name: 'owner-devices', sql: ownerDevices },
 	{ version: 44, name: 'mentions', sql: mentions },
-	{ version: 45, name: 'alert-projects', sql: alertProjects }
+	{ version: 45, name: 'alert-projects', sql: alertProjects },
+	{ version: 46, name: 'media-indexes-come-back', sql: mediaIndexesComeBack }
 ];

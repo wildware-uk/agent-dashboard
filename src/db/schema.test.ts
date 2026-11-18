@@ -398,7 +398,16 @@ describe('schema', () => {
 			agents: [['token_hash']],
 			sessions: [['agent_id', 'last_heartbeat_at']],
 			updates: [['project_id', 'seq']],
-			media: [['sha256'], ['status', 'created_at'], ['update_id'], ['message_id']],
+			// request_id and task_id: created by migration 030, lost in the 038
+			// rebuild, restored by 046.
+			media: [
+				['sha256'],
+				['status', 'created_at'],
+				['update_id'],
+				['message_id'],
+				['request_id'],
+				['task_id']
+			],
 			derivatives: [['media_id', 'kind']],
 			upload_tokens: [['media_id']],
 			tasks: [['project_id', 'state']],
