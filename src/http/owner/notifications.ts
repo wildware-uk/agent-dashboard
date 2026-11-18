@@ -9,7 +9,7 @@
  * app shows is exactly what was recorded when the thing happened, including
  * things whose push was never delivered. That is the whole point of the feature.
  */
-import { countUnseen, listNotifications, markSeen } from '$domain';
+import { countUnseen, invalid, listNotifications, markSeen } from '$domain';
 import { bus as sharedBus, type EventBus } from '$events';
 import {
 	ownerAction,
@@ -64,7 +64,8 @@ export function listNotificationsHandler(options: NotificationHandlerOptions = {
  *
  * With `{ ids }`, only those: clicking one notification clears that one, which
  * is what a reader expects and what stops opening a single reply from wiping a
- * list they had not read. With no body, everything — "mark all read".
+ * list they had not read. With no body, or no `ids`, everything — "mark all
+ * read". An `ids` that is not a list is a 400.
  */
 export function markNotificationsSeenHandler(
 	options: NotificationHandlerOptions = {}
@@ -73,9 +74,12 @@ export function markNotificationsSeenHandler(
 		const body = (await readOwnerJson(event.request).catch(() => ({}))) as {
 			ids?: unknown;
 		};
-		const ids = Array.isArray(body.ids)
-			? body.ids.filter((id): id is string => typeof id === 'string')
-			: undefined;
+		// Only a body without `ids` means "everything". An `ids` that is not a list
+		// is a mistake, and reading it as "everything" would wipe the whole bell.
+		if (body.ids !== undefined && !Array.isArray(body.ids)) {
+			throw invalid('ids must be a list of notification ids, or left out to clear them all');
+		}
+		const ids = body.ids?.filter((id): id is string => typeof id === 'string');
 
 		const changed = markSeen(ctx, ids);
 		return { status: 200, body: { changed, unseen: countUnseen(ctx) } };

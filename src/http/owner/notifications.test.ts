@@ -110,6 +110,22 @@ describe('POST /api/notifications/seen', () => {
 		expect(body).toMatchObject({ changed: 2, unseen: 0 });
 	});
 
+	it('refuses ids that are not a list, rather than clearing everything', async () => {
+		postUpdate(h, { project: slug, agentId, body: 'one' });
+		postUpdate(h, { project: slug, agentId, body: 'two' });
+
+		for (const ids of ['01JNOTALIST', 7, { id: 'x' }, null]) {
+			const { status, body } = await call(markNotificationsSeenHandler, {
+				method: 'POST',
+				body: { ids }
+			});
+			expect(status).toBe(400);
+			expect(body).toMatchObject({ error: 'invalid_argument' });
+		}
+
+		expect((await call(listNotificationsHandler)).body).toMatchObject({ unseen: 2 });
+	});
+
 	it('refuses a caller with no session', async () => {
 		postUpdate(h, { project: slug, agentId, body: 'one' });
 
