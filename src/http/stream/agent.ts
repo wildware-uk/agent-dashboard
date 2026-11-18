@@ -40,6 +40,7 @@
 import {
 	alreadyDelivered,
 	answeredMessage,
+	authenticateAgent,
 	authorName,
 	countOpenWorkInScope,
 	countPendingRequestsInScope,
@@ -67,10 +68,12 @@ import {
 	authenticateMcpRequest,
 	createTokenRateLimiter,
 	mcpConfig,
+	readBearerToken,
 	type McpConfig,
 	type TokenRateLimiter
 } from '$mcp';
 import { SSE_HEADERS, commentFrame, retryFrame } from './frames';
+import { AUTH_CHECK_MS } from './stream';
 
 /** The counts frame: what is waiting, as three numbers. */
 export const WORK_EVENT = 'work';
@@ -242,6 +245,11 @@ export type AgentStreamHandlerOptions = {
 	/** Milliseconds between comment frames. `0` disables the heartbeat. */
 	heartbeatMs?: number;
 	retryMs?: number;
+	/**
+	 * Milliseconds between checks that the token still works, so revoking it
+	 * cuts the stream it holds. `0` disables them.
+	 */
+	authCheckMs?: number;
 };
 
 export type AgentStreamHandler = (event: AgentStreamRequestEvent) => Response;
@@ -564,7 +572,8 @@ export function createAgentStreamHandler(
 		config = mcpConfig,
 		rateLimiter = createTokenRateLimiter(),
 		heartbeatMs = AGENT_HEARTBEAT_MS,
-		retryMs = AGENT_RETRY_MS
+		retryMs = AGENT_RETRY_MS,
+		authCheckMs = AUTH_CHECK_MS
 	} = options;
 
 	return (event) => {
@@ -587,6 +596,10 @@ export function createAgentStreamHandler(
 		if (!auth.ok) return refusal(auth.status, auth.error, auth.message);
 
 		const agentId = auth.agent.id;
+		const bearer = readBearerToken(event.request.headers.get('authorization'));
+		/** Does the token this stream opened with still name an agent that is not revoked? */
+		const stillValid = () =>
+			bearer.ok && authenticateAgent(ctx, { token: bearer.token, secret: settings.tokenSecret }).ok;
 
 		// Opaque, and trimmed to something a log can print. An absent or empty one
 		// means a connection with no durable name, which is handled rather than
@@ -619,6 +632,7 @@ export function createAgentStreamHandler(
 				let open = true;
 				let unsubscribe: Unsubscribe = () => {};
 				let heartbeat: ReturnType<typeof setInterval> | undefined;
+				let authCheck: ReturnType<typeof setInterval> | undefined;
 
 				const write = (frame: string) => {
 					if (!open) return;
@@ -635,6 +649,7 @@ export function createAgentStreamHandler(
 					open = false;
 					unsubscribe();
 					if (heartbeat !== undefined) clearInterval(heartbeat);
+					if (authCheck !== undefined) clearInterval(authCheck);
 					event.request.signal?.removeEventListener('abort', teardown);
 					try {
 						controller.close();
@@ -711,6 +726,19 @@ export function createAgentStreamHandler(
 					);
 					// Don't hold the process open for an idle agent.
 					heartbeat.unref?.();
+				}
+
+				if (authCheckMs > 0) {
+					// Revoked (by the owner, or by the CLI in another process): end the
+					// stream. The bridge's reconnect then gets `401 revoked_token`.
+					authCheck = setInterval(() => {
+						try {
+							if (!stillValid()) teardown();
+						} catch {
+							// A read that fails is not a revocation; the next check asks again.
+						}
+					}, authCheckMs);
+					authCheck.unref?.();
 				}
 
 				const signal = event.request.signal;

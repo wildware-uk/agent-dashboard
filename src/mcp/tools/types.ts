@@ -29,6 +29,11 @@ export type ToolDeps = {
 	 */
 	holdMs?: number;
 	/**
+	 * Ends a parked owner request early. The handler aborts it when the caller's
+	 * token is revoked mid-hold, so a revoked agent is not held for a minute.
+	 */
+	signal?: AbortSignal;
+	/**
 	 * Where the media lives, for the tools that hand an agent a picture.
 	 *
 	 * `get_messages` inlines the images attached to a message, because an agent

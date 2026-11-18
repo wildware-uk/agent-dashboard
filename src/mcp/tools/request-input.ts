@@ -259,7 +259,7 @@ export const requestInputTool: McpTool<typeof inputSchema, Promise<CallToolResul
 		annotations: { readOnlyHint: false, destructiveHint: false, openWorldHint: true }
 	},
 
-	run: ({ ctx, agent, holdMs }, args) =>
+	run: ({ ctx, agent, holdMs, signal }, args) =>
 		guarded(async () =>
 			requestResult(
 				await requestInput(
@@ -289,7 +289,7 @@ export const requestInputTool: McpTool<typeof inputSchema, Promise<CallToolResul
 							sourceUrl: embed.source_url
 						}))
 					},
-					{ holdMs }
+					{ holdMs, signal }
 				)
 			)
 		)

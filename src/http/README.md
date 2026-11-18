@@ -231,3 +231,9 @@ Disconnecting — the request aborting or the browser cancelling the body — dr
 the bus subscription and the heartbeat timer. `stream.test.ts` asserts
 `bus.listenerCount` is back to zero on both paths, because a leak here is
 invisible until the process is holding thousands of dead subscribers.
+
+The server also ends a stream whose key stops working. A stream opened with a
+device key (the owner's phone) or an agent token checks every 5 seconds that the
+key is still valid, and closes when it has been revoked, including by the CLI in
+another process. The client's reconnect then gets its 401. A cookie session has
+no key to revoke and is left alone.

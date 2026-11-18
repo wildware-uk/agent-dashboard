@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import {
 	answerRequest,
 	react,
@@ -11,7 +11,8 @@ import {
 	createProject,
 	editUpdate,
 	setStatus,
-	readMessages
+	readMessages,
+	revokeAgentToken
 } from '$domain';
 import { mcpHarness, type McpHarness } from '../../mcp/testing';
 import { createTokenRateLimiter } from '$mcp';
@@ -46,13 +47,19 @@ function parseFrames(text: string): Frame[] {
 }
 
 /** Open the stream as the agent holding `token`, and read frames off it. */
-function connect(mcp: McpHarness, token: string = mcp.token, query = '') {
+function connect(
+	mcp: McpHarness,
+	token: string = mcp.token,
+	query = '',
+	options: { authCheckMs?: number } = {}
+) {
 	const handler = createAgentStreamHandler({
 		bus: mcp.h.bus,
 		context: () => mcp.h,
 		config: () => ({ tokenSecret: mcp.secret, holdMs: 1_000 }),
 		rateLimiter: createTokenRateLimiter(),
-		heartbeatMs: 0
+		heartbeatMs: 0,
+		authCheckMs: options.authCheckMs ?? 0
 	});
 
 	const abort = new AbortController();
@@ -73,6 +80,14 @@ function connect(mcp: McpHarness, token: string = mcp.token, query = '') {
 	return {
 		response,
 		abort,
+		/** Read to the end of the body: resolves once the server has closed it. */
+		async closed(): Promise<true> {
+			reader ??= response.body!.getReader();
+			while (!(await reader.read()).done) {
+				// Drain whatever is still buffered.
+			}
+			return true;
+		},
 		/** Read until `count` frames have arrived. Every write is synchronous. */
 		async take(count: number): Promise<Frame[]> {
 			reader ??= response.body!.getReader();
@@ -383,6 +398,29 @@ describe('what it pushes', () => {
 		const work = workFrames(frames);
 		expect(counts(work[1]!)).toEqual([1, 0, 0]);
 		expect(counts(work[2]!)).toEqual([2, 0, 0]);
+	});
+});
+
+describe('a token revoked while its stream is open', () => {
+	it('closes the stream within one check, and leaves nothing subscribed', async () => {
+		vi.useFakeTimers();
+		try {
+			const mcp = mcpHarness();
+			const listening = mcp.h.bus.listenerCount;
+			const stream = connect(mcp, mcp.token, '', { authCheckMs: 1_000 });
+			await stream.take(3);
+
+			vi.advanceTimersByTime(1_000);
+			expect(mcp.h.bus.listenerCount).toBe(listening + 1);
+
+			revokeAgentToken(mcp.h, mcp.deps.agent.id);
+			vi.advanceTimersByTime(1_000);
+
+			expect(await stream.closed()).toBe(true);
+			expect(mcp.h.bus.listenerCount).toBe(listening);
+		} finally {
+			vi.useRealTimers();
+		}
 	});
 });
 

@@ -185,7 +185,9 @@ Nothing makes that a _wait_ except the agent looping on `await_request` — whic
 why both descriptions say so in capitals, twice, and spell out the four result
 shapes. The request itself lives in the `approvals` table, so the loop survives a
 dropped connection, a client timeout and the agent's own restart; a process that
-never made the request can resume it from the id alone.
+never made the request can resume it from the id alone. A park checks every 5
+seconds that its token still works: revoking the token ends it early with
+`pending`, and the agent's next call is refused.
 
 The five kinds — `text`, `confirm`, `buttons`, `choice`, `multi_choice` — answer
 with a string, a boolean or a list of strings, and **the server validates every

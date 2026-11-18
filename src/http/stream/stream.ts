@@ -18,7 +18,7 @@
  * serialises. That is why an SSE bug can never become a business-rule bug.
  */
 import { EventBus, bus as sharedBus, type AppEvent, type Unsubscribe } from '$events';
-import type { AuthConfig, SessionCookieReader } from '../auth';
+import { bearerToken, type AuthConfig, type SessionCookieReader } from '../auth';
 import {
 	SSE_HEADERS,
 	commentFrame,
@@ -28,7 +28,12 @@ import {
 	retryFrame,
 	type Resync
 } from './frames';
-import { ownerAuthenticated, unauthenticatedResponse } from './owner';
+import {
+	environmentDevices,
+	ownerAuthenticated,
+	unauthenticatedResponse,
+	type DeviceResolver
+} from './owner';
 
 /**
  * How often a comment frame goes out.
@@ -38,6 +43,16 @@ import { ownerAuthenticated, unauthenticatedResponse } from './owner';
  * cheap: two dozen bytes per client per beat.
  */
 export const HEARTBEAT_MS = 15_000;
+
+/**
+ * How often a stream opened with a key checks that the key still works.
+ *
+ * Auth is otherwise checked once, at connect, and a stream is held open for
+ * hours. Revoking a phone's device key or an agent's token has to cut the
+ * stream it already holds, and the revocation may come from another process
+ * (the CLI), so this asks the database again rather than waiting to be told.
+ */
+export const AUTH_CHECK_MS = 5_000;
 
 /** How long a dropped client waits before reconnecting, via the SSE `retry:` field. */
 export const RETRY_MS = 2_000;
@@ -66,10 +81,14 @@ export type StreamHandlerOptions = {
 	bus?: EventBus;
 	/** Auth secrets, injectable so tests need no environment. */
 	config?: () => AuthConfig | null;
+	/** Which of the owner's phones holds a key. Injectable so tests need no database. */
+	devices?: DeviceResolver;
 	/** Milliseconds between comment frames. `0` disables the heartbeat. */
 	heartbeatMs?: number;
 	/** The `retry:` hint sent when the connection opens. */
 	retryMs?: number;
+	/** Milliseconds between checks that a device key still works. `0` disables them. */
+	authCheckMs?: number;
 };
 
 export type StreamHandler = (event: StreamRequestEvent) => Response;
@@ -82,10 +101,19 @@ export type StreamHandler = (event: StreamRequestEvent) => Response;
  * would fall down the gap between the two — seen by neither.
  */
 export function createStreamHandler(options: StreamHandlerOptions = {}): StreamHandler {
-	const { bus = sharedBus, config, heartbeatMs = HEARTBEAT_MS, retryMs = RETRY_MS } = options;
+	const {
+		bus = sharedBus,
+		config,
+		devices = environmentDevices,
+		heartbeatMs = HEARTBEAT_MS,
+		retryMs = RETRY_MS,
+		authCheckMs = AUTH_CHECK_MS
+	} = options;
 
 	return (event) => {
-		if (!ownerAuthenticated(event, config)) return unauthenticatedResponse();
+		if (!ownerAuthenticated(event, config, devices)) return unauthenticatedResponse();
+		// A cookie session has nothing to revoke; a phone's device key does.
+		const key = bearerToken(event.request.headers);
 
 		const cursor = readCursor(event);
 		const encoder = new TextEncoder();
@@ -98,6 +126,7 @@ export function createStreamHandler(options: StreamHandlerOptions = {}): StreamH
 				let open = true;
 				let unsubscribe: Unsubscribe = () => {};
 				let heartbeat: ReturnType<typeof setInterval> | undefined;
+				let authCheck: ReturnType<typeof setInterval> | undefined;
 
 				const write = (frame: string) => {
 					if (!open) return;
@@ -115,6 +144,7 @@ export function createStreamHandler(options: StreamHandlerOptions = {}): StreamH
 					open = false;
 					unsubscribe();
 					if (heartbeat !== undefined) clearInterval(heartbeat);
+					if (authCheck !== undefined) clearInterval(authCheck);
 					event.request.signal?.removeEventListener('abort', teardown);
 					try {
 						controller.close();
@@ -157,6 +187,19 @@ export function createStreamHandler(options: StreamHandlerOptions = {}): StreamH
 					// Don't hold the process open for a client that is idling: a shutdown
 					// should not have to wait out a heartbeat.
 					heartbeat.unref?.();
+				}
+
+				if (key !== null && authCheckMs > 0) {
+					// Revoked: end the stream. The client's reconnect then gets the 401
+					// that tells it to sign in again.
+					authCheck = setInterval(() => {
+						try {
+							if (devices(key) === null) teardown();
+						} catch {
+							// A read that fails is not a revocation; the next check asks again.
+						}
+					}, authCheckMs);
+					authCheck.unref?.();
 				}
 
 				const signal = event.request.signal;

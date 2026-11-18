@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { EventBus, type AppEvent, type EventBus as Bus } from '$events';
 import { SESSION_COOKIE, signSession } from '../auth';
+import type { OwnerDevice } from '$domain';
 import { HEARTBEAT_MS, createStreamHandler } from './stream';
 
 const SESSION_SECRET = 's'.repeat(32);
@@ -45,6 +46,11 @@ type ConnectOptions = {
 	query?: string;
 	heartbeatMs?: number;
 	cookie?: string;
+	/** A device key, sent as `Authorization: Bearer`. */
+	bearer?: string;
+	/** Which keys name a device. Defaults to none. */
+	devices?: (token: string) => boolean;
+	authCheckMs?: number;
 };
 
 /**
@@ -54,13 +60,17 @@ type ConnectOptions = {
  * chunks until it has n frames, never waiting on a timer.
  */
 function connect(bus: Bus, options: ConnectOptions = {}) {
+	const devices = options.devices ?? (() => false);
 	const handler = createStreamHandler({
 		bus,
 		config,
-		heartbeatMs: options.heartbeatMs ?? 0
+		devices: (token) => (devices(token) ? ({ id: 'd1' } as OwnerDevice) : null),
+		heartbeatMs: options.heartbeatMs ?? 0,
+		authCheckMs: options.authCheckMs ?? 0
 	});
 	const abort = new AbortController();
 	const headers = new Headers();
+	if (options.bearer !== undefined) headers.set('authorization', `Bearer ${options.bearer}`);
 	if (options.lastEventId !== undefined) {
 		headers.set('last-event-id', String(options.lastEventId));
 	}
@@ -80,6 +90,13 @@ function connect(bus: Bus, options: ConnectOptions = {}) {
 		response,
 		abort: () => abort.abort(),
 		cancel: () => reader!.cancel(),
+		/** Read to the end of the body: resolves once the server has closed it. */
+		async closed(): Promise<true> {
+			while (!(await reader!.read()).done) {
+				// Drain whatever is still buffered.
+			}
+			return true;
+		},
 		/** The next n frames, reading more chunks only when the buffer is short. */
 		async take(n: number): Promise<Frame[]> {
 			while (pending.length < n) {
@@ -372,6 +389,42 @@ describe('keeping the connection alive', () => {
 
 		expect(beat.comment).toContain('heartbeat');
 		expect(beat.event).toBeUndefined();
+		client.abort();
+	});
+});
+
+describe('a device key revoked while its stream is open', () => {
+	it('closes the stream within one check, and leaves nothing subscribed', async () => {
+		vi.useFakeTimers();
+		const bus = new EventBus();
+		let live = true;
+		const client = connect(bus, {
+			cookie: '',
+			bearer: 'phone-key',
+			devices: () => live,
+			authCheckMs: 1_000
+		});
+		await client.preamble();
+
+		vi.advanceTimersByTime(1_000);
+		expect(bus.listenerCount).toBe(1);
+
+		live = false;
+		vi.advanceTimersByTime(1_000);
+
+		expect(await client.closed()).toBe(true);
+		expect(bus.listenerCount).toBe(0);
+	});
+
+	it('leaves a cookie session alone: it has no key to revoke', async () => {
+		vi.useFakeTimers();
+		const bus = new EventBus();
+		const client = connect(bus, { authCheckMs: 1_000 });
+		await client.preamble();
+
+		vi.advanceTimersByTime(5_000);
+
+		expect(bus.listenerCount).toBe(1);
 		client.abort();
 	});
 });

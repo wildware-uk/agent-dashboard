@@ -29,10 +29,10 @@
  * identity → tools. Auth policy lives in `./auth.ts`, the refusal wording in
  * `./responses.ts`, and the tools in `./tools/`. This file is the wiring.
  */
-import { context, type DomainContext } from '$domain';
+import { authenticateAgent, context, type DomainContext } from '$domain';
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { WebStandardStreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/webStandardStreamableHttp.js';
-import { authenticateMcpRequest } from './auth';
+import { authenticateMcpRequest, readBearerToken } from './auth';
 import { mcpConfig, type McpConfig } from './env';
 import { createTokenRateLimiter, type TokenRateLimiter } from './rate-limit';
 import { misconfiguredResponse, refusalResponse } from './responses';
@@ -115,14 +115,27 @@ export type McpHandlerOptions = {
 	config?: () => McpConfig | null;
 	/** Defaults to the per-token limits in `./rate-limit.ts`. */
 	rateLimiter?: TokenRateLimiter;
+	/** Milliseconds between checks that the token still works during a call. `0` disables them. */
+	authCheckMs?: number;
 };
+
+/**
+ * How often a call in progress checks that its token still works.
+ *
+ * `request_input` and `await_request` park for up to a minute. Revoking the
+ * token ends the park at the next check, so a revoked agent is answered
+ * `pending` now and refused on its next call. The revocation may come from the
+ * CLI in another process, so this asks the database rather than waiting to be told.
+ */
+export const MCP_AUTH_CHECK_MS = 5_000;
 
 /** Build the `POST /mcp` handler. */
 export function createMcpHandler(options: McpHandlerOptions = {}): McpHandler {
 	const {
 		context: getContext = context,
 		config = mcpConfig,
-		rateLimiter = createTokenRateLimiter()
+		rateLimiter = createTokenRateLimiter(),
+		authCheckMs = MCP_AUTH_CHECK_MS
 	} = options;
 
 	return async ({ request }) => {
@@ -138,7 +151,34 @@ export function createMcpHandler(options: McpHandlerOptions = {}): McpHandler {
 		});
 		if (!auth.ok) return refusalResponse(auth);
 
-		return serve(request, { ctx, agent: auth.agent, holdMs: secrets.holdMs });
+		const bearer = readBearerToken(request.headers.get('authorization'));
+		const revoked = new AbortController();
+		const check =
+			authCheckMs > 0 && bearer.ok
+				? setInterval(() => {
+						try {
+							if (
+								!authenticateAgent(ctx, { token: bearer.token, secret: secrets.tokenSecret }).ok
+							) {
+								revoked.abort();
+							}
+						} catch {
+							// A read that fails is not a revocation; the next check asks again.
+						}
+					}, authCheckMs)
+				: undefined;
+		check?.unref?.();
+
+		try {
+			return await serve(request, {
+				ctx,
+				agent: auth.agent,
+				holdMs: secrets.holdMs,
+				signal: revoked.signal
+			});
+		} finally {
+			clearInterval(check);
+		}
 	};
 }
 

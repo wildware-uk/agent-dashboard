@@ -62,12 +62,16 @@ export const awaitRequestTool: McpTool<typeof inputSchema, Promise<CallToolResul
 		annotations: { readOnlyHint: true, destructiveHint: false, openWorldHint: true }
 	},
 
-	run: ({ ctx, agent, holdMs }, args) =>
+	run: ({ ctx, agent, holdMs, signal }, args) =>
 		guarded(async () =>
 			requestResult(
 				// Identity comes from the token: an id copied from another agent is
 				// refused rather than resumed (design §5).
-				await awaitRequest(ctx, { requestId: args.request_id, agentId: agent.id }, { holdMs })
+				await awaitRequest(
+					ctx,
+					{ requestId: args.request_id, agentId: agent.id },
+					{ holdMs, signal }
+				)
 			)
 		)
 };

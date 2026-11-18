@@ -1,4 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
+import { revokeAgentToken } from '$domain';
 import { createMcpHandler, MCP_INSTRUCTIONS, MCP_SERVER_NAME } from './server';
 import { createTokenRateLimiter } from './rate-limit';
 import { mcpHarness, type McpHarness } from './testing';
@@ -182,6 +183,40 @@ describe('createMcpHandler transport', () => {
 		});
 
 		expect(response.status).toBe(400);
+	});
+});
+
+describe('a token revoked while a call is parked', () => {
+	it('ends the hold within one check rather than at the end of it', async () => {
+		const handler = createMcpHandler({
+			context: () => mcp.h,
+			// A hold far longer than this test is allowed to run.
+			config: () => ({ tokenSecret: mcp.secret, holdMs: 60_000 }),
+			authCheckMs: 20
+		});
+		const listening = mcp.h.bus.listenerCount;
+		const started = Date.now();
+		const parked = post(
+			{
+				jsonrpc: '2.0',
+				id: 9,
+				method: 'tools/call',
+				params: {
+					name: 'request_input',
+					arguments: { kind: 'confirm', question: 'Ship it?' }
+				}
+			},
+			{ handler }
+		);
+
+		await new Promise((resolve) => setTimeout(resolve, 30));
+		revokeAgentToken(mcp.h, mcp.deps.agent.id);
+		const response = await parked;
+
+		expect(Date.now() - started).toBeLessThan(5_000);
+		const body = (await response.json()) as { result: { structuredContent: unknown } };
+		expect(body.result.structuredContent).toMatchObject({ state: 'pending' });
+		expect(mcp.h.bus.listenerCount).toBe(listening);
 	});
 });
 
