@@ -4,6 +4,7 @@ import {
 	createServer,
 	type ClientHttp2Session,
 	type Http2Server,
+	type ServerHttp2Session,
 	type IncomingHttpHeaders
 } from 'node:http2';
 import type { AddressInfo } from 'node:net';
@@ -87,11 +88,17 @@ describe('the HTTP/2 transport', () => {
 	let port: number;
 	let seen: { headers: IncomingHttpHeaders; body: string }[];
 	let answer: { status: number; body?: string };
+	let sessions: Set<ServerHttp2Session>;
 
 	beforeEach(async () => {
 		seen = [];
 		answer = { status: 200 };
+		sessions = new Set();
 		server = createServer();
+		server.on('session', (session) => {
+			sessions.add(session);
+			session.on('close', () => sessions.delete(session));
+		});
 		server.on('stream', (stream, headers) => {
 			let body = '';
 			stream.on('data', (chunk) => (body += chunk));
@@ -106,7 +113,12 @@ describe('the HTTP/2 transport', () => {
 	});
 
 	afterEach(async () => {
-		await new Promise<void>((resolve) => server.close(() => resolve()));
+		// The transport keeps its session open for reuse, which is the point of it.
+		// Node 22's `server.close()` waits for every open session to end (Node 24
+		// closes idle ones itself), so the test closes them as well.
+		const closed = new Promise<void>((resolve) => server.close(() => resolve()));
+		for (const session of sessions) session.close();
+		await closed;
 	});
 
 	const transport = (opened: string[] = []) =>
