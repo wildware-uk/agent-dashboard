@@ -294,6 +294,7 @@ export {
 	listOwnerDevices,
 	markOwnerDevicePushed,
 	markOwnerDevicePushFailed,
+	setOwnerDeviceAlertPrefs,
 	setOwnerDeviceAlertProjects,
 	setOwnerDeviceApns,
 	setOwnerDeviceLiveActivity,

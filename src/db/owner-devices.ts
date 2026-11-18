@@ -5,6 +5,7 @@
  * that phone registered. Hashing, comparison and what a failure means are
  * `src/domain/devices.ts`'s business.
  */
+import type { PushPrefs } from './push';
 import type { Db } from './connection';
 import { newId } from './ids';
 
@@ -26,6 +27,8 @@ export type OwnerDevice = {
 	failures: number;
 	/** Projects this phone wants alerts about (migration 045). `null` is every project. */
 	alertProjectIds: string[] | null;
+	/** Which kinds, levels and priorities of alert it wants (migration 047). `null` is all. */
+	alertPrefs: PushPrefs | null;
 };
 
 type Row = {
@@ -41,10 +44,11 @@ type Row = {
 	last_seen_at: number | null;
 	failures: number;
 	alert_project_ids: string | null;
+	alert_prefs: string | null;
 };
 
 const COLUMNS = `seq, id, name, token_hash, apns_token, apns_environment, live_activity_token,
-	push_to_start_token, created_at, last_seen_at, failures, alert_project_ids`;
+	push_to_start_token, created_at, last_seen_at, failures, alert_project_ids, alert_prefs`;
 
 function toDevice(row: Row): OwnerDevice {
 	return {
@@ -60,7 +64,8 @@ function toDevice(row: Row): OwnerDevice {
 		lastSeenAt: row.last_seen_at,
 		failures: row.failures,
 		alertProjectIds:
-			row.alert_project_ids === null ? null : (JSON.parse(row.alert_project_ids) as string[])
+			row.alert_project_ids === null ? null : (JSON.parse(row.alert_project_ids) as string[]),
+		alertPrefs: row.alert_prefs === null ? null : (JSON.parse(row.alert_prefs) as PushPrefs)
 	};
 }
 
@@ -179,6 +184,15 @@ export function setOwnerDeviceAlertProjects(
 		db
 			.prepare(`UPDATE owner_devices SET alert_project_ids = ? WHERE id = ?`)
 			.run(projectIds === null ? null : JSON.stringify(projectIds), id).changes === 1
+	);
+}
+
+/** `null` means every alert. */
+export function setOwnerDeviceAlertPrefs(db: Db, id: string, prefs: PushPrefs | null): boolean {
+	return (
+		db
+			.prepare(`UPDATE owner_devices SET alert_prefs = ? WHERE id = ?`)
+			.run(prefs === null ? null : JSON.stringify(prefs), id).changes === 1
 	);
 }
 

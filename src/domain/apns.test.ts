@@ -26,7 +26,12 @@ import {
 	type ApnsResponse,
 	type ApnsTransport
 } from './apns';
-import { mintOwnerDevice, setDeviceAlertProjects, setDeviceApnsToken } from './devices';
+import {
+	mintOwnerDevice,
+	setDeviceAlertPrefs,
+	setDeviceAlertProjects,
+	setDeviceApnsToken
+} from './devices';
 import { listThread, postMessage } from './messages';
 import { createProject } from './projects';
 import { createRequest } from './requests';
@@ -427,6 +432,42 @@ describe('the alert sender', () => {
 			failed: 0
 		});
 		expect(sent[0].headers['apns-topic']).toBe('dev.wildware.agents');
+	});
+
+	it('sends a phone only the kinds and levels of alert it asked for', async () => {
+		createProject(h, { name: 'Fees', slug: 'fees' });
+		const picky = mintOwnerDevice(h, { name: 'picky', secret: 't'.repeat(32) }).device;
+		setDeviceApnsToken(h, picky.id, { token: 'cccc', environment: 'production' });
+		setDeviceAlertPrefs(h, picky.id, { types: ['request', 'update'], levels: ['error'] });
+		const stop = startApnsPusher({
+			context: () => h,
+			bus: h.bus,
+			settings: () => SETTINGS,
+			transport,
+			baseUrl: () => BASE
+		});
+		const deliveredTo = async (post: () => void) => {
+			sent = [];
+			post();
+			await vi.waitFor(() => expect(sent.length).toBeGreaterThan(0));
+			await new Promise((resolve) => setTimeout(resolve, 10));
+			return sent.map((request) => request.deviceToken).sort();
+		};
+
+		await expect(
+			deliveredTo(() =>
+				postUpdate(h, { project: 'fees', agentId, body: 'all fine', level: 'info' })
+			)
+		).resolves.toEqual(['aaaa']);
+		await expect(
+			deliveredTo(() =>
+				postUpdate(h, { project: 'fees', agentId, body: 'it broke', level: 'error' })
+			)
+		).resolves.toEqual(['aaaa', 'cccc']);
+		await expect(
+			deliveredTo(() => createRequest(h, { agentId, kind: 'confirm', question: 'ship?' }))
+		).resolves.toEqual(['aaaa', 'cccc']);
+		stop();
 	});
 
 	it('sends a phone limited to some projects only their alerts, and project-less ones', async () => {

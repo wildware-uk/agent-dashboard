@@ -465,6 +465,7 @@ export {
 	deviceName,
 	mintOwnerDevice,
 	revokeOwnerDevice,
+	setDeviceAlertPrefs,
 	setDeviceAlertProjects,
 	setDeviceApnsToken,
 	setDeviceLiveActivityTokens

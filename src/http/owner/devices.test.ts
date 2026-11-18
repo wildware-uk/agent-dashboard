@@ -16,6 +16,7 @@ import {
 	createDeviceHandler,
 	deleteDeviceHandler,
 	listDevicesHandler,
+	setAlertPrefsHandler,
 	setAlertProjectsHandler,
 	setApnsTokenHandler,
 	setLiveActivityHandler,
@@ -202,7 +203,8 @@ describe('listing devices', () => {
 				lastSeenAt: expect.any(String),
 				hasApns: true,
 				hasLiveActivity: false,
-				alertProjects: null
+				alertProjects: null,
+				alertPrefs: null
 			},
 			expect.objectContaining({ name: 'ipad', lastSeenAt: null, hasApns: false })
 		]);
@@ -503,5 +505,72 @@ describe('signing in an app', () => {
 
 		expect(response.status).toBe(400);
 		expect(attempts).toEqual([]);
+	});
+});
+
+describe('which alerts a device wants', () => {
+	const put = (body: unknown, bearer?: string) =>
+		call(setAlertPrefsHandler, { method: 'PUT', body, ...(bearer ? { bearer } : {}) });
+
+	it('keeps the kinds, levels and priorities the device names', async () => {
+		const { device, token } = mint();
+		mint('ipad');
+		const prefs = {
+			types: ['request', 'message'],
+			levels: ['error', 'warn'],
+			priorities: ['high']
+		};
+
+		const { body } = await put({ prefs }, token);
+
+		expect(body).toEqual({ ok: true, prefs });
+		expect(findOwnerDeviceById(h.db, device.id)?.alertPrefs).toEqual(prefs);
+		const listed = await call(listDevicesHandler);
+		expect(listed.body.devices.map((d: { alertPrefs: unknown }) => d.alertPrefs)).toEqual([
+			prefs,
+			null
+		]);
+	});
+
+	it('goes back to every alert with null', async () => {
+		const { device, token } = mint();
+		await put({ prefs: { types: ['request'] } }, token);
+
+		const { body } = await put({ prefs: null }, token);
+
+		expect(body).toEqual({ ok: true, prefs: null });
+		expect(findOwnerDeviceById(h.db, device.id)?.alertPrefs).toBeNull();
+	});
+
+	it.each([
+		[{}],
+		[{ prefs: 'all' }],
+		[{ prefs: { types: ['nope'] } }],
+		[{ prefs: { levels: 'error' } }]
+	])('refuses %j', async (payload) => {
+		const { device, token } = mint();
+
+		const { response, body } = await put(payload, token);
+
+		expect(response.status).toBe(400);
+		expect(body.error).toBe('invalid_argument');
+		expect(findOwnerDeviceById(h.db, device.id)?.alertPrefs).toBeNull();
+	});
+
+	it('needs a device key, not a cookie', async () => {
+		const { response, body } = await put({ prefs: null });
+
+		expect(response.status).toBe(400);
+		expect(body.error).toBe('invalid_argument');
+	});
+
+	it('answers 401 without the owner', async () => {
+		const { response } = await call(setAlertPrefsHandler, {
+			method: 'PUT',
+			body: { prefs: null },
+			cookie: null
+		});
+
+		expect(response.status).toBe(401);
 	});
 });

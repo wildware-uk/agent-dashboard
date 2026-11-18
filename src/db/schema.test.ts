@@ -292,7 +292,9 @@ const DESIGN_COLUMNS: Record<string, string[]> = {
 		'last_seen_at',
 		'failures',
 		// Migration 045: which projects the phone wants alerts about.
-		'alert_project_ids'
+		'alert_project_ids',
+		// Migration 047: which kinds, levels and priorities of alert it wants.
+		'alert_prefs'
 	],
 	// Migration 044: an agent a message names with @name.
 	message_mentions: ['message_id', 'agent_id'],

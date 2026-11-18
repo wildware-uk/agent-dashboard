@@ -26,6 +26,7 @@ import {
 	mintOwnerDevice,
 	ownerSummary,
 	revokeOwnerDevice,
+	setDeviceAlertPrefs,
 	setDeviceAlertProjects,
 	setDeviceApnsToken,
 	setDeviceLiveActivityTokens,
@@ -62,7 +63,9 @@ function deviceView(ctx: DomainContext, device: OwnerDevice) {
 		hasApns: device.apnsToken !== null,
 		hasLiveActivity: device.liveActivityToken !== null,
 		/** Slugs its alerts are limited to; `null` for every project. */
-		alertProjects: deviceAlertProjects(ctx, device)
+		alertProjects: deviceAlertProjects(ctx, device),
+		/** Which kinds, levels and priorities of alert it wants; `null` for all. */
+		alertPrefs: device.alertPrefs
 	};
 }
 
@@ -218,6 +221,20 @@ export function setAlertProjectsHandler(options: DeviceHandlerOptions = {}): Own
 		if (!('projects' in body)) throw invalid('send projects: an array of slugs, or null');
 		setDeviceAlertProjects(ctx, device.id, body.projects);
 		return { status: 200, body: { ok: true } };
+	});
+}
+
+/**
+ * `PUT /api/devices/current/alert-prefs` — which alerts the calling phone gets.
+ * `{ prefs: { types?, levels?, priorities? } }`, or `{ prefs: null }` for all. Device key only.
+ */
+export function setAlertPrefsHandler(options: DeviceHandlerOptions = {}): OwnerHandler {
+	return ownerAction(options, async (event, ctx) => {
+		const device = callingDevice(event, options);
+		const body = await readOwnerJson(event.request);
+		if (!('prefs' in body)) throw invalid('send prefs: { types, levels, priorities }, or null');
+		const prefs = setDeviceAlertPrefs(ctx, device.id, body.prefs);
+		return { status: 200, body: { ok: true, prefs } };
 	});
 }
 

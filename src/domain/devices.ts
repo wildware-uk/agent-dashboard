@@ -19,17 +19,20 @@ import {
 	findProjectBySlug,
 	insertOwnerDevice,
 	listOwnerDevices as listOwnerDeviceRows,
+	setOwnerDeviceAlertPrefs,
 	setOwnerDeviceAlertProjects,
 	setOwnerDeviceApns,
 	setOwnerDeviceLiveActivity,
 	touchOwnerDevice,
 	type ApnsEnvironment,
 	type OwnerDevice,
-	type OwnerDeviceTokenColumn
+	type OwnerDeviceTokenColumn,
+	type PushPrefs
 } from '$db';
 import { constantTimeEquals, hashAgentToken, isTokenShaped, TOKEN_BYTES } from './agents';
 import type { DomainContext } from './context';
 import { invalid, notFound } from './errors';
+import { assertPushPrefs } from './push';
 import { requiredText } from './text';
 
 export type { ApnsEnvironment, OwnerDevice };
@@ -172,6 +175,24 @@ export function setDeviceAlertProjects(
 	if (!setOwnerDeviceAlertProjects(ctx.db, deviceId, ids)) {
 		throw notFound(`no such device: ${deviceId}`);
 	}
+}
+
+/**
+ * Which alerts this phone wants: kinds (`request`, `message`, `comment`,
+ * `update`), update levels and priorities. `null` restores every alert. Checked
+ * the way a browser's preferences are, so an unknown word is refused rather
+ * than quietly widening what the phone is woken for.
+ */
+export function setDeviceAlertPrefs(
+	ctx: DomainContext,
+	deviceId: string,
+	prefs: unknown
+): PushPrefs | null {
+	const checked = assertPushPrefs(prefs);
+	if (!setOwnerDeviceAlertPrefs(ctx.db, deviceId, checked)) {
+		throw notFound(`no such device: ${deviceId}`);
+	}
+	return checked;
 }
 
 /** The slugs a device's alerts are limited to, or `null` for every project. */

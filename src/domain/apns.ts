@@ -423,11 +423,12 @@ export async function sendApnsAlert(
 	options: { settings: ApnsConfig; transport: ApnsTransport; onError?: (error: unknown) => void }
 ): Promise<ApnsResult> {
 	const result: ApnsResult = { sent: 0, removed: 0, failed: 0 };
-	// Phones have no per-device preferences yet, so they get the defaults.
-	if (!notifies(null, alert.about)) return result;
-
+	// Each phone's own choice of kinds, levels and priorities; `null` is the default.
 	const devices = listOwnerDevices(ctx.db).filter(
-		(device) => device.apnsToken !== null && deviceWantsAlert(device, alert.projectId)
+		(device) =>
+			device.apnsToken !== null &&
+			deviceWantsAlert(device, alert.projectId) &&
+			notifies(device.alertPrefs, alert.about)
 	);
 	const headers = alertHeaders(options.settings.bundleId, alert.message.tag, ctx.now());
 	const payload = alertPayload(alert);
