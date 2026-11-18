@@ -781,4 +781,4 @@ for the full architecture, data model, MCP tool surface, and owner-request seman
 
 ## Licence
 
-MIT
+GNU Affero General Public License v3.0, see [LICENSE](LICENSE). If you run a modified copy for other people over a network, you must offer them its source. Versions released before this change remain available under MIT.

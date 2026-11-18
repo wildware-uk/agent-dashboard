@@ -73,7 +73,7 @@
 		"zod": "^4.4.3"
 	},
 	"description": "Self-hosted dashboard where AI coding agents report what they are doing over MCP.",
-	"license": "MIT",
+	"license": "AGPL-3.0-only",
 	"engines": {
 		"node": ">=22"
 	}
