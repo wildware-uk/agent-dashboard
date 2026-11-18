@@ -58,6 +58,9 @@ export class EventBus {
 	readonly #ring: EventRing;
 	readonly #listeners = new Set<EventListener>();
 	readonly #onListenerError: ListenerErrorHandler;
+	/** Published but not yet handed to listeners: see {@link EventBus.publish}. */
+	readonly #pending: AppEvent[] = [];
+	#dispatching = false;
 
 	constructor(options: EventBusOptions = {}) {
 		this.#ring = new EventRing(options.capacity ?? RING_CAPACITY);
@@ -80,6 +83,10 @@ export class EventBus {
 	 * Stamp an event with the next sequence number, retain it for replay, and hand
 	 * it to every subscriber synchronously.
 	 *
+	 * Listeners always receive events in seq order. A publish made by a listener
+	 * while it handles another event is stamped and retained at once, but reaches
+	 * listeners only after the current event has reached all of them.
+	 *
 	 * @returns the stamped event, so a caller can quote its `seq` as a cursor.
 	 */
 	publish<K extends EventName>(type: K, payload: EventPayloads[K]): EventOf<K> {
@@ -95,17 +102,34 @@ export class EventBus {
 		} as AppEvent;
 
 		this.#ring.push(event);
-		// Iterate a copy: a subscriber is allowed to unsubscribe, or subscribe,
-		// from inside its own callback without disturbing this dispatch.
-		for (const listener of [...this.#listeners]) {
-			if (!this.#listeners.has(listener)) continue;
-			try {
-				listener(event);
-			} catch (error) {
-				this.#onListenerError(error, event);
-			}
-		}
+		this.#pending.push(event);
+		// A publish from inside a listener only queues: the outer dispatch is still
+		// handing out the event that caused it, and running the inner one now would
+		// give every later listener seq N+1 before seq N. The outermost publish
+		// drains the queue, so every listener sees every event in seq order.
+		if (!this.#dispatching) this.#drain();
 		return event as EventOf<K>;
+	}
+
+	/** Hand every queued event to every listener, oldest first. */
+	#drain(): void {
+		this.#dispatching = true;
+		try {
+			for (let event = this.#pending.shift(); event; event = this.#pending.shift()) {
+				// Iterate a copy: a subscriber is allowed to unsubscribe, or subscribe,
+				// from inside its own callback without disturbing this dispatch.
+				for (const listener of [...this.#listeners]) {
+					if (!this.#listeners.has(listener)) continue;
+					try {
+						listener(event);
+					} catch (error) {
+						this.#onListenerError(error, event);
+					}
+				}
+			}
+		} finally {
+			this.#dispatching = false;
+		}
 	}
 
 	/**

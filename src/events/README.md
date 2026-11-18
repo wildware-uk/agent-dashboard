@@ -26,7 +26,9 @@ Notes carried from the design (§4):
 - `bus` — the process-wide `EventBus`. Everything shares this one instance;
   a second bus would silently split the fan-out. Tests build their own.
 - `bus.publish(type, payload)` — stamps the next `seq`, retains the event for
-  replay, and fans it out synchronously. Returns the stamped event, so a caller
+  replay, and fans it out synchronously. Listeners always get events in `seq` order: a
+  publish made from inside a listener is stamped at once but reaches listeners
+  only after the event being handled has reached all of them. Returns the stamped event, so a caller
   can quote its `seq` as a cursor. A payload that does not match its `type` is a
   compile error, which `src/events/bus.test.ts` pins with `@ts-expect-error`
   lines that `npm run typecheck` verifies.

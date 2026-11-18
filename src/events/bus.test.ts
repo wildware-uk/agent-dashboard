@@ -114,6 +114,48 @@ describe('EventBus subscribe', () => {
 		expect(bus.listenerCount).toBe(1);
 	});
 
+	it('delivers an event published from inside a listener after the one that caused it', () => {
+		// The notification recorder subscribes before any stream and publishes
+		// `notification.created` while it handles `update.created`. Every listener,
+		// whether it subscribed before or after the one that publishes, must see
+		// the cause (seq 1) before the consequence (seq 2).
+		const bus = new EventBus();
+		const before: number[] = [];
+		const after: number[] = [];
+		bus.subscribe((event) => before.push(event.seq));
+		bus.subscribe((event) => {
+			if (event.type === 'update.created') {
+				const nested = bus.publish('notification.created', {
+					notificationId: 'n1',
+					kind: 'update',
+					projectId: 'p1'
+				});
+				// The caller still gets its stamped event back straight away.
+				expect(nested.seq).toBe(2);
+			}
+		});
+		bus.subscribe((event) => after.push(event.seq));
+
+		bus.publish('update.created', { updateId: 'u1', projectId: 'p1', agentId: 'a1' });
+
+		expect(before).toEqual([1, 2]);
+		expect(after).toEqual([1, 2]);
+		expect(bus.replaySince(0)).toMatchObject({ hit: true, events: [{ seq: 1 }, { seq: 2 }] });
+	});
+
+	it('keeps seq order through publishes nested more than one deep', () => {
+		const bus = new EventBus();
+		const seen: number[] = [];
+		bus.subscribe((event) => {
+			if (event.seq < 4) bus.publish('agent.renamed', { agentId: 'a1', name: `n${event.seq}` });
+		});
+		bus.subscribe((event) => seen.push(event.seq));
+
+		bus.publish('agent.renamed', { agentId: 'a1', name: 'start' });
+
+		expect(seen).toEqual([1, 2, 3, 4]);
+	});
+
 	it('reports a throwing subscriber instead of dropping the fan-out', () => {
 		const onListenerError = vi.fn();
 		const bus = new EventBus({ onListenerError });

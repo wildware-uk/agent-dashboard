@@ -140,6 +140,31 @@ describe('a live connection', () => {
 		first.abort();
 		second.abort();
 	});
+
+	it('delivers an event a server-side listener publishes after the event that caused it', async () => {
+		// The notification recorder is subscribed before any stream and publishes
+		// `notification.created` while it handles `update.created`.
+		const bus = new EventBus();
+		bus.subscribe((event) => {
+			if (event.type !== 'update.created') return;
+			bus.publish('notification.created', {
+				notificationId: 'n1',
+				kind: 'update',
+				projectId: 'p1'
+			});
+		});
+		const client = connect(bus);
+		await client.preamble();
+
+		bus.publish('update.created', { updateId: 'u1', projectId: 'p1', agentId: 'a1' });
+
+		const frames = await client.take(2);
+		expect(frames.map((frame) => [frame.id, frame.event])).toEqual([
+			[1, 'update.created'],
+			[2, 'notification.created']
+		]);
+		client.abort();
+	});
 });
 
 describe('reconnecting with a Last-Event-ID still in the buffer', () => {
