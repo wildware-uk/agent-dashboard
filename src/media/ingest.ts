@@ -8,7 +8,9 @@
  * 1. **Verify the token before touching the body.** A forged, expired or spent
  *    token costs one HMAC and one conditional UPDATE, and the request body is
  *    never read at all. Spending is a single atomic statement in `$db`, so of
- *    two concurrent PUTs with one token exactly one proceeds.
+ *    two concurrent PUTs with one token exactly one proceeds. If that upload
+ *    then fails, for any reason, the spend is undone: only a stored upload uses
+ *    the token up, so the agent can fix its request and retry the same url.
  * 2. **Refuse an oversized `Content-Length` outright**, purely to save the
  *    transfer — and then *never trust it again*.
  * 3. **Count while writing.** The cap is checked per chunk, and the moment it is
@@ -40,6 +42,7 @@ import {
 	consumeUploadToken,
 	findMediaById,
 	findMediaBySha256,
+	releaseUploadToken,
 	setMediaBytes,
 	type Db,
 	type Media
@@ -84,8 +87,8 @@ export type IngestResult = {
  * @throws {@link MediaError} — `token_rejected` (forged, unknown, expired or
  *   spent), `too_large`, `unsupported_type` (bytes disagree with the
  *   reservation, or are not on the allowlist), `invalid_argument` (no readable
- *   body — thrown before the token is spent, so a retry works),
- *   `conflict` (bytes already landed for this media).
+ *   or an empty body), `conflict` (bytes already landed for this media). Any
+ *   failure leaves the token unspent, so a retry with a fixed body works.
  */
 /**
  * What an agent sees when its PUT arrived with no readable body.
@@ -119,18 +122,26 @@ export async function ingest(settings: MediaSettings, input: IngestInput): Promi
 	const token = consumeUploadToken(input.db, tokenId, { now });
 	if (!token) throw rejected();
 
-	const media = findMediaById(input.db, token.mediaId);
-	if (!media) throw mediaNotFound('the media this token was minted for is gone');
-	if (media.sha256 !== '') throw mediaConflict('bytes have already landed for this media');
+	try {
+		const media = findMediaById(input.db, token.mediaId);
+		if (!media) throw mediaNotFound('the media this token was minted for is gone');
+		if (media.sha256 !== '') throw mediaConflict('bytes have already landed for this media');
 
-	return storeBytes(settings, {
-		db: input.db,
-		media,
-		body: input.body,
-		maxBytes: token.maxBytes,
-		allowed: token.mimeAllow,
-		contentLength: input.contentLength
-	});
+		return await storeBytes(settings, {
+			db: input.db,
+			media,
+			body: input.body,
+			maxBytes: token.maxBytes,
+			allowed: token.mimeAllow,
+			contentLength: input.contentLength
+		});
+	} catch (error) {
+		// Only a stored upload spends the token. Spending first is what stops two
+		// concurrent PUTs both writing; handing it back on failure is what lets
+		// the agent retry the url it already has.
+		releaseUploadToken(input.db, token.id, token.usedAt!);
+		throw error;
+	}
 }
 
 export type StoreBytesInput = {
@@ -211,8 +222,8 @@ function rejected() {
 
 function overCap(maxBytes: number) {
 	return tooLarge(
-		`this upload may be at most ${maxBytes} bytes. The token is spent either way: ` +
-			`call create_upload again with the real size.`
+		`this upload may be at most ${maxBytes} bytes. Send the file you declared to ` +
+			`create_upload, or call it again with the real size.`
 	);
 }
 

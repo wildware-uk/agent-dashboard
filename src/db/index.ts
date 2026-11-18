@@ -150,6 +150,7 @@ export {
 	deleteExpiredUploadTokens,
 	findUploadTokenById,
 	insertUploadToken,
+	releaseUploadToken,
 	type NewUploadToken
 } from './upload-tokens';
 export {

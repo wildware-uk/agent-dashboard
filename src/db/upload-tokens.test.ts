@@ -6,7 +6,8 @@ import {
 	consumeUploadToken,
 	deleteExpiredUploadTokens,
 	findUploadTokenById,
-	insertUploadToken
+	insertUploadToken,
+	releaseUploadToken
 } from './upload-tokens';
 
 let db: Db;
@@ -58,6 +59,23 @@ describe('consumeUploadToken', () => {
 
 		expect(spent).toMatchObject({ id: token.id, usedAt: 1000 });
 		expect(consumeUploadToken(db, token.id, { now: 1001 })).toBeUndefined();
+	});
+
+	it('can be handed back after a failed upload, and spent again', () => {
+		const token = mint();
+		consumeUploadToken(db, token.id, { now: 1000 });
+
+		expect(releaseUploadToken(db, token.id, 1000)).toBe(true);
+		expect(findUploadTokenById(db, token.id)).toMatchObject({ usedAt: null });
+		expect(consumeUploadToken(db, token.id, { now: 1002 })).toMatchObject({ usedAt: 1002 });
+	});
+
+	it('only hands back the spend it names', () => {
+		const token = mint();
+		consumeUploadToken(db, token.id, { now: 1000 });
+
+		expect(releaseUploadToken(db, token.id, 999)).toBe(false);
+		expect(findUploadTokenById(db, token.id)).toMatchObject({ usedAt: 1000 });
 	});
 
 	it('refuses an expired token', () => {

@@ -100,6 +100,26 @@ export function consumeUploadToken(
 }
 
 /**
+ * Hand back a token whose upload failed, so the same url can be retried.
+ *
+ * The token is spent up front, which is what lets exactly one of two concurrent
+ * PUTs proceed; this undoes that spend when the upload it allowed did not
+ * succeed. Only the spend stamped `usedAt` is undone, so a release can never
+ * revive a token that a later upload has spent.
+ *
+ * @returns whether the token is unspent again.
+ */
+export function releaseUploadToken(db: Db, id: string, usedAt: number): boolean {
+	return (
+		db
+			.prepare<[string, number]>(
+				`UPDATE upload_tokens SET used_at = NULL WHERE id = ? AND used_at = ?`
+			)
+			.run(id, usedAt).changes === 1
+	);
+}
+
+/**
  * Drop unused tokens past their expiry. Spent tokens stay: they are the record
  * that an upload happened.
  */

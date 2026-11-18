@@ -267,6 +267,33 @@ describe('the token', () => {
 		).toBe('token_rejected');
 	});
 
+	it('is not spent by a failed upload, so the agent can retry the same url', async () => {
+		const bytes = pngBytes();
+		const created = reserve('image/png', bytes.length);
+		const upload = (body: ReadableStream<Uint8Array>, contentLength?: number) =>
+			refusal(() => ingest(settings, { db, token: created.token, body, contentLength, now: NOW }));
+		const broken = new ReadableStream<Uint8Array>({
+			pull(controller) {
+				controller.error(new Error('connection reset'));
+			}
+		});
+
+		// 413 by header and by count, 415, an empty body, and a failure that is
+		// nobody's refusal (a 500 at the route).
+		expect(await upload(bodyOf(bytes), bytes.length * 1000)).toBe('too_large');
+		expect(await upload(bodyOf(paddedBytes(bytes, bytes.length * 4)))).toBe('too_large');
+		expect(await upload(bodyOf(zipBytes()))).toBe('unsupported_type');
+		expect(await upload(bodyOf(new Uint8Array(0)))).toBe('invalid_argument');
+		await expect(
+			ingest(settings, { db, token: created.token, body: broken, now: NOW })
+		).rejects.toThrow('connection reset');
+
+		expect(await upload(bodyOf(bytes))).toBeUndefined();
+		expect(findMediaById(db, created.mediaId)!.sha256).toBe(sha256(bytes));
+		// Spent now, by the one upload that worked.
+		expect(await upload(bodyOf(bytes))).toBe('token_rejected');
+	});
+
 	it('is refused once its fifteen minutes are up', async () => {
 		const bytes = pngBytes();
 		const created = reserve('image/png', bytes.length);

@@ -156,11 +156,11 @@ describe('PUT /api/upload/:token', () => {
 		const second = await put(created.token, bytesOf(zipBytes()), { rateLimiter });
 		const third = await put(created.token, bytesOf(zipBytes()), { rateLimiter });
 
-		// The first attempt spends the token, so the second is refused as a reused
-		// one — and the third never gets that far, because retrying a dead token in
-		// a loop is exactly what the limit is for.
+		// A failed upload does not spend the token, so the second attempt is judged
+		// on its bytes again — and the third never gets that far, because retrying
+		// the same bad body in a loop is exactly what the limit is for.
 		expect(first.response.status).toBe(415);
-		expect(second.response.status).toBe(403);
+		expect(second.response.status).toBe(415);
 		expect(third.response.status).toBe(429);
 		expect(Number(third.response.headers.get('retry-after'))).toBeGreaterThan(0);
 	});
