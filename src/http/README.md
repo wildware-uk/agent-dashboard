@@ -186,13 +186,13 @@ before this server sees it. The snippet is in a comment at the route itself.
 `routes/api/snapshot/` are thin mounts over it, so reconnect behaviour is tested
 without a server. Public entry point: `src/http/stream/index.ts`.
 
-| Route                       | Serves                                                                       |
-| --------------------------- | ---------------------------------------------------------------------------- |
-| `GET /api/stream`           | One SSE connection carrying every event type. `id:` is the global event seq. |
-| `GET /api/snapshot`         | Projects plus the newest timeline page, stamped with the seq it is good to.  |
-| `GET /api/snapshot/updates` | The timeline alone, for paging (`?cursor=`) or a scoped refetch.             |
-| `GET /api/snapshot/agents`  | Who is online right now, derived from heartbeats. No query, no pages.        |
-| `GET /api/snapshot/tasks`   | The task list for `?project=`, or for every project. No pages.               |
+| Route                       | Serves                                                                      |
+| --------------------------- | --------------------------------------------------------------------------- |
+| `GET /api/stream`           | One SSE connection carrying every event type. `id:` is `<boot>-<seq>`.      |
+| `GET /api/snapshot`         | Projects plus the newest timeline page, stamped with the seq it is good to. |
+| `GET /api/snapshot/updates` | The timeline alone, for paging (`?cursor=`) or a scoped refetch.            |
+| `GET /api/snapshot/agents`  | Who is online right now, derived from heartbeats. No query, no pages.       |
+| `GET /api/snapshot/tasks`   | The task list for `?project=`, or for every project. No pages.              |
 
 `/api/snapshot/agents` is the right rail's own read. Presence is derived and
 never stored (§4), so it takes no filter and no cursor: the answer is whoever has
@@ -208,13 +208,23 @@ deployment.
 How a client stays correct:
 
 1. Connect to `/api/stream`, then fetch `/api/snapshot`. Apply the snapshot and
-   discard any frame whose `id:` is at or below the snapshot's `seq`.
-2. On a drop, `EventSource` reconnects with `Last-Event-ID` on its own. The
-   server replays exactly the missed events out of the ring buffer.
-3. If the gap is wider than the buffer (500 events — a long sleep, or a server
-   restart, which makes the cursor look _ahead_), the server sends one `resync`
-   event and keeps the connection open. Refetch the snapshot and carry on.
-4. Comment frames (`: heartbeat …`) go out every 15s so an idle connection is
+   discard any frame whose seq is at or below the snapshot's `seq`.
+2. Every `id:` is `<boot>-<seq>`. The seq lives in memory and starts again at 1
+   when the server restarts; the boot id (random, new each start) says which
+   run of the server counted it. Each connection opens with a `hello` frame,
+   `id: <boot>-<seq>` and data `{"type":"hello","boot":…,"seq":…}`, where `seq`
+   is the client's own cursor when it resumed, or the newest seq if it gave
+   none. Clients that do not know `hello` ignore it.
+3. On a drop, `EventSource` reconnects with `Last-Event-ID` on its own (or a
+   client sends `?last_event_id=`). The server replays exactly the missed
+   events out of the ring buffer. A bare `<seq>` cursor, as sent before boot
+   ids, is still read as a seq in this boot.
+4. If the gap cannot be served, the server sends one `resync` event and keeps
+   the connection open. Refetch the snapshot and carry on. `reason` is
+   `expired` (wider than the 500-event buffer), `ahead` (a seq this boot has not
+   reached) or `restarted` (the cursor names another boot). Its `id:` is
+   `<boot>-<newest seq>`, even when that seq is 0, and its body names the `boot`.
+5. Comment frames (`: heartbeat …`) go out every 15s so an idle connection is
    never mistaken for a dead one. Clients ignore them.
 
 Disconnecting — the request aborting or the browser cancelling the body — drops

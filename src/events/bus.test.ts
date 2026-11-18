@@ -178,6 +178,22 @@ describe('EventBus subscribe', () => {
 	});
 });
 
+describe('EventBus boot id', () => {
+	it('is different for every bus, so a restart is visible to a client', () => {
+		const first = new EventBus();
+		const second = new EventBus();
+
+		expect(first.boot).toMatch(/^[0-9a-z]{1,32}$/);
+		expect(second.boot).not.toBe(first.boot);
+	});
+
+	it('can be pinned, and refuses one that could not sit in front of a seq', () => {
+		expect(new EventBus({ boot: 'b1' }).boot).toBe('b1');
+		expect(() => new EventBus({ boot: 'b-1' })).toThrow(/boot id/);
+		expect(() => new EventBus({ boot: '' })).toThrow(/boot id/);
+	});
+});
+
 describe('EventBus replay', () => {
 	function publishMany(bus: EventBus, count: number) {
 		for (let n = 1; n <= count; n += 1) {

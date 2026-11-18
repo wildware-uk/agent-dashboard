@@ -211,6 +211,61 @@ describe('when a consumer unmounts', () => {
 	});
 });
 
+describe('boot ids', () => {
+	/**
+	 * The seq restarts at 1 with the server, so a seq alone cannot tell this
+	 * server's 5 from the last one's. The server puts its boot id in every `id:`
+	 * (`<boot>-<seq>`) and in a `hello` frame, and a cursor sent back with it is
+	 * told `resync` when the server has restarted since.
+	 */
+	it('resumes with the boot id the server named', () => {
+		const { stream, streams, opened } = hub();
+		const first = stream.subscribe(consumer().spec);
+		streams[0].emit('hello', { boot: 'b1', seq: 3 }, 'b1-3');
+		streams[0].emit('update.created', { seq: 12 }, 'b1-12');
+		first.close();
+
+		stream.subscribe(consumer().spec);
+
+		expect(stream.seq).toBe(12);
+		expect(opened).toEqual(['/api/stream', '/api/stream?last_event_id=b1-12']);
+	});
+
+	it('names the boot even with nothing seen in it yet', () => {
+		const { stream, streams, opened } = hub();
+		const first = stream.subscribe(consumer().spec);
+		streams[0].emit('resync', { reason: 'restarted', from: 9, seq: 0, boot: 'b2' }, 'b2-0');
+		first.close();
+
+		stream.subscribe(consumer().spec);
+
+		expect(opened).toEqual(['/api/stream', '/api/stream?last_event_id=b2-0']);
+	});
+
+	it('adopts the seq of a frame from a new boot rather than keeping the old, bigger one', () => {
+		const { stream, streams, opened } = hub();
+		const first = stream.subscribe(consumer().spec);
+		streams[0].emit('update.created', { seq: 41 }, 'b1-41');
+		streams[0].emit('hello', { boot: 'b2', seq: 3 }, 'b2-3');
+		first.close();
+
+		stream.subscribe(consumer().spec);
+
+		expect(stream.seq).toBe(3);
+		expect(opened[1]).toBe('/api/stream?last_event_id=b2-3');
+	});
+
+	it('keeps hello to itself: no consumer is handed it', () => {
+		const { stream, streams } = hub();
+		const everything = consumer(EVENT_TYPES.filter((type) => type !== 'hello'));
+		stream.subscribe(everything.spec);
+
+		streams[0].emit('hello', { boot: 'b1', seq: 3 }, 'b1-3');
+
+		expect(everything.seen).toEqual([]);
+	});
+});
+
 describe('joining a stream that is already running', () => {
 	it('tells a consumer it may have missed frames', () => {
 		const { stream, streams } = hub();

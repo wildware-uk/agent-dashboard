@@ -9,6 +9,19 @@ import type { AppEvent, EventName, EventOf, EventPayloads } from './types';
  */
 export const RING_CAPACITY = 500;
 
+/**
+ * What a boot id may look like: short, lowercase letters and digits.
+ *
+ * It sits in front of the seq in an SSE `id:` (`<boot>-<seq>`), so it must never
+ * contain the `-` that separates them.
+ */
+const BOOT_ID_PATTERN = /^[0-9a-z]{1,32}$/;
+
+/** A new boot id: 12 random hex digits, so two processes never share one. */
+function newBootId(): string {
+	return globalThis.crypto.randomUUID().replace(/-/g, '').slice(0, 12);
+}
+
 /** Called with an event; returns nothing. Fan-out never awaits a subscriber. */
 export type EventListener = (event: AppEvent) => void;
 
@@ -21,6 +34,8 @@ export type ListenerErrorHandler = (error: unknown, event: AppEvent) => void;
 export interface EventBusOptions {
 	/** Replay window size. Defaults to {@link RING_CAPACITY}. */
 	capacity?: number;
+	/** This bus's boot id. Defaults to a fresh random one; tests pin it. */
+	boot?: string;
 	/** Defaults to logging, because a thrown subscriber is a bug worth seeing. */
 	onListenerError?: ListenerErrorHandler;
 }
@@ -62,7 +77,20 @@ export class EventBus {
 	readonly #pending: AppEvent[] = [];
 	#dispatching = false;
 
+	/**
+	 * Which process lifetime this bus belongs to.
+	 *
+	 * The seq lives in memory and starts again at 1 on every restart, so a seq
+	 * alone cannot say whether a client's cursor came from this process or the
+	 * last one. The boot id can: the stream sends it with every seq, and a cursor
+	 * that names another boot is told `resync` however small its seq is.
+	 */
+	readonly boot: string;
+
 	constructor(options: EventBusOptions = {}) {
+		const boot = options.boot ?? newBootId();
+		if (!BOOT_ID_PATTERN.test(boot)) throw new Error(`Invalid boot id: ${JSON.stringify(boot)}`);
+		this.boot = boot;
 		this.#ring = new EventRing(options.capacity ?? RING_CAPACITY);
 		this.#onListenerError =
 			options.onListenerError ??

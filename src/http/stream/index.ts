@@ -21,7 +21,12 @@ export {
 	createStreamHandler,
 	readCursor
 } from './stream';
-export type { StreamHandler, StreamHandlerOptions, StreamRequestEvent } from './stream';
+export type {
+	StreamCursor,
+	StreamHandler,
+	StreamHandlerOptions,
+	StreamRequestEvent
+} from './stream';
 export { readAgentsSnapshot } from './agents';
 export type { AgentsSnapshot, SnapshotAgents } from './agents';
 export { readRequestsSnapshot } from './requests';
@@ -46,14 +51,17 @@ export type {
 	UpdatesSnapshot
 } from './snapshot';
 export {
+	HELLO_EVENT,
 	RESYNC_EVENT,
 	SSE_HEADERS,
 	commentFrame,
 	eventFrame,
+	helloFrame,
 	resyncFrame,
-	retryFrame
+	retryFrame,
+	streamId
 } from './frames';
-export type { Resync } from './frames';
+export type { Hello, Resync, ResyncReason } from './frames';
 export {
 	environmentDevices,
 	ownerAuthenticated,

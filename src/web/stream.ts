@@ -37,7 +37,11 @@
  * - **`Last-Event-ID` resume** — the cursor is the newest seq the tab has seen,
  *   raised by each consumer's hydrated seq, and it goes in the query string
  *   because `EventSource` cannot set headers. A reconnect the browser performs
- *   by itself carries the header; one *we* perform carries the query.
+ *   by itself carries the header; one *we* perform carries the query. Once the
+ *   server has named its boot (every `id:` is `<boot>-<seq>`, and each
+ *   connection opens with a `hello` frame), the cursor is sent as
+ *   `<boot>-<seq>`, so a server that has restarted since answers `resync`
+ *   instead of replaying its own seqs as if they were ours.
  * - **`resync`** — an ordinary event type here, forwarded like any other, so the
  *   refetch path in each store is untouched.
  * - **Filtering** — per consumer, by event type, so a store still never sees a
@@ -104,7 +108,10 @@ export const EVENT_TYPES = [
 	'agent.presence',
 	// The owner renamed an agent: every card it posted is relabelled.
 	'agent.renamed',
-	'resync'
+	'resync',
+	// The first frame of every connection: the server's boot id. The hub keeps
+	// it for the cursor; no store has any use for it.
+	'hello'
 ] as const;
 
 export type EventType = (typeof EVENT_TYPES)[number];
@@ -118,8 +125,11 @@ export type EventType = (typeof EVENT_TYPES)[number];
  */
 export type StreamMessage = { type: string; data: string; lastEventId: string };
 
-/** One frame as a link hands it up: the event name, its body, and its seq. */
-export type StreamFrame = { type: string; data: string; seq: number };
+/**
+ * One frame as a link hands it up: the event name, its body, its seq, and the
+ * server boot that seq belongs to when the server said (see {@link positionOf}).
+ */
+export type StreamFrame = { type: string; data: string; seq: number; boot?: string };
 
 /** What a link tells the hub. */
 export type LinkHandlers = {
@@ -134,10 +144,11 @@ export type LinkHandlers = {
  * Two implementations: {@link DirectLink} opens a connection, {@link LeaderLink}
  * arranges for exactly one tab to. `cursor` is read at connect time rather than
  * passed once, because a link may connect long after it was started — which is
- * precisely what a follower promoted to leader does.
+ * precisely what a follower promoted to leader does. It is the `last_event_id`
+ * to resume from, as the server wants it back, or `''` for none.
  */
 export type Link = {
-	start(handlers: LinkHandlers, cursor: () => number): void;
+	start(handlers: LinkHandlers, cursor: () => string): void;
 	stop(): void;
 	readonly connected: boolean;
 };
@@ -189,22 +200,36 @@ function defaultOpen(url: string): StreamLike {
 	return new EventSource(url) as StreamLike;
 }
 
+/** An SSE `id:` as the server writes it: `<boot>-<seq>`, or a bare `<seq>` from before boot ids. */
+const STREAM_ID = /^(?:([0-9a-z]{1,32})-)?(\d+)$/;
+
 /**
- * The seq a frame belongs to.
+ * The seq a frame belongs to, and the server boot it was counted in.
  *
  * `id:` is what a reconnect resumes from, so it is read first; the body's own
- * `seq` is the fallback, and a frame carrying neither leaves the cursor where it
- * was rather than resuming from zero and replaying the whole ring buffer.
+ * `seq` (and, on `hello` and `resync`, `boot`) is the fallback, and a frame
+ * carrying neither leaves the cursor where it was rather than resuming from
+ * zero and replaying the whole ring buffer.
  */
-function seqOf(event: MessageEvent): number {
-	const id = Number(event.lastEventId);
-	if (Number.isFinite(id) && id > 0) return id;
+function positionOf(event: MessageEvent): { seq: number; boot?: string } {
+	type Body = { seq?: unknown; boot?: unknown } | null;
+	let body: Body;
 	try {
-		const body = JSON.parse(String(event.data)) as { seq?: unknown };
-		return typeof body?.seq === 'number' ? body.seq : 0;
+		body = JSON.parse(String(event.data)) as Body;
 	} catch {
-		return 0;
+		body = null;
 	}
+	const bodyBoot = typeof body?.boot === 'string' ? body.boot : undefined;
+	const bodySeq = typeof body?.seq === 'number' ? body.seq : 0;
+
+	const id = STREAM_ID.exec(String(event.lastEventId ?? ''));
+	if (id) {
+		const seq = Number(id[2]);
+		const boot = id[1] ?? bodyBoot;
+		// A bare `0` is no position at all; `<boot>-0` is "nothing yet in that boot".
+		if (seq > 0 || boot !== undefined) return boot === undefined ? { seq } : { seq, boot };
+	}
+	return bodyBoot === undefined ? { seq: bodySeq } : { seq: bodySeq, boot: bodyBoot };
 }
 
 /** This tab's own connection to the endpoint. */
@@ -224,11 +249,11 @@ export class DirectLink implements Link {
 		return this.source !== null;
 	}
 
-	start(handlers: LinkHandlers, cursor: () => number): void {
+	start(handlers: LinkHandlers, cursor: () => string): void {
 		if (this.source) return;
 		this.handlers = handlers;
 		const at = cursor();
-		const url = at > 0 ? `${this.path}?last_event_id=${at}` : this.path;
+		const url = at ? `${this.path}?last_event_id=${encodeURIComponent(at)}` : this.path;
 
 		try {
 			this.source = this.openStream(url);
@@ -247,7 +272,7 @@ export class DirectLink implements Link {
 		// whose `data` failed to parse undeliverable.
 		for (const type of EVENT_TYPES) {
 			const listener = (event: MessageEvent) => {
-				this.handlers?.frame({ type, data: String(event.data), seq: seqOf(event) });
+				this.handlers?.frame({ type, data: String(event.data), ...positionOf(event) });
 			};
 			this.attached.set(type, listener);
 			this.source.addEventListener(type, listener);
@@ -277,6 +302,8 @@ export class DirectLink implements Link {
 export class SharedStream {
 	private readonly consumers = new Set<StreamConsumer>();
 	private cursor = 0;
+	/** The server boot {@link cursor} was counted in, once the server has said. */
+	private boot: string | null = null;
 
 	private readonly handlers: LinkHandlers = {
 		frame: (frame) => {
@@ -290,7 +317,13 @@ export class SharedStream {
 			// process would resume from a seq that server has not reached, be told
 			// `resync`, and then keep asking for the same impossible cursor on every
 			// reconnect afterwards.
-			this.cursor = frame.type === 'resync' ? frame.seq : Math.max(this.cursor, frame.seq);
+			//
+			// The boot id makes the restart explicit: a frame from a boot other than
+			// the one the cursor was counted in starts the count again too.
+			const restarted = frame.boot !== undefined && this.boot !== null && frame.boot !== this.boot;
+			this.cursor =
+				frame.type === 'resync' || restarted ? frame.seq : Math.max(this.cursor, frame.seq);
+			if (frame.boot !== undefined) this.boot = frame.boot;
 			const message: StreamMessage = {
 				type: frame.type,
 				data: frame.data,
@@ -315,6 +348,16 @@ export class SharedStream {
 	/** The newest seq this tab has seen. What a reconnect resumes from. */
 	get seq(): number {
 		return this.cursor;
+	}
+
+	/**
+	 * The cursor as the server wants it back: `<boot>-<seq>` once the server has
+	 * named its boot, the bare seq before that, `''` when there is nothing to
+	 * resume from.
+	 */
+	private resumeFrom(): string {
+		if (this.boot !== null) return `${this.boot}-${this.cursor}`;
+		return this.cursor > 0 ? String(this.cursor) : '';
 	}
 
 	/** How many consumers are holding the stream open. */
@@ -353,7 +396,7 @@ export class SharedStream {
 
 		if (options.reconnect) {
 			this.link.stop();
-			this.link.start(this.handlers, () => this.cursor);
+			this.link.start(this.handlers, () => this.resumeFrom());
 		}
 
 		// The same frame the server sends when a cursor is too old for the replay
@@ -384,7 +427,7 @@ export class SharedStream {
 		const missed = this.consumers.size > 0 && this.cursor > offered;
 		this.cursor = Math.max(this.cursor, offered);
 		this.consumers.add(consumer);
-		if (this.consumers.size === 1) this.link.start(this.handlers, () => this.cursor);
+		if (this.consumers.size === 1) this.link.start(this.handlers, () => this.resumeFrom());
 
 		let held = true;
 		return {
@@ -448,7 +491,7 @@ export type LeaderOptions = {
  */
 export class LeaderLink implements Link {
 	private handlers: LinkHandlers | null = null;
-	private cursor: () => number = () => 0;
+	private cursor: () => string = () => '';
 	private channel: ChannelLike | null = null;
 	private link: Link | null = null;
 	private abort: AbortController | null = null;
@@ -483,7 +526,7 @@ export class LeaderLink implements Link {
 		return this.link ? this.link.connected : this.heard;
 	}
 
-	start(handlers: LinkHandlers, cursor: () => number): void {
+	start(handlers: LinkHandlers, cursor: () => string): void {
 		if (this.running) return;
 		this.running = true;
 		this.handlers = handlers;

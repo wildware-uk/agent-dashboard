@@ -7,13 +7,27 @@
  * and when the gap is wider than the buffer we say `resync` once and let the
  * client refetch a snapshot instead of pretending we can fill it.
  *
+ * Every `id:` is `<boot>-<seq>` (see `streamId` in `./frames.ts`), and every
+ * connection opens with a `hello` frame naming the boot. The seq restarts at 1
+ * with the process, so a cursor from another boot is told `resync` however
+ * small its seq; a bare `<seq>` cursor, as clients sent before boot ids, is
+ * still taken to mean this boot.
+ *
  * The connection lifecycle lives here; the bytes live in `./frames.ts`. Nothing
  * in this file decides *what* is worth publishing — it subscribes to the bus and
  * serialises. That is why an SSE bug can never become a business-rule bug.
  */
 import { EventBus, bus as sharedBus, type AppEvent, type Unsubscribe } from '$events';
 import type { AuthConfig, SessionCookieReader } from '../auth';
-import { SSE_HEADERS, commentFrame, eventFrame, resyncFrame, retryFrame } from './frames';
+import {
+	SSE_HEADERS,
+	commentFrame,
+	eventFrame,
+	helloFrame,
+	resyncFrame,
+	retryFrame,
+	type Resync
+} from './frames';
 import { ownerAuthenticated, unauthenticatedResponse } from './owner';
 
 /**
@@ -110,17 +124,30 @@ export function createStreamHandler(options: StreamHandlerOptions = {}): StreamH
 					}
 				};
 
-				// A reconnect hint plus a comment: the comment is what forces a proxy
-				// to flush its response headers, so the browser's `EventSource` fires
-				// `onopen` immediately rather than when the first event happens to
-				// arrive — which, on a quiet dashboard, could be hours.
-				write(`${retryFrame(retryMs)}${commentFrame('connected')}`);
-
 				// Replay, then subscribe, with no `await` between: `publish` is
 				// synchronous, so no event can be published in this window. Subscribing
 				// first would double-deliver the tail of the replay instead.
-				if (cursor !== null) replay(bus, cursor, write);
-				unsubscribe = bus.subscribe((published: AppEvent) => write(eventFrame(published)));
+				const gap = cursor === null ? null : plan(bus, cursor);
+
+				// A reconnect hint plus a comment: the comment is what forces a proxy
+				// to flush its response headers, so the browser's `EventSource` fires
+				// `onopen` immediately rather than when the first event happens to
+				// arrive — which, on a quiet dashboard, could be hours. Then `hello`,
+				// whose `id:` is where the client stands in this boot: its own cursor
+				// when it is replayed from, the newest seq otherwise.
+				const standing = gap && !('resync' in gap) ? gap.from : bus.lastSeq;
+				write(
+					`${retryFrame(retryMs)}${commentFrame('connected')}` +
+						helloFrame({ boot: bus.boot, seq: standing })
+				);
+
+				if (gap) {
+					if ('resync' in gap) write(resyncFrame(gap.resync));
+					else for (const missed of gap.events) write(eventFrame(missed, bus.boot));
+				}
+				unsubscribe = bus.subscribe((published: AppEvent) =>
+					write(eventFrame(published, bus.boot))
+				);
 
 				if (heartbeatMs > 0) {
 					heartbeat = setInterval(
@@ -149,38 +176,46 @@ export function createStreamHandler(options: StreamHandlerOptions = {}): StreamH
 	};
 }
 
+/** A client's cursor: the seq it last saw, and the boot it saw it in (`null` for a bare seq). */
+export type StreamCursor = { boot: string | null; seq: number };
+
+/** What a reconnecting client is owed: the events it missed, or one `resync`. */
+type Gap = { from: number; events: readonly AppEvent[] } | { resync: Resync };
+
 /**
- * Serve the client's gap, or tell it once that we cannot.
+ * Work out the client's gap, or that it cannot be served.
  *
  * A hit with no events (an up-to-date client) and a miss are deliberately
  * different results in `$events`: replaying a partial gap would hand the browser
- * a hole it would render as truth.
+ * a hole it would render as truth. A cursor from another boot is a miss whatever
+ * its seq, because this process's seqs are not the ones the client counted.
  */
-function replay(bus: EventBus, cursor: number, write: (frame: string) => void): void {
-	const result = bus.replaySince(cursor);
-	if (result.hit) {
-		for (const missed of result.events) write(eventFrame(missed));
-		return;
-	}
-	write(resyncFrame({ reason: result.reason, from: cursor, seq: bus.lastSeq }));
+function plan(bus: EventBus, cursor: StreamCursor): Gap {
+	const resync = (reason: Resync['reason']): Gap => ({
+		resync: { reason, from: cursor.seq, seq: bus.lastSeq, boot: bus.boot }
+	});
+	if (cursor.boot !== null && cursor.boot !== bus.boot) return resync('restarted');
+	const result = bus.replaySince(cursor.seq);
+	return result.hit ? { from: cursor.seq, events: result.events } : resync(result.reason);
 }
 
 /**
- * The sequence number this client last saw, or `null` for a fresh connection.
+ * The cursor this client last saw, or `null` for a fresh connection.
  *
- * Anything that is not a non-negative integer is treated as absent rather than
- * as an error: a garbled cursor should cost the client the replay, not the
- * connection.
+ * `<boot>-<seq>` is what this server sends; a bare `<seq>` is what it sent
+ * before boot ids, and is still read as a seq in this boot. Anything else is
+ * treated as absent rather than as an error: a garbled cursor should cost the
+ * client the replay, not the connection.
  */
-export function readCursor({ request, url }: StreamRequestEvent): number | null {
+export function readCursor({ request, url }: StreamRequestEvent): StreamCursor | null {
 	const header = request.headers.get(LAST_EVENT_ID_HEADER);
 	return parseCursor(header) ?? parseCursor(url.searchParams.get(LAST_EVENT_ID_PARAM));
 }
 
-function parseCursor(raw: string | null): number | null {
+function parseCursor(raw: string | null): StreamCursor | null {
 	if (raw === null) return null;
-	const trimmed = raw.trim();
-	if (!/^\d+$/.test(trimmed)) return null;
-	const seq = Number(trimmed);
-	return Number.isSafeInteger(seq) ? seq : null;
+	const match = /^(?:([0-9a-z]{1,32})-)?(\d+)$/.exec(raw.trim());
+	if (!match) return null;
+	const seq = Number(match[2]);
+	return Number.isSafeInteger(seq) ? { boot: match[1] ?? null, seq } : null;
 }

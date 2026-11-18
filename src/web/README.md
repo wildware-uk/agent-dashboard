@@ -309,7 +309,9 @@ plain HTTP is not a secure context — the tab keeps its own connection, which i
 still one rather than one per store.
 
 None of this changes what a store is written against. The resume cursor is still
-`last_event_id` in the query string (`EventSource` cannot set headers), a
+`last_event_id` in the query string (`EventSource` cannot set headers), sent as
+`<boot>-<seq>` once the server has named its boot (so a restarted server answers
+`resync`; the hub keeps the `hello` frame to itself), a
 reconnect the browser performs itself still carries `Last-Event-ID`, `resync` is
 forwarded like any other event, and each consumer still sees only the types it
 subscribed to.

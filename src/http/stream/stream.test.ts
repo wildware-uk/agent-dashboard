@@ -6,8 +6,20 @@ import { HEARTBEAT_MS, createStreamHandler } from './stream';
 const SESSION_SECRET = 's'.repeat(32);
 const config = () => ({ sessionSecret: SESSION_SECRET, adminPasswordHash: '$argon2id$x' });
 
-/** One parsed SSE frame. Fields absent from the frame stay undefined. */
-type Frame = { id?: number; event?: string; data?: unknown; comment?: string; retry?: number };
+/**
+ * One parsed SSE frame. Fields absent from the frame stay undefined.
+ *
+ * `rawId` is the `id:` line as sent (`<boot>-<seq>`); `id` is just its seq, so a
+ * test about ordering need not care which boot it is in.
+ */
+type Frame = {
+	id?: number;
+	rawId?: string;
+	event?: string;
+	data?: unknown;
+	comment?: string;
+	retry?: number;
+};
 
 function parseFrames(text: string): Frame[] {
 	return text
@@ -17,8 +29,10 @@ function parseFrames(text: string): Frame[] {
 			const frame: Frame = {};
 			for (const line of block.split('\n')) {
 				if (line.startsWith(': ')) frame.comment = line.slice(2);
-				else if (line.startsWith('id: ')) frame.id = Number(line.slice(4));
-				else if (line.startsWith('event: ')) frame.event = line.slice(7);
+				else if (line.startsWith('id: ')) {
+					frame.rawId = line.slice(4);
+					frame.id = Number(frame.rawId.slice(frame.rawId.lastIndexOf('-') + 1));
+				} else if (line.startsWith('event: ')) frame.event = line.slice(7);
 				else if (line.startsWith('retry: ')) frame.retry = Number(line.slice(7));
 				else if (line.startsWith('data: ')) frame.data = JSON.parse(line.slice(6));
 			}
@@ -77,9 +91,9 @@ function connect(bus: Bus, options: ConnectOptions = {}) {
 			pending = pending.slice(n);
 			return taken;
 		},
-		/** The preamble every connection opens with: a retry hint and a comment. */
+		/** The preamble every connection opens with: a retry hint, a comment and `hello`. */
 		async preamble(): Promise<Frame[]> {
-			return this.take(2);
+			return this.take(3);
 		}
 	};
 }
@@ -109,6 +123,31 @@ describe('a live connection', () => {
 
 		expect(retry.retry).toBeGreaterThan(0);
 		expect(comment.comment).toBeDefined();
+		client.abort();
+	});
+
+	it('says hello with the boot id and where the client stands in it', async () => {
+		const bus = new EventBus({ boot: 'b1' });
+		publish(bus, 'p1');
+		publish(bus, 'p2');
+		const client = connect(bus);
+
+		const [, , hello] = await client.preamble();
+
+		expect(hello.event).toBe('hello');
+		expect(hello.rawId).toBe('b1-2');
+		expect(hello.data).toEqual({ type: 'hello', boot: 'b1', seq: 2 });
+		client.abort();
+	});
+
+	it('tags each event with the boot id as well as the seq', async () => {
+		const bus = new EventBus({ boot: 'b1' });
+		const client = connect(bus);
+		await client.preamble();
+
+		publish(bus, 'p1');
+
+		expect((await client.take(1))[0].rawId).toBe('b1-1');
 		client.abort();
 	});
 
@@ -213,6 +252,23 @@ describe('reconnecting with a Last-Event-ID still in the buffer', () => {
 		client.abort();
 	});
 
+	it('replays from a cursor that names this boot, in the header or the query', async () => {
+		const bus = new EventBus({ boot: 'b1' });
+		publish(bus, 'p1');
+		const second = publish(bus, 'p2');
+
+		const byHeader = connect(bus, { lastEventId: 'b1-1' });
+		const byQuery = connect(bus, { query: '?last_event_id=b1-1' });
+
+		for (const client of [byHeader, byQuery]) {
+			const [, , hello] = await client.preamble();
+			expect(hello.rawId).toBe('b1-1');
+			const [replayed] = await client.take(1);
+			expect(replayed.rawId).toBe(`b1-${second.seq}`);
+			client.abort();
+		}
+	});
+
 	it('ignores a cursor that is not a sequence number and starts live', async () => {
 		const bus = new EventBus();
 		publish(bus, 'p1');
@@ -248,6 +304,45 @@ describe('reconnecting with a Last-Event-ID the buffer can no longer serve', () 
 		// Exactly one resync: the next frame is the live event, not a second one.
 		expect(after.id).toBe(live.seq);
 		expect(after.event).toBe('project.created');
+		client.abort();
+	});
+
+	it('resyncs a cursor from another boot even when its seq is behind this one', async () => {
+		// The hidden gap: cursor 1 from the last process, and this one already at 3.
+		// Without the boot id this would replay 2..3 as if nothing had happened.
+		const bus = new EventBus({ boot: 'b2' });
+		publish(bus, 'p1');
+		publish(bus, 'p2');
+		publish(bus, 'p3');
+
+		const client = connect(bus, { lastEventId: 'b1-1' });
+		await client.preamble();
+		const [resync] = await client.take(1);
+		const live = publish(bus, 'p4');
+		const [after] = await client.take(1);
+
+		expect(resync.event).toBe('resync');
+		expect(resync.rawId).toBe('b2-3');
+		expect(resync.data).toEqual({
+			type: 'resync',
+			reason: 'restarted',
+			from: 1,
+			seq: 3,
+			boot: 'b2'
+		});
+		expect(after.rawId).toBe(`b2-${live.seq}`);
+		client.abort();
+	});
+
+	it('gives a resync on a fresh boot an id, so the next reconnect names this boot', async () => {
+		const bus = new EventBus({ boot: 'b2' });
+
+		const client = connect(bus, { lastEventId: 'b1-7' });
+		await client.preamble();
+		const [resync] = await client.take(1);
+
+		expect(resync.rawId).toBe('b2-0');
+		expect(resync.data).toMatchObject({ reason: 'restarted', from: 7, seq: 0 });
 		client.abort();
 	});
 

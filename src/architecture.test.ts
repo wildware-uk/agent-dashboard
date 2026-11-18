@@ -216,11 +216,12 @@ describe('the event vocabulary', () => {
 		const types = readFileSync(resolve(SRC, 'events', 'types.ts'), 'utf8');
 		const names = new Set([...types.matchAll(/^\t'([a-z.]+)':/gm)].map((match) => match[1]));
 
-		// `resync` is the transport's own frame rather than a bus event, so it is
-		// the one name that is legitimately in the browser's list and not the
-		// server's vocabulary.
+		// `resync` and `hello` are the transport's own frames rather than bus
+		// events, so they are the names that are legitimately in the browser's
+		// list and not the server's vocabulary.
+		const transport = new Set(['resync', 'hello']);
 		const unknown = (EVENT_TYPES as readonly string[]).filter(
-			(type) => type !== 'resync' && !names.has(type)
+			(type) => !transport.has(type) && !names.has(type)
 		);
 		expect(unknown, 'these are registered for and can never arrive').toEqual([]);
 	});

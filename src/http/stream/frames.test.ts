@@ -4,6 +4,7 @@ import {
 	SSE_HEADERS,
 	commentFrame,
 	eventFrame,
+	helloFrame,
 	resyncFrame,
 	retryFrame,
 	RESYNC_EVENT
@@ -53,6 +54,33 @@ describe('a resync frame', () => {
 
 	it('omits the id when nothing has been published, so no cursor is invented', () => {
 		expect(resyncFrame({ reason: 'ahead', from: 7, seq: 0 })).not.toContain('id:');
+	});
+});
+
+describe('boot ids', () => {
+	it('put the boot in front of the seq in an event id', () => {
+		expect(eventFrame(event, 'b1')).toMatch(new RegExp(`^id: b1-${event.seq}\n`));
+	});
+
+	it('give a resync an id even at seq 0, and name the boot in its body', () => {
+		const lines = resyncFrame({ reason: 'restarted', from: 7, seq: 0, boot: 'b1' })
+			.trimEnd()
+			.split('\n');
+
+		expect(lines[0]).toBe('id: b1-0');
+		expect(JSON.parse(lines[2].slice('data: '.length))).toEqual({
+			type: 'resync',
+			reason: 'restarted',
+			from: 7,
+			seq: 0,
+			boot: 'b1'
+		});
+	});
+
+	it('open every connection with a hello naming the boot and the seq', () => {
+		expect(helloFrame({ boot: 'b1', seq: 4 })).toBe(
+			'id: b1-4\nevent: hello\ndata: {"type":"hello","boot":"b1","seq":4}\n\n'
+		);
 	});
 });
 

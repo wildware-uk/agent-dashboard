@@ -167,11 +167,20 @@ export class FakeStream implements StreamLike {
 		this.closed = true;
 	}
 
-	/** Deliver one frame, serialised the way the server serialises it. */
-	emit(type: string, envelope: { seq: number; payload?: unknown } & Record<string, unknown>): void {
+	/**
+	 * Deliver one frame, serialised the way the server serialises it.
+	 *
+	 * `id` is the frame's `id:` line; it defaults to the bare seq, as the server
+	 * sent before boot ids, and a test about boots passes `<boot>-<seq>`.
+	 */
+	emit(
+		type: string,
+		envelope: { seq: number; payload?: unknown } & Record<string, unknown>,
+		id: string = String(envelope.seq)
+	): void {
 		const data = JSON.stringify({ type, at: new Date().toISOString(), ...envelope });
 		for (const listener of [...(this.handlers.get(type) ?? [])]) {
-			listener({ data, lastEventId: String(envelope.seq) } as MessageEvent);
+			listener({ data, lastEventId: id } as MessageEvent);
 		}
 	}
 
