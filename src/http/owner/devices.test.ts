@@ -411,7 +411,8 @@ describe('the summary', () => {
 			onlineAgents: [],
 			requests: [],
 			work: { todo: 0, inProgress: 0, blocked: 0 },
-			projects: [{ slug: 'fees', name: 'Fees' }]
+			projects: [{ slug: 'fees', name: 'Fees' }],
+			working: []
 		});
 		expect(typeof body.at).toBe('string');
 	});

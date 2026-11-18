@@ -1,3 +1,6 @@
+import { setStatus } from './cards';
+import { postUpdate } from './updates';
+import { createProject } from './projects';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { findOwnerDeviceById } from '$db';
 import type { ApnsRequest, ApnsResponse, ApnsTransport } from './apns';
@@ -83,9 +86,30 @@ describe('updating a running Live Activity', () => {
 					topAgent: 'scout',
 					topQuestion: 'ship?',
 					topRequestId: request.id,
-					topKind: 'confirm'
+					topKind: 'confirm',
+					topAgentId: agentId,
+					topProject: null,
+					topExpiresAt: Math.floor(request.expiresAt / 1000),
+					topOptions: null,
+					topDefault: null,
+					working: null
 				}
 			}
+		});
+	});
+
+	it('sends again when a card goes in progress, with what is being worked on', async () => {
+		createProject(h, { name: 'Garden', slug: 'garden' });
+		const update = postUpdate(h, { project: 'garden', agentId, title: 'Fixing fees', body: 'x' });
+		await pusher.flush();
+		setStatus(h, { card: { kind: 'update', id: update.id }, status: 'in_progress' });
+		await pusher.flush();
+
+		expect(payloads().at(-1)!.aps['content-state']).toMatchObject({
+			inProgress: 1,
+			working: [
+				{ agentId, agent: 'scout', task: 'Fixing fees', since: Math.floor(FIXED_NOW / 1000) }
+			]
 		});
 	});
 
@@ -167,8 +191,24 @@ describe('starting a Live Activity by push', () => {
 			'attributes-type': LIVE_ACTIVITY_ATTRIBUTES_TYPE,
 			attributes: {},
 			alert: { title: 'scout is waiting on you', body: 'ship?' },
-			'content-state': { waiting: 1, topQuestion: 'ship?' }
+			'content-state': { waiting: 1, topQuestion: 'ship?', topAgentId: agentId, working: null }
 		});
+		// Every key the update carries, and never the phone's own `sentAnswer`.
+		expect(Object.keys(payloads()[0].aps['content-state'])).toEqual([
+			'online',
+			'waiting',
+			'inProgress',
+			'topAgent',
+			'topQuestion',
+			'topRequestId',
+			'topKind',
+			'topAgentId',
+			'topProject',
+			'topExpiresAt',
+			'topOptions',
+			'topDefault',
+			'working'
+		]);
 	});
 
 	it('does not start one again straight after', async () => {
