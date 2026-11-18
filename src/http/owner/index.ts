@@ -68,6 +68,7 @@ export {
 	signInDeviceHandler,
 	deleteDeviceHandler,
 	listDevicesHandler,
+	alertPrefsHandler,
 	setAlertPrefsHandler,
 	setAlertProjectsHandler,
 	setApnsTokenHandler,

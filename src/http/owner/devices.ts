@@ -22,6 +22,7 @@ import {
 	deviceName,
 	isDomainError,
 	invalid,
+	findOwnerDevice,
 	listOwnerDevices,
 	mintOwnerDevice,
 	ownerSummary,
@@ -235,6 +236,17 @@ export function setAlertPrefsHandler(options: DeviceHandlerOptions = {}): OwnerH
 		if (!('prefs' in body)) throw invalid('send prefs: { types, levels, priorities }, or null');
 		const prefs = setDeviceAlertPrefs(ctx, device.id, body.prefs);
 		return { status: 200, body: { ok: true, prefs } };
+	});
+}
+
+/** `GET /api/devices/current/alert-prefs` — what the calling phone chose; `{ prefs: null }` is all. */
+export function alertPrefsHandler(options: DeviceHandlerOptions = {}): OwnerHandler {
+	return ownerAction(options, (event, ctx) => {
+		const device = callingDevice(event, options);
+		return Promise.resolve({
+			status: 200,
+			body: { prefs: findOwnerDevice(ctx, device.id)?.alertPrefs ?? null }
+		});
 	});
 }
 

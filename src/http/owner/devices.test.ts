@@ -16,6 +16,7 @@ import {
 	createDeviceHandler,
 	deleteDeviceHandler,
 	listDevicesHandler,
+	alertPrefsHandler,
 	setAlertPrefsHandler,
 	setAlertProjectsHandler,
 	setApnsTokenHandler,
@@ -530,6 +531,18 @@ describe('which alerts a device wants', () => {
 			prefs,
 			null
 		]);
+	});
+
+	it('reads back what the calling device chose', async () => {
+		const { token } = mint();
+		mint('ipad');
+		expect((await call(alertPrefsHandler, { bearer: token })).body).toEqual({ prefs: null });
+
+		await put({ prefs: { types: ['request'] } }, token);
+
+		expect((await call(alertPrefsHandler, { bearer: token })).body).toEqual({
+			prefs: { types: ['request'] }
+		});
 	});
 
 	it('goes back to every alert with null', async () => {
