@@ -59,11 +59,17 @@ const DESIGN_COLUMNS: Record<string, string[]> = {
 		// Appended by migration 007: how much the owner needs to care now, which is
 		// a different axis from `level` (design §3, §7).
 		'priority',
-		// Appended by migration 008: the task this is progress on, if any (§3, §7).
+		// Appended by migration 008: the task this was progress on. Dead since
+		// migration 035 took the board away; the values are kept as history.
 		'task_id',
-		// Appended by migration 015: when the owner last read the conversation on
-		// this card, which is what lets it leave "Recent replies".
-		'replies_seen_at'
+		// Appended by migration 015: when the owner last read this card's thread.
+		// Dead — read-tracking was removed from the feed; kept as history.
+		'replies_seen_at',
+		// Migration 035: work is a state a card is in, now that the board is gone.
+		'status',
+		// Migration 037: when that state last changed, which is what brings a card
+		// that moved back to the top of the feed.
+		'status_at'
 	],
 	media: [
 		'agent_id',
@@ -80,10 +86,34 @@ const DESIGN_COLUMNS: Record<string, string[]> = {
 		'width',
 		'height',
 		'duration_ms',
+		// Appended by migration 026: what a `file` was called, so a download has a
+		// name. Text on a card, never a path.
+		'filename',
 		'status',
-		'created_at'
+		'created_at',
+		// Appended by migration 030: an approval and a task carry attachments too,
+		// so every card type has the same vocabulary.
+		'request_id',
+		'task_id'
 	],
 	derivatives: ['media_id', 'kind', 'path', 'bytes', 'width', 'height'],
+	// Migration 027: the look an embed is drawn in, registered by an agent or
+	// shipped with the deployment.
+	embed_types: ['slug', 'name', 'agent_id', 'spec', 'created_at', 'updated_at'],
+	// Migration 027: one thing shown in that look, on a card or on a message.
+	embeds: [
+		'type_id',
+		'update_id',
+		'message_id',
+		'agent_id',
+		'author',
+		'data',
+		'source_url',
+		'created_at',
+		// Appended by migration 030, for the same reason media's are.
+		'request_id',
+		'task_id'
+	],
 	upload_tokens: ['agent_id', 'media_id', 'max_bytes', 'mime_allow', 'expires_at', 'used_at'],
 	tasks: [
 		'project_id',
@@ -98,7 +128,11 @@ const DESIGN_COLUMNS: Record<string, string[]> = {
 		// Appended by migration 010: when the owner sent this task out to the
 		// project's agents, so unassigned work can notify without every unassigned
 		// task notifying.
-		'broadcast_at'
+		'broadcast_at',
+		// Migration 034: a task is a card like any other — it can be pinned, and
+		// its words can be corrected.
+		'pinned',
+		'edited_at'
 	],
 	messages: [
 		'project_id',
@@ -115,7 +149,19 @@ const DESIGN_COLUMNS: Record<string, string[]> = {
 		'deleted_at',
 		// Migration 020: the comment in the same thread this one answers, so a
 		// thread carrying two conversations can still be read.
-		'answers'
+		'answers',
+		// Migration 032: the request whose discussion this belongs to, so a
+		// question can be talked over before it is answered.
+		'request_id',
+		// Migration 033: when its author last corrected it, so an edit is stated
+		// rather than silent.
+		'edited_at',
+		// Migration 034: the owner's own posts can be pinned, as cards always could.
+		'pinned',
+		// Migration 035: work is a state a card is in, now that the board is gone.
+		'status',
+		// Migration 037: when that state last changed (see `updates.status_at`).
+		'status_at'
 	],
 	read_cursors: ['agent_id', 'project_id', 'last_seen_message_seq'],
 	// The four columns migration 002 appends carry the other four request kinds
@@ -138,7 +184,11 @@ const DESIGN_COLUMNS: Record<string, string[]> = {
 		// Appended by migration 022: the thread the question was asked in, so an
 		// agent that is already talking to its owner can ask where they are
 		// reading rather than somewhere else.
-		'message_id'
+		'message_id',
+		// Migration 033: when the asking agent last rewrote the question.
+		'edited_at',
+		// Migration 034: a question can be kept at the top of the feed too.
+		'pinned'
 	],
 	// Where a notification is delivered when the dashboard is not open (design §7).
 	// A public link to one card, the only unauthenticated read in the product (§8).
@@ -156,10 +206,21 @@ const DESIGN_COLUMNS: Record<string, string[]> = {
 	],
 	// Migration 013: an agent saying "seen it" / "done" against one message or
 	// one task, so a card the owner replied to is not silent.
-	acknowledgements: ['agent_id', 'message_id', 'task_id', 'state', 'created_at', 'updated_at'],
+	acknowledgements: [
+		'agent_id',
+		'message_id',
+		'task_id',
+		'state',
+		'created_at',
+		'updated_at',
+		// Migration 034: "seen it" is worth saying about a card and a question too.
+		'update_id',
+		'request_id'
+	],
 	// Migration 024: emoji reactions, the quick version of saying something.
 	// `actor` is `human` or `agent:<id>`, the same string `messages.author` is.
-	reactions: ['message_id', 'actor', 'emoji', 'created_at'],
+	// Migration 034 rebuilt it so any card can be reacted to, not only a message.
+	reactions: ['message_id', 'update_id', 'request_id', 'task_id', 'actor', 'emoji', 'created_at'],
 	// Migration 021: what the owner is told about, kept so it can be read in the
 	// app rather than only as a push nobody caught.
 	notifications: [
@@ -176,6 +237,65 @@ const DESIGN_COLUMNS: Record<string, string[]> = {
 	],
 	// Migration 018: the moment the server handed one message to one agent, so
 	// "nobody has answered" can be told from "nobody was ever told".
+	// Migration 039: the words a project decided for itself.
+	tags: ['project_id', 'name', 'slug', 'colour', 'agent_id', 'created_at'],
+	// Migration 039: one of those words, on one card.
+	card_tags: ['tag_id', 'update_id', 'message_id', 'request_id', 'author', 'created_at'],
+	// Migration 040: a note pinned to a card — a branch name, a pull request.
+	card_fields: [
+		'update_id',
+		'message_id',
+		'request_id',
+		'name',
+		'slug',
+		'value',
+		'author',
+		'created_at',
+		'updated_at'
+	],
+	// Migration 041: interactive UI an agent supplies, drawn in a sandbox.
+	apps: [
+		'uri',
+		'name',
+		'description',
+		'agent_id',
+		'html',
+		'csp',
+		'created_at',
+		'updated_at',
+		// Migration 042: the page to frame, for an app that lives somewhere else.
+		'url'
+	],
+	// Migration 041: one showing of one of them, on one card.
+	app_views: [
+		'app_id',
+		'update_id',
+		'message_id',
+		'request_id',
+		'agent_id',
+		'author',
+		'data',
+		'state',
+		'title',
+		'created_at',
+		'updated_at'
+	],
+	// Migration 043: one of the owner's phones, its key and its push tokens.
+	owner_devices: [
+		'name',
+		'token_hash',
+		'apns_token',
+		'apns_environment',
+		'live_activity_token',
+		'push_to_start_token',
+		'created_at',
+		'last_seen_at',
+		'failures',
+		// Migration 045: which projects the phone wants alerts about.
+		'alert_project_ids'
+	],
+	// Migration 044: an agent a message names with @name.
+	message_mentions: ['message_id', 'agent_id'],
 	message_deliveries: [
 		'message_id',
 		'agent_id',

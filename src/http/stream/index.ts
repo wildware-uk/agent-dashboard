@@ -24,8 +24,6 @@ export {
 export type { StreamHandler, StreamHandlerOptions, StreamRequestEvent } from './stream';
 export { readAgentsSnapshot } from './agents';
 export type { AgentsSnapshot, SnapshotAgents } from './agents';
-export { TASKS_DONE_LIMIT, readTasksSnapshot } from './tasks';
-export type { SnapshotTasks, TasksSnapshot } from './tasks';
 export { readRequestsSnapshot } from './requests';
 export type { RequestsSnapshot, SnapshotRequests } from './requests';
 export {
@@ -56,11 +54,16 @@ export {
 	retryFrame
 } from './frames';
 export type { Resync } from './frames';
-export { ownerAuthenticated, unauthenticatedResponse } from './owner';
+export {
+	environmentDevices,
+	ownerAuthenticated,
+	requestDevice,
+	unauthenticatedResponse
+} from './owner';
 export { AGENT_HEARTBEAT_MS, AGENT_RETRY_MS, WORK_EVENT, createAgentStreamHandler } from './agent';
 export type {
 	AgentStreamHandler,
 	AgentStreamHandlerOptions,
 	AgentStreamRequestEvent
 } from './agent';
-export type { OwnerCheck, OwnerRequest } from './owner';
+export type { DeviceResolver, OwnerCheck, OwnerRequest } from './owner';

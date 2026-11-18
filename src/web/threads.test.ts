@@ -300,4 +300,34 @@ describe('feed posts', () => {
 
 		expect(threads.posts().map((post) => post.id)).toEqual(['m1']);
 	});
+
+	/**
+	 * A question's discussion is not a feed post (migration 032).
+	 *
+	 * Its lines anchor to nothing else — no update, no task, not a reply — which
+	 * is exactly the shape a feed post has. Without the extra check they would
+	 * render loose in the timeline, away from the question they are about.
+	 */
+	it('leaves a question`s discussion under the question', () => {
+		const threads = new Threads();
+		threads.hydrate({
+			seq: 1,
+			at: new Date().toISOString(),
+			messages: [
+				aMessage({ id: 'm1', author: 'human', updateId: null, taskId: null, replyTo: null }),
+				aMessage({
+					id: 'm2',
+					author: 'human',
+					updateId: null,
+					taskId: null,
+					replyTo: null,
+					requestId: 'r1'
+				})
+			]
+		});
+
+		expect(threads.posts().map((post) => post.id)).toEqual(['m1']);
+		expect(threads.forRequest('r1').map((line) => line.id)).toEqual(['m2']);
+		expect(threads.forRequest('r2')).toEqual([]);
+	});
 });

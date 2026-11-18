@@ -96,17 +96,11 @@ describe('minting an upload', () => {
 });
 
 describe('what minting refuses', () => {
-	it('refuses SVG, whatever else is true about the request', () => {
-		expect(refusal(() => mint({ mime: 'image/svg+xml', filename: 'diagram.svg' }))).toBe(
-			'unsupported_type'
-		);
-	});
-
-	it('refuses every type outside the allowlist', () => {
-		for (const mime of ['application/zip', 'text/html', 'application/pdf', 'image/*', '']) {
+	it('refuses a declared type that is not a type at all', () => {
+		for (const mime of ['image/*', '', 'pdf', 'application/']) {
 			expect(
 				refusal(() => mint({ mime })),
-				mime
+				JSON.stringify(mime)
 			).toBe('unsupported_type');
 		}
 	});
@@ -150,7 +144,7 @@ describe('what minting refuses', () => {
 	});
 
 	it('leaves nothing behind when it refuses', () => {
-		refusal(() => mint({ mime: 'image/svg+xml' }));
+		refusal(() => mint({ mime: 'image/*' }));
 
 		expect(db.prepare('SELECT count(*) AS n FROM media').get()).toEqual({ n: 0 });
 		expect(db.prepare('SELECT count(*) AS n FROM upload_tokens').get()).toEqual({ n: 0 });

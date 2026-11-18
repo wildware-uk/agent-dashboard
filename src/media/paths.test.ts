@@ -35,9 +35,17 @@ describe('the disk layout', () => {
 		expect(originalName('video/quicktime')).toBe('original.mov');
 	});
 
-	it('refuses to name a file for a type outside the allowlist', () => {
-		expect(() => originalName('image/svg+xml')).toThrow(/allowlist|type/i);
-		expect(() => originalFile(settings, newId(), 'application/zip')).toThrow(/allowlist|type/i);
+	it('names a file for a stored type from the type, never from the filename', () => {
+		// Anything not rendered shares one extension (migration 026), which is the
+		// same statement as "the extension comes from the type" in a stronger form:
+		// there is only one to come from.
+		expect(originalName('image/svg+xml')).toBe('original.bin');
+		expect(originalFile(settings, newId(), 'application/zip')).toMatch(/original\.bin$/);
+	});
+
+	it('refuses to name a file for a type that is not a type', () => {
+		expect(() => originalName('not a mime')).toThrow(/allowlist|type/i);
+		expect(() => originalFile(settings, newId(), '')).toThrow(/allowlist|type/i);
 	});
 
 	it('keeps the raw upload directory outside the served tree', () => {

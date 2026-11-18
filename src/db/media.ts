@@ -18,6 +18,8 @@ type Row = {
 	author: string;
 	update_id: string | null;
 	message_id: string | null;
+	request_id: string | null;
+	task_id: string | null;
 	kind: MediaKind;
 	mime: string;
 	bytes: number;
@@ -25,12 +27,13 @@ type Row = {
 	width: number | null;
 	height: number | null;
 	duration_ms: number | null;
+	filename: string | null;
 	status: MediaStatus;
 	created_at: number;
 };
 
-const COLUMNS = `seq, id, agent_id, author, update_id, message_id, kind, mime, bytes, sha256,
-	width, height, duration_ms, status, created_at`;
+const COLUMNS = `seq, id, agent_id, author, update_id, message_id, request_id, task_id, kind,
+	mime, bytes, sha256, width, height, duration_ms, filename, status, created_at`;
 
 function toMedia(row: Row): Media {
 	return {
@@ -40,6 +43,8 @@ function toMedia(row: Row): Media {
 		author: row.author,
 		updateId: row.update_id,
 		messageId: row.message_id,
+		requestId: row.request_id,
+		taskId: row.task_id,
 		kind: row.kind,
 		mime: row.mime,
 		bytes: row.bytes,
@@ -47,6 +52,7 @@ function toMedia(row: Row): Media {
 		width: row.width,
 		height: row.height,
 		durationMs: row.duration_ms,
+		filename: row.filename,
 		status: row.status,
 		createdAt: row.created_at
 	};
@@ -74,6 +80,8 @@ export type NewMedia = {
 	width?: number | null;
 	height?: number | null;
 	durationMs?: number | null;
+	/** What the uploader called it, for a `file` (migration 026). Text, never a path. */
+	filename?: string | null;
 	status?: MediaStatus;
 	createdAt?: number;
 };
@@ -93,6 +101,7 @@ export function insertMedia(db: Db, input: NewMedia): Media {
 		width: orNull(input.width),
 		height: orNull(input.height),
 		duration_ms: orNull(input.durationMs),
+		filename: orNull(input.filename),
 		status: input.status ?? 'pending',
 		created_at: input.createdAt ?? Date.now()
 	};
@@ -101,10 +110,10 @@ export function insertMedia(db: Db, input: NewMedia): Media {
 		.prepare<typeof row, Row>(
 			`INSERT INTO media
 				(id, agent_id, author, update_id, message_id, kind, mime, bytes, sha256, width,
-				 height, duration_ms, status, created_at)
+				 height, duration_ms, filename, status, created_at)
 			 VALUES
 				(:id, :agent_id, :author, :update_id, :message_id, :kind, :mime, :bytes, :sha256,
-				 :width, :height, :duration_ms, :status, :created_at)
+				 :width, :height, :duration_ms, :filename, :status, :created_at)
 			 RETURNING ${COLUMNS}`
 		)
 		.get(row)!;
@@ -129,10 +138,7 @@ export function findMediaBySha256(db: Db, sha256: string): Media | undefined {
 
 /** The media on one update, in the order it was uploaded. */
 export function listMediaForUpdate(db: Db, updateId: string): Media[] {
-	return db
-		.prepare<[string], Row>(`SELECT ${COLUMNS} FROM media WHERE update_id = ? ORDER BY seq`)
-		.all(updateId)
-		.map(toMedia);
+	return listMediaFor(db, 'update_id', updateId);
 }
 
 /**
@@ -219,75 +225,119 @@ export function setMediaStatus(db: Db, id: string, result: MediaResult): Media |
  *   unavailable.
  */
 /**
- * Attach media to a message, the same way {@link attachMediaToUpdate} does for a
- * card.
+ * The four columns a card can be, and the one predicate for "spoken for".
  *
- * `author` rather than `agent_id` is the ownership check, because the owner
- * uploads too and has no agent id — and it is the column that answers "is this
- * yours" for both of them. Unattached only: an image already on a card or
- * another message stays where it is, which is what stops one caller moving
- * another's picture.
+ * An attachment belongs to exactly one card, so "unattached" is all four being
+ * null — and it is written once here rather than four times, because the day a
+ * fifth kind of card appears the version that is written four times will be
+ * updated three times (migration 030).
  */
-export function attachMediaToMessage(
+const ANCHORS = ['update_id', 'message_id', 'request_id', 'task_id'] as const;
+
+/** Which card an attachment hangs off. */
+export type MediaAnchor = (typeof ANCHORS)[number];
+
+const UNATTACHED = ANCHORS.map((column) => `${column} IS NULL`).join(' AND ');
+
+/**
+ * Point media rows at one card.
+ *
+ * Scoped in the statement itself to rows that are unattached and, when an owner
+ * is given, to that owner's own — which is what stops one caller moving
+ * another's picture, without this layer knowing anything about why. `author` is
+ * the ownership column for a message, an approval and a task, because the owner
+ * uploads too and has no agent id; `agent_id` is the one an update uses, because
+ * only agents post those.
+ *
+ * @returns the ids actually attached, so a caller can report the rest.
+ */
+function attachMedia(
 	db: Db,
-	options: { mediaIds: readonly string[]; messageId: string; author?: string }
+	options: {
+		mediaIds: readonly string[];
+		anchor: MediaAnchor;
+		cardId: string;
+		owner?: { column: 'author' | 'agent_id'; value: string | undefined };
+	}
 ): string[] {
 	if (options.mediaIds.length === 0) return [];
 
 	const placeholders = options.mediaIds.map(() => '?').join(', ');
-	const params = [
-		options.messageId,
-		...options.mediaIds,
-		options.author ?? null,
-		options.author ?? null
-	];
+	const ownerColumn = options.owner?.column ?? 'author';
+	const ownerValue = options.owner?.value ?? null;
+	const params = [options.cardId, ...options.mediaIds, ownerValue, ownerValue];
 
 	return db
 		.prepare<typeof params, { id: string }>(
-			`UPDATE media SET message_id = ?
+			`UPDATE media SET ${options.anchor} = ?
 			 WHERE id IN (${placeholders})
-			   AND update_id IS NULL
-			   AND message_id IS NULL
-			   AND (? IS NULL OR author = ?)
+			   AND ${UNATTACHED}
+			   AND (? IS NULL OR ${ownerColumn} = ?)
 			 RETURNING id`
 		)
 		.all(...params)
 		.map((row) => row.id);
 }
 
-/** Every image on one message, oldest first — the order they were uploaded. */
-export function listMediaForMessage(db: Db, messageId: string): Media[] {
+/** Every attachment on one card, oldest first — the order they were uploaded. */
+function listMediaFor(db: Db, anchor: MediaAnchor, cardId: string): Media[] {
 	return db
-		.prepare<[string], Row>(`SELECT ${COLUMNS} FROM media WHERE message_id = ? ORDER BY seq`)
-		.all(messageId)
+		.prepare<[string], Row>(`SELECT ${COLUMNS} FROM media WHERE ${anchor} = ? ORDER BY seq`)
+		.all(cardId)
 		.map(toMedia);
+}
+
+/**
+ * Attach media to a message, the same way {@link attachMediaToUpdate} does for a
+ * card.
+ *
+ * `author` rather than `agent_id` is the ownership check, because the owner
+ * uploads too and has no agent id.
+ */
+export function attachMediaToMessage(
+	db: Db,
+	options: { mediaIds: readonly string[]; messageId: string; author?: string }
+): string[] {
+	return attachMedia(db, {
+		mediaIds: options.mediaIds,
+		anchor: 'message_id',
+		cardId: options.messageId,
+		owner: { column: 'author', value: options.author }
+	});
+}
+
+/** Every image on one message, oldest first. */
+export function listMediaForMessage(db: Db, messageId: string): Media[] {
+	return listMediaFor(db, 'message_id', messageId);
+}
+
+/** The same, for an approval (migration 030). */
+export function attachMediaToRequest(
+	db: Db,
+	options: { mediaIds: readonly string[]; requestId: string; author?: string }
+): string[] {
+	return attachMedia(db, {
+		mediaIds: options.mediaIds,
+		anchor: 'request_id',
+		cardId: options.requestId,
+		owner: { column: 'author', value: options.author }
+	});
+}
+
+export function listMediaForRequest(db: Db, requestId: string): Media[] {
+	return listMediaFor(db, 'request_id', requestId);
 }
 
 export function attachMediaToUpdate(
 	db: Db,
 	options: { mediaIds: readonly string[]; updateId: string; agentId?: string }
 ): string[] {
-	if (options.mediaIds.length === 0) return [];
-
-	const placeholders = options.mediaIds.map(() => '?').join(', ');
-	const params = [
-		options.updateId,
-		...options.mediaIds,
-		options.agentId ?? null,
-		options.agentId ?? null
-	];
-
-	return db
-		.prepare<typeof params, { id: string }>(
-			`UPDATE media SET update_id = ?
-			 WHERE id IN (${placeholders})
-			   AND update_id IS NULL
-			   AND message_id IS NULL
-			   AND (? IS NULL OR agent_id = ?)
-			 RETURNING id`
-		)
-		.all(...params)
-		.map((row) => row.id);
+	return attachMedia(db, {
+		mediaIds: options.mediaIds,
+		anchor: 'update_id',
+		cardId: options.updateId,
+		owner: { column: 'agent_id', value: options.agentId }
+	});
 }
 
 /**
@@ -341,8 +391,7 @@ export function listOrphanedMedia(
 	return db
 		.prepare<unknown[], Row>(
 			`SELECT ${COLUMNS} FROM media
-			 WHERE update_id IS NULL
-			   AND message_id IS NULL
+			 WHERE ${UNATTACHED}
 			   AND status IN (${placeholders})
 			   AND created_at < ?
 			   -- A project logo is media nothing will ever attach to an update
@@ -353,6 +402,20 @@ export function listOrphanedMedia(
 			   AND id NOT IN (
 				 SELECT json_extract(theme, '$.logoMediaId') FROM projects
 				  WHERE theme IS NOT NULL AND json_extract(theme, '$.logoMediaId') IS NOT NULL
+			   )
+			   -- The same rule again, for an embed's pictures (migration 027): an
+			   -- avatar or a logo named inside embeds.data is attached to no update
+			   -- and no message, so without this the sweeper collects it an hour
+			   -- later and every card drawn in that look loses its face. It happened
+			   -- exactly once, to the owner, a day after embeds shipped.
+			   --
+			   -- json_tree rather than json_extract: a look reads its values by name,
+			   -- so there is no fixed path to ask for, and a value may sit inside a
+			   -- list. Every string anywhere in the object is considered, which is
+			   -- right: a media id is only ever a media id.
+			   AND id NOT IN (
+				 SELECT value FROM embeds, json_tree(embeds.data)
+				  WHERE json_tree.type = 'text'
 			   )
 			 ORDER BY seq
 			 LIMIT ?`

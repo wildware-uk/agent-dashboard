@@ -27,7 +27,6 @@ import {
 	type Reaction,
 	type RequestResult,
 	type RequestValue,
-	type Task,
 	type Update
 } from '$domain';
 import type { CallToolResult, ContentBlock } from '@modelcontextprotocol/sdk/types.js';
@@ -119,6 +118,8 @@ export type RequestView = {
 	/** The thread it was asked in, for a question raised in a reply (migration 022). */
 	message_id: string | null;
 	expires_at: string;
+	/** When the asking agent last rewrote it (migration 033). Absent if never. */
+	edited_at?: string;
 };
 
 /** An owner request as a tool reports it back: what was asked, and about what. */
@@ -132,7 +133,8 @@ export function requestView(request: OwnerRequest): RequestView {
 		project_id: request.projectId,
 		update_id: request.updateId,
 		message_id: request.messageId,
-		expires_at: iso(request.expiresAt)
+		expires_at: iso(request.expiresAt),
+		...(request.editedAt === null ? {} : { edited_at: iso(request.editedAt) })
 	};
 }
 
@@ -254,8 +256,8 @@ export type UpdateView = {
 	created_at: string;
 	/** When the agent last corrected it, or `null` if it never has (design §3). */
 	edited_at: string | null;
-	/** The task this is progress on, or `null` (design §7). */
-	task_id: string | null;
+	/** Where the work on this card has got to, or `null` (migration 035). */
+	status: string | null;
 };
 
 export function updateView(update: Update): UpdateView {
@@ -270,55 +272,7 @@ export function updateView(update: Update): UpdateView {
 		body_chars: update.body.length,
 		created_at: iso(update.createdAt),
 		edited_at: update.editedAt === null ? null : iso(update.editedAt),
-		task_id: update.taskId
-	};
-}
-
-export type TaskView = {
-	id: string;
-	project_id: string;
-	/** The claimant, or the agent the owner targeted it at, or `null`. */
-	agent_id: string | null;
-	title: string;
-	/**
-	 * The brief, in full.
-	 *
-	 * Unlike {@link UpdateView}, which reports only a length, a task's body is the
-	 * instruction the agent is about to act on: sending a character count and
-	 * making it call a second tool for the words would be a strange economy.
-	 */
-	body: string;
-	state: string;
-	created_at: string;
-	claimed_at: string | null;
-	done_at: string | null;
-	/** What the claimant reported when it finished, or `null` while it has not. */
-	result: string | null;
-	/**
-	 * True when the owner offered this task to the project's agents rather than
-	 * to one of them.
-	 *
-	 * A boolean rather than the timestamp behind it: an agent's only decision is
-	 * whether to reach for the task, and *when* it was offered is the owner's
-	 * question, not the fleet's.
-	 */
-	broadcast: boolean;
-};
-
-/** A task as a tool reports it. `id` is what `claim_task` takes back. */
-export function taskView(task: Task): TaskView {
-	return {
-		id: task.id,
-		project_id: task.projectId,
-		agent_id: task.agentId,
-		title: task.title,
-		body: task.body,
-		state: task.state,
-		created_at: iso(task.createdAt),
-		claimed_at: task.claimedAt === null ? null : iso(task.claimedAt),
-		done_at: task.doneAt === null ? null : iso(task.doneAt),
-		result: task.result,
-		broadcast: task.broadcastAt !== null
+		status: update.status
 	};
 }
 
@@ -331,6 +285,15 @@ export type MessageView = {
 	reply_to: string | null;
 	/** The comment in the same thread this one is addressed to (migration 020). */
 	answers?: string;
+	/**
+	 * The request being talked over, for a line in a question's discussion
+	 * (migration 032). Absent on an ordinary message.
+	 *
+	 * Your owner can reply on a request instead of answering it, and this is how
+	 * you answer them: `post_message` with this `request_id`. The question is
+	 * still open, so keep waiting on it with `await_request`.
+	 */
+	request_id?: string;
 	/** The literal `human`, or `agent:<agent_id>` (design §3). */
 	author: string;
 	/** Markdown, as it was written. */
@@ -338,6 +301,8 @@ export type MessageView = {
 	created_at: string;
 	/** When it was unsent (migration 017). Absent for a live message. */
 	deleted_at?: string;
+	/** When its author last corrected it (migration 033). Absent if nobody has. */
+	edited_at?: string;
 };
 
 /**
@@ -356,19 +321,28 @@ export function messageView(message: Message): MessageView {
 		// Absent rather than null on the ordinary message, which answers the thread
 		// rather than one line in it.
 		...(message.answers === null ? {} : { answers: message.answers }),
+		// Absent on the ordinary message, which is about a card rather than about
+		// a question waiting to be answered (migration 032).
+		...(message.requestId === null ? {} : { request_id: message.requestId }),
 		author: message.author,
 		body: message.body,
 		created_at: iso(message.createdAt),
 		// Absent for a live message, which is almost all of them: a key that said
 		// `null` on every message would be noise on every read (migration 017).
-		...(message.deletedAt === null ? {} : { deleted_at: iso(message.deletedAt) })
+		...(message.deletedAt === null ? {} : { deleted_at: iso(message.deletedAt) }),
+		// Absent on the untouched message, which is nearly all of them.
+		...(message.editedAt === null ? {} : { edited_at: iso(message.editedAt) })
 	};
 }
 
 /** One emoji reaction as a tool reports it (migration 024). */
 export type ReactionView = {
 	id: string;
-	message_id: string;
+	/** The card it is on: its kind, and its id (migration 034). */
+	card_kind: string;
+	card_id: string;
+	/** The message, when it is one. Kept because most reactions are on messages. */
+	message_id: string | null;
 	/** The literal `human`, or `agent:<agent_id>` (design §3). */
 	actor: string;
 	emoji: string;
@@ -378,6 +352,8 @@ export type ReactionView = {
 export function reactionView(reaction: Reaction): ReactionView {
 	return {
 		id: reaction.id,
+		card_kind: reaction.card.kind,
+		card_id: reaction.card.id,
 		message_id: reaction.messageId,
 		actor: reaction.actor,
 		emoji: reaction.emoji,
@@ -388,7 +364,10 @@ export function reactionView(reaction: Reaction): ReactionView {
 /** An acknowledgement as a tool reports it (migration 013). */
 export type AckView = {
 	id: string;
-	/** Exactly one of these two is set: the thing that was acknowledged. */
+	/** The card it is on: its kind, and its id (migration 034). */
+	card_kind: string;
+	card_id: string;
+	/** The same fact by the older names, for the two kinds that had them first. */
 	message_id: string | null;
 	task_id: string | null;
 	state: string;
@@ -401,6 +380,8 @@ export type AckView = {
 export function ackView(ack: Acknowledgement): AckView {
 	return {
 		id: ack.id,
+		card_kind: ack.card.kind,
+		card_id: ack.card.id,
 		message_id: ack.messageId,
 		task_id: ack.taskId,
 		state: ack.state,

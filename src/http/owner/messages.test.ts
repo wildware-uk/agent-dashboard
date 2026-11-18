@@ -1,5 +1,12 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { createProject, listThread, markMessagesDelivered, postMessage, postUpdate } from '$domain';
+import {
+	createProject,
+	createRequest,
+	listThread,
+	markMessagesDelivered,
+	postMessage,
+	postUpdate
+} from '$domain';
 import { harness, type Harness } from '$domain/testing';
 import { SESSION_COOKIE, signSession } from '../auth';
 import {
@@ -159,6 +166,24 @@ describe('GET /api/messages', () => {
 		]);
 	});
 
+	it('answers one feed post and its replies, the post first', async () => {
+		const post = postMessage(h, { author: { kind: 'human' }, body: 'a new post', project: slug });
+		postMessage(h, { author: { kind: 'agent', agentId }, body: 'on it', replyTo: post.id });
+
+		const { body } = await call(listMessagesHandler, { query: { replyTo: post.id } });
+
+		expect((body.messages as unknown as { body: string }[]).map((m) => m.body)).toEqual([
+			'a new post',
+			'on it'
+		]);
+	});
+
+	it('answers nothing for a post that is not there', async () => {
+		const { body } = await call(listMessagesHandler, { query: { replyTo: 'nope' } });
+
+		expect(body.messages).toEqual([]);
+	});
+
 	it('answers every message when no scope is given', async () => {
 		const { body } = await call(listMessagesHandler);
 
@@ -251,6 +276,55 @@ describe('posting to the feed and replying under it', () => {
 		const messages = body.messages as { id: string; replyTo: string | null }[];
 		expect(messages.find((message) => message.id === postId)?.replyTo).toBeNull();
 		expect(messages.filter((message) => message.replyTo === postId)).toHaveLength(1);
+	});
+});
+
+/**
+ * Talking a question over before answering it (migration 032).
+ *
+ * The owner: "allow me to reply to form questions, so I can discuss with the
+ * agent before giving the answer."
+ */
+describe('a question`s discussion', () => {
+	function question() {
+		return createRequest(h, {
+			agentId,
+			kind: 'confirm',
+			question: 'push to main?',
+			project: slug
+		}).request;
+	}
+
+	it('posts the owner`s line against the question', async () => {
+		const request = question();
+
+		const { status, body } = await call(postMessageHandler, {
+			body: { request: request.id, body: 'why main?' }
+		});
+
+		expect(status).toBe(201);
+		expect(body.message).toMatchObject({ author: 'human', requestId: request.id, updateId: null });
+		expect(listThread(h, { requestId: request.id }).map((m) => m.body)).toEqual(['why main?']);
+	});
+
+	it('reads one question`s discussion back', async () => {
+		const request = question();
+		postMessage(h, { author: { kind: 'human' }, requestId: request.id, body: 'why main?' });
+		postMessage(h, { author: { kind: 'human' }, updateId, body: 'unrelated' });
+
+		const { body } = await call(listMessagesHandler, { query: { request: request.id } });
+
+		expect((body.messages as unknown as { body: string }[]).map((m) => m.body)).toEqual([
+			'why main?'
+		]);
+	});
+
+	it('answers 404 for a question that is not there', async () => {
+		const { status } = await call(postMessageHandler, {
+			body: { request: 'nope', body: 'hello?' }
+		});
+
+		expect(status).toBe(404);
 	});
 });
 

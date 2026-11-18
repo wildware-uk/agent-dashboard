@@ -72,12 +72,56 @@ export type MonitorOptions = {
 	signal?: AbortSignal;
 };
 
-/** Read the dashboard until the session ends, writing one line per event. */
+/**
+ * Read the dashboard until the session ends, writing one line per event.
+ *
+ * Two things the bridge treats as diagnostics are promoted to the session here,
+ * because on a monitor stderr goes nowhere an agent can see and "misconfigured"
+ * would look exactly like "quiet dashboard":
+ *
+ * - **the first connection**, so a session can tell the monitor is up at all;
+ * - **a refusal**, which is nearly always a token that is wrong or revoked.
+ *
+ * Reconnects stay quiet. A dashboard that was restarted, or a laptop that
+ * closed its lid, is not news — it is the ordinary weather of a long session,
+ * and a notification per retry would be the monitor talking about itself
+ * instead of about the work.
+ */
 export async function runMonitor(options: MonitorOptions): Promise<void> {
 	const write = options.write ?? ((line: string) => process.stdout.write(`${line}\n`));
-	const log =
+	const diagnose =
 		options.log ??
 		((message: string) => process.stderr.write(`agent-dashboard monitor: ${message}\n`));
+
+	let announcedConnection = false;
+	let announcedRefusal = false;
+
+	const log = (message: string) => {
+		diagnose(message);
+
+		if (message === 'connected') {
+			// A refusal after a good connection is news again: the token was fine and
+			// has since been revoked, which is worth hearing a second time.
+			announcedRefusal = false;
+			if (announcedConnection) return;
+			announcedConnection = true;
+			write('agent-dashboard monitor: connected — watching the dashboard for this session.');
+			return;
+		}
+
+		const refused = /^stream refused: (\d+)/.exec(message);
+		if (refused && !announcedRefusal) {
+			announcedRefusal = true;
+			write(
+				refused[1] === '401'
+					? 'agent-dashboard monitor: refused (401) — the agent token is wrong or revoked. ' +
+							'Mint a new one with `agent-dashboard mint-token <name>` and set it under /plugin ' +
+							'or in AGENT_DASHBOARD_TOKEN.'
+					: `agent-dashboard monitor: the dashboard refused the connection (${refused[1]}). ` +
+							'Retrying; check the dashboard URL and that the deployment is up.'
+			);
+		}
+	};
 
 	await runBridge({
 		baseUrl: options.baseUrl,
@@ -97,7 +141,23 @@ export async function runMonitor(options: MonitorOptions): Promise<void> {
 /** What the `SessionStart` hook writes, and this reads. */
 export const CONNECTION_FILE = 'connection.json';
 
-export type Connection = { baseUrl: string; token: string; projects: string[] };
+export type Connection = {
+	baseUrl: string;
+	token: string;
+	projects: string[];
+	/**
+	 * Whether this session wants a monitor at all (plugin 0.2.0).
+	 *
+	 * `auto` is the default and means "deliver unless the channel is already
+	 * doing it" (`./claim.ts`). `off` is for a session that wants neither.
+	 */
+	monitor: 'auto' | 'off';
+};
+
+/** The monitor switch, from wherever it was set. Anything unknown is `auto`. */
+function monitorMode(raw: unknown): 'auto' | 'off' {
+	return typeof raw === 'string' && raw.trim().toLowerCase() === 'off' ? 'off' : 'auto';
+}
 
 /** Split the comma-separated subscription the same way the channel does. */
 function subscription(raw: string | undefined): string[] {
@@ -110,6 +170,11 @@ function subscription(raw: string | undefined): string[] {
 /**
  * The connection, from the environment or from the hook's file.
  *
+ * **The environment wins.** A session run by hand sets `AGENT_DASHBOARD_*`, and
+ * somebody who typed a URL into the command they are running should not be
+ * quietly overruled by a file written for a plugin option they forgot about.
+ * The file is the ordinary case; the variables are the deliberate one.
+ *
  * `null` rather than a throw: the caller waits, because the file arriving a
  * moment later is the ordinary case rather than an error.
  */
@@ -120,7 +185,12 @@ export function readConnection(env: NodeJS.ProcessEnv, read = readFileSync): Con
 		projects: subscription(env.AGENT_DASHBOARD_PROJECTS)
 	};
 	if (fromEnv.baseUrl && fromEnv.token && fromEnv.projects.length > 0) {
-		return { baseUrl: fromEnv.baseUrl, token: fromEnv.token, projects: fromEnv.projects };
+		return {
+			baseUrl: fromEnv.baseUrl,
+			token: fromEnv.token,
+			projects: fromEnv.projects,
+			monitor: monitorMode(env.AGENT_DASHBOARD_MONITOR)
+		};
 	}
 
 	const dir = env.CLAUDE_PLUGIN_DATA?.trim();
@@ -130,11 +200,21 @@ export function readConnection(env: NodeJS.ProcessEnv, read = readFileSync): Con
 		const stored: unknown = JSON.parse(String(read(join(dir, CONNECTION_FILE), 'utf8')));
 		if (typeof stored !== 'object' || stored === null) return null;
 
-		const { url, token, projects } = stored as Record<string, unknown>;
+		const { url, token, projects, monitor } = stored as Record<string, unknown>;
 		const wanted = subscription(typeof projects === 'string' ? projects : undefined);
 		if (typeof url !== 'string' || typeof token !== 'string' || wanted.length === 0) return null;
 
-		return { baseUrl: url.trim(), token: token.trim(), projects: wanted };
+		return {
+			baseUrl: url.trim(),
+			token: token.trim(),
+			projects: wanted,
+			// The env var still wins here: it is what a session run by hand sets,
+			// and the file is what the plugin wrote for the ordinary case.
+			monitor:
+				env.AGENT_DASHBOARD_MONITOR === undefined
+					? monitorMode(monitor)
+					: monitorMode(env.AGENT_DASHBOARD_MONITOR)
+		};
 	} catch {
 		// Absent, half-written, or not JSON. All three mean "not yet".
 		return null;

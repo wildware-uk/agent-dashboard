@@ -3,7 +3,8 @@ import { harness, type Harness } from './testing';
 import { createProject } from './projects';
 import { postMessage, deleteMessage } from './messages';
 import { isDomainError } from './errors';
-import { assertEmoji, react, reactionsFor } from './reactions';
+import { assertEmoji } from './reactions';
+import { reactToCard as react, reactionsForCards as reactionsFor } from './cards';
 
 /**
  * Reactions (migration 024).
@@ -44,7 +45,7 @@ describe('reacting', () => {
 		const events: unknown[] = [];
 		h.bus.subscribe((event) => events.push(event));
 		const result = react(h, {
-			messageId: message.id,
+			card: { kind: 'message', id: message.id },
 			actor: { kind: 'agent', agentId },
 			emoji: '👀'
 		});
@@ -62,9 +63,13 @@ describe('reacting', () => {
 
 	it('toggles: the same call again takes it back', () => {
 		const message = aMessage();
-		react(h, { messageId: message.id, actor: { kind: 'human' }, emoji: '👍' });
+		react(h, { card: { kind: 'message', id: message.id }, actor: { kind: 'human' }, emoji: '👍' });
 
-		const second = react(h, { messageId: message.id, actor: { kind: 'human' }, emoji: '👍' });
+		const second = react(h, {
+			card: { kind: 'message', id: message.id },
+			actor: { kind: 'human' },
+			emoji: '👍'
+		});
 
 		expect(second.on).toBe(false);
 		expect(second.reactions).toEqual([]);
@@ -72,12 +77,17 @@ describe('reacting', () => {
 
 	it('is idempotent when the caller says which way it wants', () => {
 		const message = aMessage();
-		react(h, { messageId: message.id, actor: { kind: 'agent', agentId }, emoji: '✅', on: true });
+		react(h, {
+			card: { kind: 'message', id: message.id },
+			actor: { kind: 'agent', agentId },
+			emoji: '✅',
+			on: true
+		});
 
 		// A retry after a dropped connection must not undo the reaction it thought
 		// it was making — which is exactly what a toggle would do.
 		const again = react(h, {
-			messageId: message.id,
+			card: { kind: 'message', id: message.id },
 			actor: { kind: 'agent', agentId },
 			emoji: '✅',
 			on: true
@@ -90,11 +100,21 @@ describe('reacting', () => {
 
 	it('says nothing when nothing changed', () => {
 		const message = aMessage();
-		react(h, { messageId: message.id, actor: { kind: 'human' }, emoji: '🎉', on: true });
+		react(h, {
+			card: { kind: 'message', id: message.id },
+			actor: { kind: 'human' },
+			emoji: '🎉',
+			on: true
+		});
 
 		const events: unknown[] = [];
 		h.bus.subscribe((event) => events.push(event));
-		react(h, { messageId: message.id, actor: { kind: 'human' }, emoji: '🎉', on: true });
+		react(h, {
+			card: { kind: 'message', id: message.id },
+			actor: { kind: 'human' },
+			emoji: '🎉',
+			on: true
+		});
 
 		expect(events).toEqual([]);
 	});
@@ -102,10 +122,14 @@ describe('reacting', () => {
 	it('keeps the owner’s and an agent’s apart, and counts both', () => {
 		const message = aMessage();
 
-		react(h, { messageId: message.id, actor: { kind: 'human' }, emoji: '👍' });
-		react(h, { messageId: message.id, actor: { kind: 'agent', agentId }, emoji: '👍' });
+		react(h, { card: { kind: 'message', id: message.id }, actor: { kind: 'human' }, emoji: '👍' });
+		react(h, {
+			card: { kind: 'message', id: message.id },
+			actor: { kind: 'agent', agentId },
+			emoji: '👍'
+		});
 
-		expect(reactionsFor(h, [message.id])).toHaveLength(2);
+		expect(reactionsFor(h, 'message', [message.id])).toHaveLength(2);
 	});
 
 	it('refuses a message that is gone', () => {
@@ -113,7 +137,13 @@ describe('reacting', () => {
 		deleteMessage(h, { messageId: message.id, by: { kind: 'human' } });
 
 		expect(
-			refusalCode(() => react(h, { messageId: message.id, actor: { kind: 'human' }, emoji: '👍' }))
+			refusalCode(() =>
+				react(h, {
+					card: { kind: 'message', id: message.id },
+					actor: { kind: 'human' },
+					emoji: '👍'
+				})
+			)
 		).toBe('not_found');
 	});
 });

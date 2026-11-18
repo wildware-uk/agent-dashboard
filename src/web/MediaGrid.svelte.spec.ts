@@ -292,3 +292,52 @@ describe('opening the lightbox from the grid', () => {
 		expect(document.querySelector('[role="dialog"]')).toBeNull();
 	});
 });
+
+/**
+ * Files on a card, in a real browser (migration 026).
+ *
+ * A file is a row with a name and a link, not a cell in the grid — and the link
+ * is a plain `href`, because it is the *server* that makes it a download
+ * (`Content-Disposition: attachment`). A `download` attribute here would be a
+ * hint the browser may ignore.
+ */
+describe('files on a card', () => {
+	const aFile = (overrides = {}) =>
+		aMedia({
+			id: 'f1',
+			kind: 'file',
+			mime: 'application/pdf',
+			filename: 'notes.pdf',
+			bytes: 4096,
+			width: null,
+			height: null,
+			variants: ['original'],
+			...overrides
+		});
+
+	it('lists a file with its name, its size and a link to it', async () => {
+		const { getByRole, getByText } = render(MediaGrid, { items: [aFile()] });
+
+		await expect.element(getByText('notes.pdf')).toBeInTheDocument();
+		await expect.element(getByText('4.0 KB')).toBeInTheDocument();
+		await expect
+			.element(getByRole('link', { name: 'Download notes.pdf, 4.0 KB' }))
+			.toHaveAttribute('href', '/media/f1/original');
+	});
+
+	it('keeps it out of the grid, so a zip is not laid out as a picture', async () => {
+		render(MediaGrid, { items: [aMedia({ id: 'm1' }), aFile()] });
+		await tick();
+
+		expect(document.querySelector('[data-media-grid]')?.getAttribute('data-media-count')).toBe('1');
+		expect(document.querySelector('[data-media-tile="f1"]')).toBeNull();
+		expect(document.querySelector('[data-media-file="f1"]')).not.toBeNull();
+	});
+
+	it('offers no link for one whose bytes never landed', async () => {
+		render(MediaGrid, { items: [aFile({ status: 'pending', variants: [] })] });
+		await tick();
+
+		expect(document.querySelector('[data-media-file="f1"] a')).toBeNull();
+	});
+});

@@ -65,6 +65,13 @@ export type OpenStream = (url: string) => StreamLike;
 export const EVENT_TYPES = [
 	'project.created',
 	'project.updated',
+	// A project's own words changed: one defined, renamed or retired
+	// (migration 039). The picker on every card reads that list.
+	'tags.changed',
+	// A note on a card was set, corrected or taken off (migration 040).
+	'fields.changed',
+	// An app on a card was handed fresh data (migration 041).
+	'apps.changed',
 	'update.created',
 	'update.updated',
 	'update.deleted',
@@ -72,6 +79,9 @@ export const EVENT_TYPES = [
 	'task.created',
 	'task.updated',
 	'message.created',
+	// Somebody corrected their own line (migration 033): a message already on
+	// screen that now reads differently.
+	'message.updated',
 	// A line taken back: the owner deleted it, or the agent that wrote it
 	// unsent it (migration 017).
 	'message.deleted',
@@ -88,6 +98,8 @@ export const EVENT_TYPES = [
 	'notification.created',
 	'notifications.seen',
 	'request.created',
+	// The asking agent rewrote its own pending question (migration 033).
+	'request.updated',
 	'request.answered',
 	'agent.presence',
 	// The owner renamed an agent: every card it posted is relabelled.

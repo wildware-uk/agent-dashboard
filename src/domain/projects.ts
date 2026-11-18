@@ -7,12 +7,10 @@
  * has landed.
  */
 import {
-	countUnseenUpdates,
 	findProjectById,
 	findProjectBySlug,
 	insertProject,
 	isId,
-	markProjectSeen as markProjectSeenRow,
 	listProjects as listProjectRows,
 	updateProject as patchProject,
 	findMediaById,
@@ -379,42 +377,4 @@ function assertLogo(ctx: DomainContext, mediaId: string): string {
 	if (media.kind !== 'image') throw invalid('a logo must be an image');
 	if (media.status !== 'ready') throw invalid('that image is still being processed');
 	return media.id;
-}
-
-/**
- * Record that the owner has looked at a project, so its "new" badge clears.
- *
- * Stamped server-side rather than remembered per browser, because there is one
- * owner and more than one screen: a badge that cleared on the phone and stayed
- * lit on the desk would be worse than no badge at all.
- *
- * It publishes `project.updated` even though it changes nothing anybody can see
- * on the project itself — a second tab is showing the same sidebar, and a badge
- * that only cleared in the window that cleared it is the same inconsistency in a
- * smaller box. It deliberately does **not** bump `updated_at` (`src/db/projects.ts`):
- * reading a page is not editing it, and a project that sorted as freshly changed
- * because somebody glanced at it would be a lie.
- *
- * @throws {DomainError} `not_found` for a project reference that matches nothing.
- */
-export function markProjectSeen(ctx: DomainContext, reference: string): Project {
-	const project = resolveProject(ctx, reference);
-	const seen = markProjectSeenRow(ctx.db, project.id, ctx.now())!;
-
-	ctx.bus.publish('project.updated', { projectId: seen.id, slug: seen.slug });
-	return seen;
-}
-
-/**
- * How many updates have landed in each project since the owner last opened it.
- *
- * Owner-facing only, and kept out of {@link listProjects} for that reason: an
- * agent calling `list_projects` has no business learning what its owner has and
- * has not read, and a field that leaked there would be on the MCP wire for ever.
- *
- * Projects with nothing new are absent rather than zero, because the caller
- * renders a badge per entry and `0` would be a badge saying nothing happened.
- */
-export function unseenUpdateCounts(ctx: DomainContext): Record<string, number> {
-	return countUnseenUpdates(ctx.db);
 }

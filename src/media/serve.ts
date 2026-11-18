@@ -11,9 +11,14 @@
  * Three refusals matter more than they look:
  *
  * - **An unrecognised mime is a 404, not a download.** Only the seven allowlisted
- *   types are ever emitted, checked against the row on the way out as well as
- *   against the bytes on the way in. A row that somehow holds `image/svg+xml`
- *   serves nothing.
+ *   types are ever emitted *inline*, checked against the row on the way out as
+ *   well as against the bytes on the way in. A row that somehow holds
+ *   `image/svg+xml` as an image serves nothing.
+ * - **A `file` is emitted as a download and never as itself** (migration 026).
+ *   Its stored type is a label the owner reads; what leaves this deployment is
+ *   {@link DOWNLOAD_MIME} with `disposition: 'attachment'`, so "any file may be
+ *   uploaded" cannot become "any script runs on the dashboard's origin". The
+ *   only variant a file has is `original`.
  * - **A row with no hash has no bytes.** A reservation whose upload never
  *   happened, or failed, is indistinguishable from a missing item to a caller.
  * - **A path out of the database is still re-checked** against the media root.
@@ -34,7 +39,7 @@ import { createReadStream } from 'node:fs';
 import { stat } from 'node:fs/promises';
 import { Readable } from 'node:stream';
 import { mediaNotFound } from './errors';
-import { isAllowedMime } from './mime';
+import { DOWNLOAD_MIME, isAllowedMime } from './mime';
 import { derivativeFile, originalFile } from './paths';
 import type { MediaSettings } from './settings';
 
@@ -79,8 +84,23 @@ export type ByteRange = { start: number; end: number };
 export type MediaFile = {
 	mediaId: string;
 	variant: Variant;
-	/** Always one of the allowlisted types. */
+	/** One of the allowlisted types, or {@link DOWNLOAD_MIME} for a `file`. */
 	mime: string;
+	/**
+	 * How the browser should treat these bytes.
+	 *
+	 * `inline` for the media the dashboard renders; `attachment` for a `file`,
+	 * which is the header that keeps an uploaded `.html` a download rather than a
+	 * page on this origin (migration 026).
+	 */
+	disposition: 'inline' | 'attachment';
+	/**
+	 * What to call it when it is saved, for a `file`. `null` for everything else.
+	 *
+	 * Text the uploader chose, so the route has to encode it into the header
+	 * rather than concatenate it.
+	 */
+	filename: string | null;
 	bytes: number;
 	/** Strong validator, safe to use with `immutable` because content never changes. */
 	etag: string;
@@ -112,11 +132,17 @@ export async function openVariant(
 
 	const media = findMediaById(db, id);
 	if (!media || media.status === 'failed') throw missing();
-	// Never emit a type this deployment would not have accepted.
-	if (!isAllowedMime(media.mime)) throw missing();
 
-	const found =
-		variant === 'original'
+	const download = media.kind === 'file';
+	// Never emit a type this deployment would not have accepted — and never emit
+	// a `file` as anything but a download.
+	if (!download && !isAllowedMime(media.mime)) throw missing();
+	// A file has no derivatives; there is nothing to render, so nothing was made.
+	if (download && variant !== 'original') throw missing();
+
+	const found = download
+		? originalOf(settings, media.id, media.mime, media.sha256, DOWNLOAD_MIME)
+		: variant === 'original'
 			? originalOf(settings, media.id, media.mime, media.sha256)
 			: derivativeOf(settings, { db, id: media.id, variant });
 
@@ -129,6 +155,8 @@ export async function openVariant(
 		mediaId: media.id,
 		variant,
 		mime: found.mime,
+		disposition: download ? 'attachment' : 'inline',
+		filename: download ? media.filename : null,
 		bytes: size.size,
 		// Content at a given address never changes, so the hash of the original
 		// plus the variant name is a complete validator.
@@ -150,11 +178,14 @@ function originalOf(
 	settings: MediaSettings,
 	id: string,
 	mime: string,
-	sha256: string
+	sha256: string,
+	/** What to emit it as, when that is not what it is stored as. */
+	served = mime
 ): { path: string; mime: string } | undefined {
 	// An empty hash is a reservation whose bytes never arrived (`./upload.ts`).
 	if (sha256 === '') return undefined;
-	return { path: originalFile(settings, id, mime), mime };
+	// The path still comes from the stored type: that is what named the file.
+	return { path: originalFile(settings, id, mime), mime: served };
 }
 
 function derivativeOf(
@@ -192,7 +223,25 @@ export type AvailableVariant = {
  */
 export function derivativesFor(options: { db: Db; id: string }): AvailableVariant[] {
 	const media = findMediaById(options.db, options.id);
-	if (!media || media.status === 'failed' || !isAllowedMime(media.mime)) return [];
+	if (!media || media.status === 'failed') return [];
+
+	const download = media.kind === 'file';
+	if (!download && !isAllowedMime(media.mime)) return [];
+
+	// One address, and it answers with a download (migration 026).
+	if (download) {
+		return media.sha256 === ''
+			? []
+			: [
+					{
+						variant: 'original',
+						mime: DOWNLOAD_MIME,
+						bytes: media.bytes,
+						width: null,
+						height: null
+					}
+				];
+	}
 
 	const available: AvailableVariant[] = [];
 

@@ -39,10 +39,12 @@ type Row = {
 	decided_at: number | null;
 	decided_value: string | null;
 	answer: string | null;
+	edited_at: number | null;
+	pinned: number;
 };
 
 const COLUMNS = `seq, id, agent_id, project_id, update_id, message_id, kind, question, detail, options, config,
-	state, expires_at, decided_at, decided_value, answer`;
+	state, expires_at, decided_at, decided_value, answer, edited_at, pinned`;
 
 function toApproval(row: Row): Approval {
 	return {
@@ -61,7 +63,9 @@ function toApproval(row: Row): Approval {
 		expiresAt: row.expires_at,
 		decidedAt: row.decided_at,
 		decidedValue: row.decided_value,
-		answer: jsonOf<RequestAnswer>(row.answer)
+		answer: jsonOf<RequestAnswer>(row.answer),
+		editedAt: row.edited_at,
+		pinned: row.pinned === 1
 	};
 }
 
@@ -171,12 +175,43 @@ export function listApprovals(db: Db, query: ApprovalQuery = {}): Approval[] {
  * rides the `(agent_id, state)` index migration 002 adds — an agent beating
  * every thirty seconds must not cost a scan.
  */
-export function countPendingApprovals(db: Db, agentId: string): number {
+export function countPendingApprovals(
+	db: Db,
+	agentId: string,
+	/**
+	 * Only approvals filed under these projects, plus the ones filed under none.
+	 *
+	 * Omit for every project, which is what a heartbeat wants: "is anything
+	 * waiting on me anywhere" has to span the lot or it is a no that means yes.
+	 * A live stream wants the narrow answer instead — see the domain.
+	 *
+	 * A request with no project is always counted. It belongs to the agent rather
+	 * than to any project, so there is no scope that could exclude it and no
+	 * session it would be wrong to tell.
+	 */
+	projectIds?: readonly string[]
+): number {
+	if (!projectIds) {
+		return db
+			.prepare<[string], { n: number }>(
+				`SELECT COUNT(*) AS n FROM approvals WHERE agent_id = ? AND state = 'pending'`
+			)
+			.get(agentId)!.n;
+	}
+
+	// An empty scope still counts the project-less ones, which is why this is not
+	// short-circuited to zero.
+	const placeholders = projectIds.map(() => '?').join(', ');
+	const params = [agentId, ...projectIds];
+
 	return db
-		.prepare<[string], { n: number }>(
-			`SELECT COUNT(*) AS n FROM approvals WHERE agent_id = ? AND state = 'pending'`
+		.prepare<typeof params, { n: number }>(
+			`SELECT COUNT(*) AS n FROM approvals
+			  WHERE agent_id = ?
+			    AND state = 'pending'
+			    AND (project_id IS NULL${placeholders === '' ? '' : ` OR project_id IN (${placeholders})`})`
 		)
-		.get(agentId)!.n;
+		.get(...params)!.n;
 }
 
 /** Every state a pending approval can be moved to. */
@@ -195,6 +230,56 @@ export type ApprovalDecision = {
  * @returns the decided row, or `undefined` if it was already decided, expired or
  *   cancelled — so exactly one caller publishes the settling event.
  */
+/**
+ * The asking agent rewrites its own question (migration 033).
+ *
+ * Pending only, and that is the whole safety of it: an answer is validated
+ * against the row it was given, so a question whose options changed after it was
+ * settled would make the record disagree with the decision. `$domain` checks who
+ * is asking and what the new values may be; this writes what it is handed.
+ */
+export function editApproval(
+	db: Db,
+	id: string,
+	edit: {
+		question?: string;
+		detail?: string | null;
+		options?: string[] | null;
+		config?: RequestConfig | null;
+		editedAt: number;
+	}
+): Approval | undefined {
+	const sets: string[] = ['edited_at = :edited_at'];
+	const params: Record<string, string | number | null> = { id, edited_at: edit.editedAt };
+
+	if (edit.question !== undefined) {
+		sets.push('question = :question');
+		params.question = edit.question;
+	}
+	if (edit.detail !== undefined) {
+		sets.push('detail = :detail');
+		params.detail = orNull(edit.detail);
+	}
+	if (edit.options !== undefined) {
+		sets.push('options = :options');
+		params.options = jsonText(edit.options);
+	}
+	if (edit.config !== undefined) {
+		sets.push('config = :config');
+		params.config = jsonText(edit.config);
+	}
+
+	const row = db
+		.prepare<typeof params, Row>(
+			`UPDATE approvals SET ${sets.join(', ')}
+			 WHERE id = :id AND state = 'pending'
+			 RETURNING ${COLUMNS}`
+		)
+		.get(params);
+
+	return row && toApproval(row);
+}
+
 export function decideApproval(
 	db: Db,
 	id: string,

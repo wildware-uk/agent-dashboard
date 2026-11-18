@@ -27,16 +27,16 @@ const project = insertProject(db, { slug: 'dashboard', name: 'Dashboard' });
 
 ## Layout
 
-| File                | Holds                                                                                                                                     |
-| ------------------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
-| `connection.ts`     | `openDatabase`, `getDatabase`, pragmas. **The only file in the tree that imports `better-sqlite3`** — `connection.test.ts` enforces that. |
-| `migrate.ts`        | The runner: applies pending migrations in order, records them in `schema_migrations`.                                                     |
-| `migrations/`       | Numbered, append-only SQL. `001-initial-schema.ts` is the whole data model.                                                               |
-| `schema.ts`         | The table list as data.                                                                                                                   |
-| `ids.ts`            | ULID minting.                                                                                                                             |
-| `types.ts`          | The row shapes repositories return.                                                                                                       |
-| `rows.ts`           | The 0/1 and JSON-text conversions SQLite forces on us.                                                                                    |
-| one file per entity | `projects`, `agents`, `sessions`, `updates`, `media`, `derivatives`, `upload-tokens`, `tasks`, `messages`, `read-cursors`, `approvals`.   |
+| File                | Holds                                                                                                                                                                      |
+| ------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `connection.ts`     | `openDatabase`, `getDatabase`, pragmas. **The only file in the tree that imports `better-sqlite3`** — `connection.test.ts` enforces that.                                  |
+| `migrate.ts`        | The runner: applies pending migrations in order, records them in `schema_migrations`.                                                                                      |
+| `migrations/`       | Numbered, append-only SQL. `001-initial-schema.ts` is the whole data model.                                                                                                |
+| `schema.ts`         | The table list as data.                                                                                                                                                    |
+| `ids.ts`            | ULID minting.                                                                                                                                                              |
+| `types.ts`          | The row shapes repositories return.                                                                                                                                        |
+| `rows.ts`           | The 0/1 and JSON-text conversions SQLite forces on us.                                                                                                                     |
+| one file per entity | `projects`, `agents`, `sessions`, `updates`, `media`, `derivatives`, `upload-tokens`, `tasks`, `messages`, `read-cursors`, `approvals`, `embeds`, `apps`, `owner-devices`. |
 
 ## Conventions
 

@@ -41,11 +41,11 @@ afterEach(() => {
 });
 
 /** A reservation, as `create_upload` would have made it. */
-function reserve(mime: string, bytes: number) {
+function reserve(mime: string, bytes: number, filename = 'shot.png') {
 	return createUpload(settings, {
 		db,
 		agentId,
-		filename: 'shot.png',
+		filename,
 		mime,
 		bytes,
 		now: NOW
@@ -356,5 +356,82 @@ describe('identical bytes', () => {
 		expect(two.deduped).toBe(false);
 		expect(one.media.sha256).not.toBe(two.media.sha256);
 		expect(statSync(originalFile(settings, two.media.id, 'image/png')).nlink).toBe(1);
+	});
+});
+
+/**
+ * Anything that is not a picture (migration 026).
+ *
+ * The rule these prove is the one the whole feature rests on: a `file` is never
+ * sniffed, because a sniff protects rendering and a file is never rendered. That
+ * is what lets a log, a CSV or a `.lock` — none of which have magic bytes at all
+ * — be sent to an agent, and it is why nothing here is a hole: `./serve.ts` hands
+ * every one of them back as `application/octet-stream` with
+ * `Content-Disposition: attachment`.
+ */
+describe('a file, which is not sniffed at all', () => {
+	const text = (body: string) => new TextEncoder().encode(body);
+
+	it('stores plain text, which has no magic bytes an allowlist could have checked', async () => {
+		const bytes = text('line one\nline two\n');
+		const grant = reserve('text/plain', bytes.length, 'build.log');
+
+		const { media } = await ingest(settings, {
+			db,
+			token: grant.token,
+			body: bodyOf(bytes),
+			now: NOW
+		});
+
+		expect(media.kind).toBe('file');
+		expect(media.mime).toBe('text/plain');
+		expect(media.filename).toBe('build.log');
+		expect(media.sha256).toBe(sha256(bytes));
+		// One extension for everything, so nothing a caller declared picked it.
+		expect(new Uint8Array(readFileSync(originalFile(settings, media.id, 'text/plain')))).toEqual(
+			bytes
+		);
+	});
+
+	it('stores an SVG, which is never rendered but is a perfectly good download', async () => {
+		const bytes = svgBytes();
+		const grant = reserve('image/svg+xml', bytes.length, 'diagram.svg');
+
+		const { media } = await ingest(settings, {
+			db,
+			token: grant.token,
+			body: bodyOf(bytes),
+			now: NOW
+		});
+
+		expect(media.kind).toBe('file');
+	});
+
+	it('does not care that the bytes disagree with the declared type', async () => {
+		// The mismatch that is a 415 for an image is a shrug for a file: the type
+		// is a label beside a download, and the download is bytes either way.
+		const bytes = zipBytes();
+		const grant = reserve('application/pdf', bytes.length, 'notes.pdf');
+
+		const { media } = await ingest(settings, {
+			db,
+			token: grant.token,
+			body: bodyOf(bytes),
+			now: NOW
+		});
+
+		expect(media.mime).toBe('application/pdf');
+		expect(media.bytes).toBe(bytes.length);
+	});
+
+	it('is still cut off at the cap, mid-flight, exactly as an image is', async () => {
+		const grant = reserve('text/plain', 32, 'big.log');
+		const body = countingBody(text('x'.repeat(4096)), 64);
+
+		expect(
+			await refusal(() => ingest(settings, { db, token: grant.token, body: body.stream, now: NOW }))
+		).toBe('too_large');
+		expect(body.cancelled()).toBe(true);
+		expect(tempFiles()).toEqual([]);
 	});
 });

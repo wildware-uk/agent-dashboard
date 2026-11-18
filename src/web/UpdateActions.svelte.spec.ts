@@ -15,7 +15,9 @@ describe('pinning an update', () => {
 
 		await screen.getByRole('button', { name: 'Pin update' }).click();
 
-		expect(api.calls).toEqual([{ name: 'setUpdatePinned', args: ['u7', true] }]);
+		// The generic call since migration 034: pinning is a thing you do to a
+		// card, and an update is one kind of card.
+		expect(api.calls).toEqual([{ name: 'pinCard', args: ['update', 'u7', true] }]);
 	});
 
 	it('offers to unpin one that is already pinned', async () => {
@@ -27,7 +29,7 @@ describe('pinning an update', () => {
 
 		await screen.getByRole('button', { name: 'Unpin update' }).click();
 
-		expect(api.calls).toEqual([{ name: 'setUpdatePinned', args: ['u7', false] }]);
+		expect(api.calls).toEqual([{ name: 'pinCard', args: ['update', 'u7', false] }]);
 	});
 });
 

@@ -11,7 +11,7 @@
 			"source": "./plugins/agent-dashboard",
 			"displayName": "Agent Dashboard",
 			"description": "Report to a human owner while you work: post updates, take tasks off a board, and stop to ask a question — over MCP, with a channel that wakes you when they answer.",
-			"version": "0.1.0",
+			"version": "0.2.0",
 			"category": "productivity",
 			"keywords": ["mcp", "channel", "dashboard", "status", "tasks", "human-in-the-loop"],
 			"license": "MIT",

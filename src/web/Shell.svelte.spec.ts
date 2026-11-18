@@ -1,21 +1,18 @@
 import { render } from 'vitest-browser-svelte';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import Shell from './Shell.svelte';
 import { Presence } from './presence.svelte';
 import { Timeline } from './timeline.svelte';
-import { Tasks } from './tasks.svelte';
 import {
 	FakeStream,
 	aLiveAgent,
 	aMedia,
 	aProject,
-	aTask,
 	anAck,
 	aMessage,
 	anUpdate,
 	fakeAgentsApi,
-	fakeApi,
-	fakeTasksApi
+	fakeApi
 } from './testing';
 
 /**
@@ -303,96 +300,8 @@ describe('a project’s own styling', () => {
 			.element(screen.getByRole('heading', { name: 'Garden Game' }))
 			.not.toBeInTheDocument();
 	});
-
-	it('keeps the heading when the flag arrives without a logo', async () => {
-		// The server refuses this pairing, so it can only come from a stale payload
-		// — and a header with neither a logo nor a title would have no name at all.
-		const screen = mountThemed({ logoReplacesName: true });
-
-		await expect.element(screen.getByRole('heading', { name: 'Garden Game' })).toBeInTheDocument();
-	});
 });
 
-/**
- * The two views of one project (design §7).
- *
- * The feed is "what happened" and the board is "what is being worked on". They
- * are two ways of looking at one project rather than two halves of one screen,
- * so each gets the whole centre column and the owner picks.
- */
-describe('the feed and the board', () => {
-	function withBoard(view: 'feed' | 'board' = 'feed') {
-		const api = fakeApi({ seq: 4, projects: [aProject()], items: [anUpdate({ body: 'hello' })] });
-		const stream = new FakeStream();
-		const feed = new Timeline({
-			fetch: api.fetch,
-			openStream: () => stream,
-			schedule: (run) => api.queue.push(run)
-		});
-		const taskApi = fakeTasksApi({ tasks: [aTask({ id: 't7', state: 'todo', title: 'Queued' })] });
-		const tasks = new Tasks({ fetch: taskApi.fetch, openStream: () => new FakeStream() });
-		const remember = { view: () => null, set: vi.fn() };
-
-		return {
-			remember,
-			screen: render(Shell, {
-				snapshot: api.snapshot(),
-				project: 'agent-dashboard',
-				feed,
-				tasks,
-				view,
-				remember
-			})
-		};
-	}
-
-	it('opens on the feed, with the board one tab away', async () => {
-		const { screen } = withBoard();
-
-		await expect.element(screen.getByLabelText('Update timeline')).toBeInTheDocument();
-		expect(document.querySelector('[data-testid="board"]')).toBeNull();
-		await expect.element(screen.getByTestId('tab-feed')).toHaveAttribute('aria-selected', 'true');
-	});
-
-	it('swaps the whole column for the board, and says which tab is on', async () => {
-		const { screen, remember } = withBoard();
-
-		await screen.getByTestId('tab-board').click();
-
-		await expect.element(screen.getByTestId('board')).toBeInTheDocument();
-		// The feed is not underneath it: the board is a view, not a strip.
-		expect(document.querySelector('[data-timeline]')).toBeNull();
-		await expect.element(screen.getByTestId('tab-board')).toHaveAttribute('aria-selected', 'true');
-		expect(remember.set).toHaveBeenCalledWith('board');
-	});
-
-	it('opens straight onto the board when that is what this browser last chose', async () => {
-		const { screen } = withBoard('board');
-
-		await expect.element(screen.getByTestId('board')).toBeInTheDocument();
-	});
-
-	it('goes back to the feed when a card on the board is picked, having filtered it', async () => {
-		const { screen } = withBoard('board');
-
-		await screen.getByTestId('board-task').click();
-
-		// Filtering a feed nobody is looking at is a click that appeared to do
-		// nothing, so the tab follows the filter.
-		await expect.element(screen.getByLabelText('Update timeline')).toBeInTheDocument();
-		await expect.element(screen.getByTestId('tab-feed')).toHaveAttribute('aria-selected', 'true');
-	});
-});
-
-/**
- * Acknowledgements survive the server render (migration 013).
- *
- * This is the regression the feature actually shipped with: the store held the
- * acknowledgements and the component rendered them, and the shell forwarded the
- * snapshot's messages to the thread store **without** its acks — so a tick was
- * missing at first paint and appeared on the next refetch, which reads as the
- * agent having only just answered something it answered an hour ago.
- */
 describe('what agents have said, at first paint', () => {
 	function mountWithAcks() {
 		const update = anUpdate({ id: 'u1', body: 'shipped it' });
@@ -444,15 +353,6 @@ describe('posting to the feed', () => {
 		const scroller = document.querySelector('[data-timeline]');
 		expect(scroller?.querySelector('[data-composer]')).toBeNull();
 		expect(document.querySelector('[data-composer]')).not.toBeNull();
-	});
-
-	it('is not on the board tab, which is for looking at work rather than filing it', async () => {
-		const { screen } = mount();
-
-		await screen.getByTestId('tab-board').click();
-
-		await expect.element(screen.getByRole('tabpanel')).toBeInTheDocument();
-		expect(document.querySelector('[data-composer]')).toBeNull();
 	});
 });
 
@@ -555,5 +455,25 @@ describe('the edge swipe', () => {
 		swipe([200, 400], [40, 405]);
 
 		await expect.element(screen.getByRole('dialog', { name: 'Projects' })).not.toBeInTheDocument();
+	});
+});
+
+/**
+ * Only the feed scrolls (design §7).
+ *
+ * The owner: "can scroll down the entire page… causes some weird bugs like
+ * scrolling down to black or doing it by accident on mobile."
+ */
+describe('pinning the page while the dashboard is up', () => {
+	it('locks the document, and unlocks it again when the shell goes', async () => {
+		const { screen } = mount();
+
+		expect(document.documentElement.classList.contains('app-locked')).toBe(true);
+
+		await screen.unmount();
+
+		// The login page and a shared card are ordinary documents that should
+		// scroll, so the lock cannot outlive the dashboard.
+		expect(document.documentElement.classList.contains('app-locked')).toBe(false);
 	});
 });

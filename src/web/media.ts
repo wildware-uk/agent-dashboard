@@ -83,6 +83,32 @@ export function tileRatio(item: MediaView, total: number): number {
 }
 
 /**
+ * How tall a lone upright item is allowed to get.
+ *
+ * A card is a wide column, so a portrait clip handed the full width becomes a
+ * tower: a 9:16 capture at 42rem is over 1100px tall, which pushes everything
+ * after it off the screen and makes the owner scroll past one video to reach
+ * the next card. The cap is applied as a *width* limit rather than a height one
+ * ({@link tileMaxWidth}) because the box keeps its aspect ratio either way, and
+ * capping the height instead would letterbox the clip inside a box wider than
+ * itself.
+ */
+export const UPRIGHT_CAP = 'min(26rem, 65vh)';
+
+/**
+ * The widest a cell may be, as a CSS length, or `null` for no limit.
+ *
+ * Only a lone upright item is limited. A grid of several already uses the
+ * uniform landscape cell, and a landscape item is bounded by the column.
+ */
+export function tileMaxWidth(item: MediaView, total: number): string | null {
+	const ratio = tileRatio(item, total);
+	if (ratio >= 1) return null;
+
+	return `calc(${ratio} * ${UPRIGHT_CAP})`;
+}
+
+/**
  * The intrinsic size for the `width`/`height` attributes, or `null`.
  *
  * Set alongside the CSS box rather than instead of it: the attributes are what a
@@ -108,9 +134,80 @@ export function gridColumns(count: number): number {
 	return 3;
 }
 
+/**
+ * The three parts of a card's attachments, each shown the way it is used.
+ *
+ * A `file` is not a picture and does not belong in a grid of squares — a zip in
+ * a 4:3 cell would be an empty box with a name in it. So the grid keeps images
+ * and video, and files are listed underneath as rows you can read the name of
+ * (migration 026).
+ *
+ * Sound is its own part for the same reason (migration 038). There is nothing to
+ * look at, so a tile would be a black square; but there *is* something to do
+ * with it, so a download row would bury the one thing the owner wants, which is
+ * a play button. The owner: "sound files, that can be played directly in the
+ * dashboard."
+ */
+export function splitMedia(items: readonly MediaView[]): {
+	tiles: MediaView[];
+	sounds: MediaView[];
+	files: MediaView[];
+} {
+	return {
+		tiles: items.filter((item) => item.kind === 'image' || item.kind === 'video'),
+		sounds: items.filter((item) => item.kind === 'audio'),
+		files: items.filter((item) => item.kind === 'file')
+	};
+}
+
+/**
+ * Where a file is downloaded from.
+ *
+ * The same closed address as everything else — `original` is the only variant a
+ * file has — and the response carries `Content-Disposition: attachment`
+ * (`src/http/media/serve.ts`), so the browser saves it rather than showing it.
+ * That is the server's decision, not this link's: a `download` attribute here
+ * would be a hint, and the header is the rule.
+ */
+export function downloadUrl(item: MediaView, prefix = ''): string | null {
+	if (item.kind !== 'file' || !has(item, 'original')) return null;
+	return mediaUrl(item.id, 'original', prefix);
+}
+
+/** What to call a file on screen when nobody wrote a name down. */
+export const UNNAMED_FILE = 'Untitled file';
+
+/** The name a file tile shows. */
+export function fileName(item: MediaView): string {
+	const name = item.filename?.trim();
+	return name && name.length > 0 ? name : UNNAMED_FILE;
+}
+
+/**
+ * A size somebody can read at a glance: `4 KB`, `1.4 MB`.
+ *
+ * Powers of 1024 with the usual short units, one decimal place only where it
+ * changes the answer. Zero is "empty" rather than "0 B", because a zero-byte
+ * download is a thing worth noticing rather than a measurement.
+ */
+export function fileSize(bytes: number): string {
+	if (!Number.isFinite(bytes) || bytes <= 0) return 'empty';
+	if (bytes < 1024) return `${Math.round(bytes)} B`;
+
+	const units = ['KB', 'MB', 'GB', 'TB'];
+	let value = bytes / 1024;
+	let unit = 0;
+	while (value >= 1024 && unit < units.length - 1) {
+		value /= 1024;
+		unit += 1;
+	}
+
+	return `${value < 10 ? value.toFixed(1) : Math.round(value)} ${units[unit]}`;
+}
+
 /** What a grid cell shows for an image: the small thumbnail (design §6 step 4). */
 export function thumbSrc(item: MediaView, prefix = ''): string | null {
-	if (!renderable(item)) return null;
+	if (!renderable(item) || item.kind === 'file' || item.kind === 'audio') return null;
 	if (item.kind === 'video') return posterSrc(item, prefix);
 	return firstOf(item, prefix, 'thumb-640', 'thumb-1600', 'original');
 }
@@ -133,7 +230,9 @@ export function thumbSrcset(item: MediaView, prefix = ''): string | undefined {
  * is still one click away at its own address.
  */
 export function viewSrc(item: MediaView, prefix = ''): string | null {
-	if (!renderable(item) || item.kind === 'video') return null;
+	// A file is a download, never a picture to enlarge — even though `original`
+	// answers for one, which is exactly the trap this guard exists for.
+	if (!renderable(item) || item.kind !== 'image') return null;
 	return firstOf(item, prefix, 'thumb-1600', 'original');
 }
 
@@ -141,6 +240,18 @@ export function viewSrc(item: MediaView, prefix = ''): string | null {
 export function videoSrc(item: MediaView, prefix = ''): string | null {
 	if (!renderable(item) || item.kind !== 'video') return null;
 	return firstOf(item, prefix, 'video', 'original');
+}
+
+/**
+ * The playable source for a sound (migration 038).
+ *
+ * The original, always: every type on the audio allowlist is one a browser
+ * plays as it stands, so nothing is transcoded and there is no second address to
+ * choose between.
+ */
+export function audioSrc(item: MediaView, prefix = ''): string | null {
+	if (!renderable(item) || item.kind !== 'audio') return null;
+	return firstOf(item, prefix, 'original');
 }
 
 /** The poster frame, which is what a video shows until it is played. */
@@ -170,6 +281,22 @@ export function durationLabel(ms: number | null): string | null {
  * state, because "image 1 of 3" beside an empty box is not the whole truth.
  */
 export function mediaLabel(item: MediaView, index: number, total: number): string {
+	// A file has a name, which is the one attachment that can say what it is.
+	if (item.kind === 'file') {
+		const position = `${fileName(item)}, ${fileSize(item.bytes)}`;
+		if (item.status === 'pending') return `${position}, still being stored`;
+		if (item.status === 'failed') return `${position}, could not be stored`;
+		return `Download ${position}`;
+	}
+
+	if (item.kind === 'audio') {
+		const length = durationLabel(item.durationMs ?? null);
+		const position = `Sound ${index + 1} of ${total}${length ? `, ${length}` : ''}`;
+		if (item.status === 'pending') return `${position}, still processing`;
+		if (item.status === 'failed') return `${position}, could not be processed`;
+		return position;
+	}
+
 	const noun = item.kind === 'video' ? 'Video' : 'Image';
 	const position = `${noun} ${index + 1} of ${total}`;
 	if (item.status === 'pending') return `${position}, still processing`;

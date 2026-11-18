@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { EXCERPT_MAX_LENGTH, excerpt, renderMarkdown } from './markdown';
+import { EXCERPT_MAX_LENGTH, RENDER_CACHE_MAX, excerpt, renderMarkdown } from './markdown';
 
 /**
  * The security test of this slice (design §8). Every case below is something an
@@ -162,5 +162,32 @@ describe('excerpt', () => {
 
 	it('has nothing to say about an empty body', () => {
 		expect(excerpt('   \n  ')).toBe('');
+	});
+});
+
+describe('rendering the same body twice', () => {
+	it('gives the identical string back, so a refetch re-parses nothing', () => {
+		const body = '# Ticket\n\n```ts\nconst x = 1;\n```\n';
+
+		const first = renderMarkdown(body);
+		const second = renderMarkdown(body);
+
+		// Identity, not equality: this is the whole point of the cache, and an
+		// equality assertion would pass with the parser run twice.
+		expect(second).toBe(first);
+	});
+
+	it('renders a corrected body rather than the one it replaced', () => {
+		expect(renderMarkdown('the build is green')).toContain('green');
+		expect(renderMarkdown('the build is red')).toContain('red');
+	});
+
+	it('does not grow without bound', () => {
+		for (let at = 0; at < RENDER_CACHE_MAX + 50; at++) renderMarkdown(`body ${at}`);
+
+		// The oldest went; the newest is still there and still identical on a
+		// second call, which is what the cap must not break.
+		const recent = renderMarkdown(`body ${RENDER_CACHE_MAX + 49}`);
+		expect(renderMarkdown(`body ${RENDER_CACHE_MAX + 49}`)).toBe(recent);
 	});
 });

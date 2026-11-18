@@ -28,11 +28,12 @@ type Row = {
 	edited_at: number | null;
 	priority: UpdatePriority;
 	task_id: string | null;
-	replies_seen_at: number | null;
+	status: string | null;
+	status_at: number | null;
 };
 
 const COLUMNS = `seq, id, project_id, agent_id, session_id, title, body, level, pinned,
-	created_at, deleted_at, edited_at, priority, task_id, replies_seen_at`;
+	created_at, deleted_at, edited_at, priority, task_id, status, status_at`;
 
 function toUpdate(row: Row): Update {
 	return {
@@ -50,7 +51,8 @@ function toUpdate(row: Row): Update {
 		editedAt: row.edited_at,
 		priority: row.priority,
 		taskId: row.task_id,
-		repliesSeenAt: row.replies_seen_at
+		status: row.status as Update['status'],
+		statusAt: row.status_at
 	};
 }
 
@@ -219,25 +221,6 @@ export function setUpdatePinned(db: Db, id: string, pinned: boolean): Update | u
 			`UPDATE updates SET pinned = ? WHERE id = ? RETURNING ${COLUMNS}`
 		)
 		.get(flagOf(pinned), id);
-
-	return row && toUpdate(row);
-}
-
-/**
- * Stamp when the owner last read the conversation on one card.
- *
- * Deliberately not part of {@link editUpdate} or {@link setUpdatePinned}: those
- * change what the card *is* and belong to whoever wrote it. Reading its replies
- * changes nothing about the card and is nobody's business but the owner's.
- */
-export function markRepliesSeen(db: Db, id: string, at: number): Update | undefined {
-	const row = db
-		.prepare<[number, string], Row>(
-			`UPDATE updates SET replies_seen_at = ?
-			 WHERE id = ? AND deleted_at IS NULL
-			 RETURNING ${COLUMNS}`
-		)
-		.get(at, id);
 
 	return row && toUpdate(row);
 }

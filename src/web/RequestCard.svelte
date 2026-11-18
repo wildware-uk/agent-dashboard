@@ -32,16 +32,56 @@
 	 * server validates every answer against the request that asked for it
 	 * (`src/domain/requests.ts`), because a browser is not a trustworthy client.
 	 *
+	 * **A question can be talked over before it is answered** (migration 032).
+	 * The owner: "allow me to reply to form questions, so I can discuss with the
+	 * agent before giving the answer." So the card carries a thread like every
+	 * other card does, and the buttons stay exactly where they were — asking
+	 * "why?" is not answering, and the question stays open while the two of them
+	 * work it out.
+	 *
+	 * The thread is handed down rather than fetched, as an update card's is: the
+	 * page reads every thread in one request (`threads.svelte.ts`).
+	 *
 	 * Mobile is not a fallback (design §7). At 375px the actions wrap, the option
 	 * rows are full width, every control is at least 44px tall, and nothing is
 	 * revealed by hover — a request has to be answerable on a phone, because that
 	 * is where the owner often is when an agent stops.
 	 */
 	import Avatar from './Avatar.svelte';
+	import CardActions from './CardActions.svelte';
+	import Clamp from './Clamp.svelte';
+	import Discussion from './Thread.svelte';
+	import Reactions from './Reactions.svelte';
+	import Embeds from './Embeds.svelte';
+	import Markdown from './Markdown.svelte';
+	import MediaGrid from './MediaGrid.svelte';
 	import { agentLabel } from './avatar';
 	import { actionMessage, type OwnerActions } from './actions';
-	import { expiryLabel } from './days';
-	import type { RequestFormValue, RequestView } from './types';
+	import { absoluteLabel, expiryLabel } from './days';
+	import { summaryOf } from './summary';
+	import Apps from './Apps.svelte';
+	import CardFields from './CardFields.svelte';
+	import TagChips from './TagChips.svelte';
+	import UnreadBadge from './UnreadBadge.svelte';
+	import { whenVisible } from './visible';
+	import { foldsOnClick } from './headerclick';
+	import { thumbSrc } from './media';
+	import { hasNativeComposer, replyInApp } from './native-composer';
+	import { onMount } from 'svelte';
+	import type {
+		AckView,
+		DeliveryView,
+		EmbedView,
+		MediaView,
+		MessageView,
+		ReactionView,
+		RequestFormValue,
+		RequestView,
+		AppView,
+		CardFieldView,
+		CardTagView,
+		TagView
+	} from './types';
 
 	let {
 		request,
@@ -55,13 +95,78 @@
 		projectName = null,
 		/** Arrived over the stream, so it animates in exactly once. */
 		isNew = false,
-		actions
+		actions,
+		/**
+		 * The discussion on this question, oldest first (migration 032).
+		 *
+		 * Empty is the common case and renders as the reply box alone, which is
+		 * the point: somewhere to ask "why do you want to do that?" without
+		 * answering anything.
+		 */
+		messages = [],
+		/** Agent id to display name, for the other speakers in the discussion. */
+		agentNames = {},
+		acks = {},
+		onlineIds = [],
+		messageMedia = {},
+		messageEmbeds = {},
+		messageDeliveries = {},
+		messageReactions = {},
+		/** The emoji on the question itself (migration 034). */
+		reactions = [],
+		/**
+		 * Whether this card carries its own discussion (migration 032).
+		 *
+		 * False for a question asked *inside* a thread (migration 022): that
+		 * conversation is already on screen, one box above the card, and a second
+		 * one would be two ways to say the same thing in the same place.
+		 */
+		discussable = true,
+		/**
+		 * Folded away by the owner (design §7).
+		 *
+		 * The question and its controls stay: a folded question is still waiting on
+		 * an answer, and hiding the buttons would hide the reason the card exists.
+		 * What goes is the detail, what it carried, and the discussion.
+		 */
+		collapsed = false,
+		oncollapse = undefined,
+		/** The words the projects on this page know (migration 039). */
+		tags = [],
+		/** What is noted on the cards on this page (migration 040). */
+		cardFields = [],
+		/** The apps showing on the cards on this page (migration 041). */
+		cardApps = [],
+		/** Where those words are worn, across every card on this page. */
+		cardTags = [],
+		/** How many comments in this question's discussion are new (design §7). */
+		unread = 0,
+		/** Called once the card has been on screen long enough to count as read. */
+		onseen = undefined
 	}: {
 		request: RequestView;
 		agentName?: string;
 		projectName?: string | null;
 		isNew?: boolean;
 		actions: OwnerActions;
+		messages?: MessageView[];
+		agentNames?: Record<string, string>;
+		acks?: Record<string, AckView[]>;
+		onlineIds?: string[];
+		messageMedia?: Record<string, MediaView[]>;
+		messageEmbeds?: Record<string, EmbedView[]>;
+		messageDeliveries?: Record<string, DeliveryView[]>;
+		messageReactions?: Record<string, ReactionView[]>;
+		reactions?: ReactionView[];
+		discussable?: boolean;
+		tags?: TagView[];
+		cardFields?: CardFieldView[];
+		cardApps?: AppView[];
+		cardTags?: CardTagView[];
+		unread?: number;
+		onseen?: () => void;
+		collapsed?: boolean;
+		oncollapse?: (collapsed: boolean) => void;
 	} = $props();
 
 	let busy = $state(false);
@@ -139,6 +244,27 @@
 		}
 	}
 
+	/**
+	 * Inside the iPhone app a typed answer is written in the app's own bar, so
+	 * the card shows a button rather than a second text box. Read after mount:
+	 * the server cannot know, and guessing would make hydration disagree.
+	 */
+	let inApp = $state(false);
+	onMount(() => {
+		inApp = hasNativeComposer();
+	});
+	const answersInApp = $derived(inApp && request.kind === 'text');
+
+	function answerInApp(): void {
+		replyInApp(
+			`Answer ${asker}`,
+			async (value) => {
+				await actions.answerRequest(request.id, value);
+			},
+			text
+		);
+	}
+
 	function submit(): void {
 		if (!ready) return;
 		if (request.kind === 'text') void answer(text.trim());
@@ -146,12 +272,48 @@
 		else if (request.kind === 'multi_choice') void answer(ticked);
 	}
 
+	/**
+	 * Talk about the question instead of answering it (migration 032).
+	 *
+	 * Posting is the action client's job, as it is on every other card: the write
+	 * publishes `message.created`, the tab hears it and the thread refetches, so
+	 * the line arrives here the same way it arrives in a tab that was only
+	 * watching (design §4).
+	 */
+	async function discuss(body: string, mediaIds: string[] = [], answers?: string): Promise<void> {
+		await actions.postMessage({
+			request: request.id,
+			body,
+			...(mediaIds.length > 0 ? { mediaIds } : {}),
+			...(answers ? { answers } : {})
+		});
+	}
+
 	/** One option row: a full-width target that shows its own selected state. */
+	/**
+	 * Picture questions: the image an agent put on each option. Shown on the
+	 * option itself rather than in the card's pictures, so the owner picks the
+	 * picture rather than matching a picture to a word.
+	 */
+	const optionMedia = $derived(request.config?.optionMedia ?? {});
+	const pictureIds = $derived(new Set(Object.values(optionMedia)));
+	const looseMedia = $derived((request.media ?? []).filter((item) => !pictureIds.has(item.id)));
+	function pictureOf(option: string): string | null {
+		const id = optionMedia[option];
+		const item = id ? request.media?.find((media) => media.id === id) : undefined;
+		return item ? thumbSrc(item) : null;
+	}
+
 	const OPTION_ROW =
 		'flex min-h-11 min-w-0 cursor-pointer items-center gap-2.5 rounded-md border border-border-subtle px-3 py-1.5 text-sm text-content transition-colors hover:border-content-muted hover:bg-surface has-checked:border-amber-500 has-checked:bg-amber-500/10';
 </script>
 
 <article
+	use:whenVisible={{
+		// A folded card hides its thread, so being on screen is not reading it.
+		enabled: unread > 0 && onseen !== undefined && !collapsed,
+		onvisible: () => onseen?.()
+	}}
 	data-testid="request-card"
 	data-request-id={request.id}
 	data-kind={request.kind}
@@ -166,7 +328,28 @@
 	<Avatar name={asker} />
 
 	<div class="flex min-w-0 flex-1 flex-col gap-3">
-		<header class="flex flex-wrap items-baseline gap-x-2 gap-y-1 text-sm">
+		<!--
+			Folding by clicking the header (design §7). The owner: "clicking on any
+			empty part (or the title) of the header of a card should collapse and
+			expand it." `headerclick.ts` decides what counts as empty — the work
+			chip, the pin and the chevron all still do their own job, and a click
+			that was really a text selection is left alone.
+
+			The chevron in {@link CardActions} stays the labelled, focusable control,
+			which is why this handler has no keyboard half: a header that is itself a
+			tab stop, full of buttons that are tab stops, is worse to move through
+			than one that is not.
+		-->
+		<!-- svelte-ignore a11y_click_events_have_key_events -->
+		<!-- svelte-ignore a11y_no_static_element_interactions -->
+		<header
+			class="flex flex-wrap items-baseline gap-x-2 gap-y-1 text-sm {oncollapse
+				? 'cursor-pointer'
+				: ''}"
+			onclick={(event: MouseEvent) => {
+				if (oncollapse && foldsOnClick(event)) oncollapse(!collapsed);
+			}}
+		>
 			<span class="font-medium text-content">{asker}</span>
 			<!--
 				A solid amber chip with black ink, not a semantic token and not a
@@ -186,23 +369,104 @@
 					{projectName}
 				</span>
 			{/if}
+			{#if actions}
+				<!--
+					The controls every card has (migration 034). A question can be kept
+					at the top of the feed like anything else; it is not deleted here —
+					"Dismiss" below is what ends one, and it tells the agent why.
+				-->
+				<CardActions
+					noun="question"
+					{collapsed}
+					{oncollapse}
+					pinned={request.pinned ?? false}
+					onpin={(pinned) => actions.pinCard('request', request.id, pinned)}
+				/>
+			{/if}
+			{#if request.editedAt}
+				<!--
+					The asking agent rewrote the question (migration 033). Said out loud,
+					because an owner half way through deciding has to be able to tell that
+					what they are answering has moved.
+				-->
+				<span
+					class="text-xs text-content-muted italic"
+					data-testid="request-edited"
+					title="Edited {absoluteLabel(request.editedAt)}"
+				>
+					edited
+				</span>
+			{/if}
+			<UnreadBadge count={unread} />
 			<span class="ml-auto text-xs text-content-muted tabular-nums" data-testid="request-expiry">
 				{expires}
 			</span>
 		</header>
 
+		<!-- The project's own words (migration 039), above the question itself. -->
+		<TagChips
+			card={{ kind: 'request', id: request.id }}
+			projectId={request.projectId}
+			{tags}
+			worn={cardTags}
+			ontag={(tagId, on) => actions.tagCard('request', request.id, tagId, on)}
+			oncreate={async (name, colour) => {
+				const made = await actions.defineTag(request.projectId ?? '', name, colour);
+				await actions.tagCard('request', request.id, made.id, true);
+			}}
+			onrecolour={async (tagId, colour) => {
+				await actions.renameTag(tagId, { colour });
+			}}
+		/>
+
 		<div class="flex min-w-0 flex-col gap-1.5">
-			<p class="min-w-0 text-base font-semibold tracking-tight break-words text-content">
+			<!-- The question is this card's title, and folds like one. -->
+			<!-- svelte-ignore a11y_click_events_have_key_events -->
+			<!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+			<p
+				class="min-w-0 text-base font-semibold tracking-tight break-words text-content {oncollapse
+					? 'cursor-pointer'
+					: ''}"
+				onclick={(event: MouseEvent) => {
+					if (oncollapse && foldsOnClick(event)) oncollapse(!collapsed);
+				}}
+			>
 				{request.question}
 			</p>
-			{#if request.detail}
-				<p class="min-w-0 text-sm break-words whitespace-pre-wrap text-content-muted">
-					{request.detail}
+			{#if request.detail && !collapsed}
+				<!--
+					Markdown, through the same renderer every other card uses, with raw
+					HTML disabled (design §8). It was plain text until migration 030, for
+					no reason anybody had decided — an agent explaining a decision writes
+					the same prose here as it does in an update.
+
+					Shortened when it runs long, as every other card's words are.
+				-->
+				{@const detail = request.detail}
+				<div class="min-w-0 text-content-muted">
+					<Clamp noun="the whole explanation">
+						<Markdown body={detail} />
+					</Clamp>
+				</div>
+			{:else if request.detail}
+				<p class="min-w-0 truncate text-sm text-content-muted" data-testid="card-summary">
+					{summaryOf(request.detail)}
 				</p>
 			{/if}
 		</div>
 
-		{#if request.kind === 'text' || request.kind === 'form'}
+		<!--
+			What the question is about (migration 030). The owner asked for every card
+			type to support the same things, and this is the one that most obviously
+			needed it: "does this look right" cannot be asked without the thing being
+			looked at.
+		-->
+		{#if !collapsed}
+			<MediaGrid items={looseMedia} />
+			<Embeds items={request.embeds ?? []} />
+		{/if}
+
+		{#if (request.kind === 'text' && !answersInApp) || request.kind === 'form'}
 			<label class="flex min-w-0 flex-col gap-1">
 				<!--
 					A form's field is named on screen, because the owner is being asked to
@@ -254,6 +518,14 @@
 							onchange={() => (picked = option)}
 							class="size-4 shrink-0 text-amber-500 focus:ring-amber-500"
 						/>
+						{#if pictureOf(option)}
+							<img
+								src={pictureOf(option)}
+								alt=""
+								class="size-16 shrink-0 rounded object-cover"
+								loading="lazy"
+							/>
+						{/if}
 						<span class="min-w-0 break-words">{option}</span>
 					</label>
 				{/each}
@@ -272,6 +544,14 @@
 							onchange={(event) => toggle(option, event.currentTarget.checked)}
 							class="size-4 shrink-0 rounded text-amber-500 focus:ring-amber-500"
 						/>
+						{#if pictureOf(option)}
+							<img
+								src={pictureOf(option)}
+								alt=""
+								class="size-16 shrink-0 rounded object-cover"
+								loading="lazy"
+							/>
+						{/if}
 						<span class="min-w-0 break-words">{option}</span>
 					</label>
 				{/each}
@@ -326,11 +606,31 @@
 						type="button"
 						disabled={busy}
 						onclick={() => void answer(option)}
-						class="min-h-11 rounded-md border border-border-subtle bg-surface px-4 text-sm font-medium text-content transition-colors hover:border-amber-500 hover:bg-amber-500/10 disabled:opacity-50"
+						class="flex min-h-11 flex-col items-center justify-center gap-1.5 rounded-md border border-border-subtle bg-surface px-4 text-sm font-medium text-content transition-colors hover:border-amber-500 hover:bg-amber-500/10 disabled:opacity-50 {pictureOf(
+							option
+						)
+							? 'p-2'
+							: ''}"
 					>
+						{#if pictureOf(option)}
+							<img
+								src={pictureOf(option)}
+								alt=""
+								class="size-28 rounded object-cover"
+								loading="lazy"
+							/>
+						{/if}
 						{option}
 					</button>
 				{/each}
+			{:else if answersInApp}
+				<button
+					type="button"
+					onclick={answerInApp}
+					class="min-h-11 rounded-md bg-emerald-700 px-4 text-sm font-medium text-white transition-colors hover:bg-emerald-600"
+				>
+					Answer
+				</button>
 			{:else}
 				<button
 					type="button"
@@ -351,5 +651,57 @@
 				Dismiss
 			</button>
 		</div>
+
+		<!--
+			The apps on this card (migration 041): interactive UI an agent shipped,
+			run in a sandboxed frame. Collapsed until it is asked for — an app is
+			somebody else's code, and scrolling past a card is not asking to run it.
+		-->
+		<Apps card={{ kind: 'request', id: request.id }} apps={cardApps} {actions} />
+
+		<!-- What is known about this question (migration 040), behind one line. -->
+		<CardFields
+			card={{ kind: 'request', id: request.id }}
+			fields={cardFields}
+			onset={(name, value) => actions.setCardField('request', request.id, name, value)}
+		/>
+
+		<!--
+			The emoji on the question itself (migration 034) — 👀 while the owner
+			thinks about it, 👍 from another agent that wants the same thing.
+		-->
+		<Reactions
+			{reactions}
+			{agentNames}
+			onreact={async (emoji) => {
+				await actions.reactToCard('request', request.id, emoji);
+			}}
+		/>
+
+		<!--
+			Talking it over before deciding (migration 032). Under the controls, not
+			above them: the answer is still what the agent is waiting for, and a
+			reply box between the question and its buttons would read as the way to
+			respond.
+		-->
+		{#if discussable && !collapsed}
+			<Discussion
+				{messages}
+				{agentNames}
+				{acks}
+				{onlineIds}
+				media={messageMedia}
+				embeds={messageEmbeds}
+				{cardApps}
+				deliveries={messageDeliveries}
+				reactions={messageReactions}
+				{actions}
+				uploader={actions}
+				ondelete={async (id) => {
+					await actions.deleteMessage(id);
+				}}
+				onreply={discuss}
+			/>
+		{/if}
 	</div>
 </article>

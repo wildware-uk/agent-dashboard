@@ -27,6 +27,9 @@
  *   with a thumbnail row and no poster row would look ready to a UI. If anything
  *   fails, nothing is recorded, the status becomes `failed`, and the reason is
  *   written next to the bytes.
+ * - **A `file` derives nothing and is ready immediately** (migration 026). It is
+ *   not rendered, so there is no thumbnail to make and no format to normalise;
+ *   the pass exists for it only to flip the status the rest of the product reads.
  */
 import {
 	findMediaById,
@@ -128,6 +131,36 @@ export async function processMedia(
 	if (media.sha256 === '') return skipped(id, 'bytes never landed');
 	if (media.status === 'ready' && !options.force) return skipped(id, 'already ready');
 
+	// A `file` has nothing to derive (migration 026): there is no thumbnail for a
+	// zip and no poster for a CSV. It still has to become `ready`, because that is
+	// the status a card switches on and the sweeper's cutoff for "attached to
+	// nothing" — and it is ready the instant its bytes land, which is now.
+	if (media.kind === 'file') {
+		await rm(failureFile(settings, media.id), { force: true }).catch(() => {});
+
+		const updated = setMediaStatus(db, media.id, { status: 'ready' }) ?? media;
+		const published = !options.force;
+		if (published) {
+			(options.bus ?? defaultBus).publish('media.ready', {
+				mediaId: updated.id,
+				updateId: updated.updateId,
+				messageId: updated.messageId,
+				requestId: updated.requestId,
+				kind: updated.kind
+			});
+		}
+
+		return {
+			status: 'ready',
+			mediaId: media.id,
+			variants: ['original'],
+			width: null,
+			height: null,
+			durationMs: null,
+			published
+		};
+	}
+
 	if (!isAllowedMime(media.mime)) {
 		// Unreachable through ingest, which sniffs; reachable through a hand-edited
 		// row, and serving is refused for those too (`./serve.ts`).
@@ -138,7 +171,9 @@ export async function processMedia(
 		const measured =
 			media.kind === 'video'
 				? await deriveVideo(settings, media, options)
-				: await deriveImage(settings, media);
+				: media.kind === 'audio'
+					? await deriveAudio(settings, media, options)
+					: await deriveImage(settings, media);
 
 		for (const file of measured.files) {
 			upsertDerivative(db, {
@@ -174,6 +209,8 @@ export async function processMedia(
 				// Read back rather than remembered: an update may have claimed this
 				// media while the transcode was running.
 				updateId: updated.updateId,
+				messageId: updated.messageId,
+				requestId: updated.requestId,
 				kind: updated.kind
 			});
 		}
@@ -294,6 +331,39 @@ async function deriveImage(settings: MediaSettings, media: Media): Promise<Measu
  * No thumbnails: design §6 gives video a `poster.jpg` and the UI renders that,
  * so generating webp copies of it would be two more files nothing asks for.
  */
+/**
+ * Sound has nothing to derive, only something to measure (migration 038).
+ *
+ * No thumbnail — a waveform picture would be a second file to store, serve and
+ * clean up, for a card that is about to draw a play button anyway. No transcode
+ * either: unlike video, every type on the audio allowlist is one a browser
+ * plays as it stands, which is why that allowlist is four containers rather than
+ * "whatever ffmpeg accepts".
+ *
+ * The duration is worth the probe. It is what the player shows before anybody
+ * presses anything, and "a 42-second voice note" is a different decision from "a
+ * nine-minute one" when you are deciding whether to listen now.
+ *
+ * A file ffprobe cannot read is not a failure here: the bytes were already
+ * sniffed against the allowlist, so they are the type they claim, and a missing
+ * duration costs a label rather than the sound.
+ */
+async function deriveAudio(
+	settings: MediaSettings,
+	media: Media,
+	options: DeriveOptions
+): Promise<Measured> {
+	const source = originalFile(settings, media.id, media.mime);
+	let durationMs: number | null = null;
+	try {
+		durationMs = (await probeVideo(source, options.tools?.ffprobe)).durationMs;
+	} catch {
+		// No ffprobe, or a container it will not read. The sound still plays.
+	}
+
+	return { files: [], width: null, height: null, durationMs };
+}
+
 async function deriveVideo(
 	settings: MediaSettings,
 	media: Media,

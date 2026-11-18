@@ -1,15 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { insertSession } from '$db';
 import { createProject } from './projects';
-import { createTask } from './tasks';
-import {
-	deleteUpdate,
-	editUpdate,
-	listUpdates,
-	markRepliesSeen,
-	postUpdate,
-	setUpdatePinned
-} from './updates';
+import { deleteUpdate, editUpdate, listUpdates, postUpdate, setUpdatePinned } from './updates';
 import { FIXED_NOW, harness, type Harness } from './testing';
 
 let h: Harness;
@@ -417,101 +409,9 @@ describe('editUpdate', () => {
  * about where the work belongs.
  */
 describe('updates on a task', () => {
-	it('files an update against a task in the same project', () => {
-		const task = createTask(h, { project: 'agent-dashboard', title: 'Ship it' });
-
-		const update = postUpdate(h, {
-			project: 'agent-dashboard',
-			agentId,
-			body: 'step 3 of 7',
-			taskId: task.id
-		});
-
-		expect(update.taskId).toBe(task.id);
-	});
-
 	it('is null for the ordinary update, which is most of them', () => {
 		expect(
 			postUpdate(h, { project: 'agent-dashboard', agentId, body: 'a note' }).taskId
 		).toBeNull();
-	});
-
-	it('refuses a task that does not exist', () => {
-		expect(() =>
-			postUpdate(h, { project: 'agent-dashboard', agentId, body: 'x', taskId: 'nope' })
-		).toThrow(/no such task/);
-	});
-
-	it('refuses a task from another project rather than filing it anyway', () => {
-		const other = createProject(h, { name: 'Other' }).project;
-		const task = createTask(h, { project: other.slug, title: 'Elsewhere' });
-
-		expect(() =>
-			postUpdate(h, { project: 'agent-dashboard', agentId, body: 'x', taskId: task.id })
-		).toThrow(/another project/);
-	});
-
-	it('lists a task’s own updates, newest first', () => {
-		const task = createTask(h, { project: 'agent-dashboard', title: 'Ship it' });
-		postUpdate(h, { project: 'agent-dashboard', agentId, body: 'first', taskId: task.id });
-		postUpdate(h, { project: 'agent-dashboard', agentId, body: 'second', taskId: task.id });
-		postUpdate(h, { project: 'agent-dashboard', agentId, body: 'unrelated' });
-
-		const listed = listUpdates(h, { taskId: task.id }).updates;
-
-		expect(listed.map((update) => update.body)).toEqual(['second', 'first']);
-	});
-});
-
-/**
- * Marking a card's conversation read (migration 015).
- *
- * "Recent replies" lifts a card out of its day while a conversation is live on
- * it. Without this it only ever grew, and the cards riding above the timeline
- * became the ones the owner had been ignoring the longest.
- */
-describe('markRepliesSeen', () => {
-	function post() {
-		return postUpdate(h, { project: projectId, agentId, body: 'shipped it' });
-	}
-
-	it('stamps when the owner read the thread', () => {
-		const update = post();
-
-		expect(markRepliesSeen(h, update.id).repliesSeenAt).toBe(FIXED_NOW);
-	});
-
-	it('starts unread, which is what keeps a fresh conversation at the top', () => {
-		expect(post().repliesSeenAt).toBeNull();
-	});
-
-	it('tells every open tab, so the section clears on both screens', () => {
-		const update = post();
-		h.events.length = 0;
-
-		markRepliesSeen(h, update.id);
-
-		expect(h.eventNames()).toContain('update.updated');
-	});
-
-	it('does not mark the card edited: reading a thread is not editing it', () => {
-		const update = post();
-
-		expect(markRepliesSeen(h, update.id).editedAt).toBeNull();
-	});
-
-	it('is safe to send twice', () => {
-		const update = post();
-		markRepliesSeen(h, update.id);
-
-		expect(markRepliesSeen(h, update.id).repliesSeenAt).toBe(FIXED_NOW);
-	});
-
-	it('refuses an update that is not there, or has been deleted', () => {
-		const update = post();
-		deleteUpdate(h, update.id);
-
-		expect(() => markRepliesSeen(h, update.id)).toThrow();
-		expect(() => markRepliesSeen(h, 'nope')).toThrow();
 	});
 });

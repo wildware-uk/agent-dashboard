@@ -52,10 +52,13 @@
  * place the two vocabularies meet.
  */
 import {
+	attachMediaToRequest,
 	countPendingApprovals,
 	decideApproval,
+	editApprovalRow,
 	expireApprovals,
 	findApprovalById,
+	findMediaById,
 	findMessageById,
 	findUpdateById,
 	insertApproval,
@@ -67,7 +70,9 @@ import {
 	type RequestValue
 } from '$db';
 import { context as sharedContext, type DomainContext } from './context';
+import { attachEmbeds, checkedEmbeds, type NewEmbedInput } from './embeds';
 import { conflict, invalid, notFound } from './errors';
+import { assertAttachableToMessage, MEDIA_PER_UPDATE_MAX } from './media';
 import { resolveProject } from './projects';
 import { optionalText, requiredText } from './text';
 
@@ -141,7 +146,7 @@ export const PENDING_REQUEST_LIMIT = 200;
 export const REQUEST_SWEEP_INTERVAL_MS = 30_000;
 
 /** The states the domain speaks (design §5). The table's are narrower; see above. */
-export type RequestState = 'pending' | 'answered' | 'timeout' | 'cancelled';
+export type RequestState = 'pending' | 'answered' | 'timeout' | 'cancelled' | 'withdrawn';
 
 export type { RequestAnswer, RequestConfig, RequestKind, RequestValue };
 
@@ -168,6 +173,15 @@ export type OwnerRequest = {
 	answeredAt: number | null;
 	/** The typed answer, once there is one. */
 	answer: RequestAnswer | null;
+	/**
+	 * When the asking agent last rewrote the question (migration 033).
+	 *
+	 * Shown on the card: an owner half way through deciding has to be able to
+	 * tell that the question moved under them.
+	 */
+	editedAt: number | null;
+	/** Kept at the top of the feed by the owner (migration 034). */
+	pinned: boolean;
 };
 
 /** What an agent gets back from a wait, whichever tool it called. */
@@ -175,7 +189,8 @@ export type RequestResult =
 	| { state: 'answered'; request: OwnerRequest; response: RequestAnswer; answeredAt: number }
 	| { state: 'pending'; request: OwnerRequest; pollAfterMs: number }
 	| { state: 'timeout'; request: OwnerRequest }
-	| { state: 'cancelled'; request: OwnerRequest };
+	| { state: 'cancelled'; request: OwnerRequest }
+	| { state: 'withdrawn'; request: OwnerRequest };
 
 export type CreateRequestInput = {
 	/** The caller, resolved from its bearer token — never from an argument (§5). */
@@ -183,6 +198,21 @@ export type CreateRequestInput = {
 	kind: RequestKind;
 	question: string;
 	detail?: string | null;
+	/**
+	 * Pictures and files to show with the question (migration 030).
+	 *
+	 * An approval is a card like any other: "does this look right" is a question
+	 * you cannot ask without the thing being looked at.
+	 */
+	mediaIds?: readonly string[];
+	/** Things to show in a registered look, on the same terms (migration 030). */
+	embeds?: readonly NewEmbedInput[];
+	/**
+	 * Picture questions: an uploaded image for some or all of the options, by
+	 * option, for `buttons`, `choice` and `multi_choice`. The owner picks the
+	 * picture itself.
+	 */
+	optionMedia?: Readonly<Record<string, string>> | null;
 	/**
 	 * Required for `buttons`, `choice`, `multi_choice` and `form`; refused for the
 	 * rest. For a `form` these are the actions — the buttons under the field —
@@ -283,9 +313,34 @@ export function createRequest(
 	const question = requiredText(input.question, 'question', QUESTION_MAX_LENGTH);
 	const detail = optionalText(input.detail, 'detail', DETAIL_MAX_LENGTH);
 	const options = assertOptions(kind, input.options);
-	const config = assertConfig(kind, options, input);
+	const baseConfig = assertConfig(kind, options, input);
 	const { projectId, updateId, messageId } = anchor(ctx, input);
 	const timeoutS = assertTimeout(input.timeoutS);
+
+	// Checked before the insert, exactly as a card's are: an approval that
+	// appeared without the screenshot it was asking about would be a decision the
+	// owner is being asked to take with the evidence missing (migration 030).
+	const mediaIds = input.mediaIds?.length
+		? assertAttachableToMessage(ctx, {
+				mediaIds: input.mediaIds,
+				author: `agent:${input.agentId}`
+			})
+		: [];
+	const embeds = input.embeds?.length ? checkedEmbeds(ctx, input.embeds) : [];
+	const optionMedia = checkedOptionMedia(ctx, kind, options, input);
+	if (optionMedia) {
+		const pictures = Object.values(optionMedia);
+		if (pictures.some((id) => mediaIds.includes(id))) {
+			throw invalid('a picture on an option cannot also be in media_ids');
+		}
+		mediaIds.push(...pictures);
+		if (mediaIds.length > MEDIA_PER_UPDATE_MAX) {
+			throw invalid(
+				`a request may carry at most ${MEDIA_PER_UPDATE_MAX} media items, pictures included`
+			);
+		}
+	}
+	const config = optionMedia ? { ...(baseConfig ?? {}), optionMedia } : baseConfig;
 
 	const row = insertApproval(ctx.db, {
 		agentId: input.agentId,
@@ -299,6 +354,14 @@ export function createRequest(
 		config,
 		expiresAt: ctx.now() + timeoutS * 1_000
 	});
+
+	const author = `agent:${input.agentId}`;
+	if (mediaIds.length > 0) {
+		attachMediaToRequest(ctx.db, { mediaIds, requestId: row.id, author });
+	}
+	if (embeds.length > 0) {
+		attachEmbeds(ctx, { embeds, requestId: row.id, agentId: input.agentId, author });
+	}
 
 	const request = toRequest(row);
 	const event = ctx.bus.publish('request.created', {
@@ -360,6 +423,165 @@ export function cancelRequest(ctx: DomainContext, requestId: string): OwnerReque
 	return settle(ctx, row, 'cancelled');
 }
 
+/**
+ * The asking agent takes its own question back (migration 031).
+ *
+ * The owner asked for this in the case that names itself: a question that has
+ * stopped being relevant. An agent that asked "shall I retry the deploy?" and
+ * then watched the deploy succeed had no way to say so, and the question sat on
+ * the banner waiting for a decision that no longer existed.
+ *
+ * Deliberately **not** `cancelRequest` under another name. That one means the
+ * owner declined to answer, and the agent is told so in those words; saying it
+ * about a question the agent itself withdrew would blame the one person who did
+ * nothing. The states stay apart all the way down to the row.
+ *
+ * @throws {@link DomainError} `not_found` for an unknown id, `invalid_argument`
+ *   for another agent's request — an id copied from somewhere must not let one
+ *   agent silence another's question — and `conflict` when it has already
+ *   ended, including the case where the owner answered it a moment ago.
+ */
+export function withdrawRequest(
+	ctx: DomainContext,
+	input: { requestId: string; agentId: string }
+): OwnerRequest {
+	const request = expireIfDue(ctx, ownRequest(ctx, input.requestId, input.agentId));
+	if (request.state !== 'pending') throw settledAlready(request);
+
+	const row = decideApproval(ctx.db, input.requestId, { state: 'withdrawn', at: ctx.now() });
+	// Lost a race with the owner answering, or with the sweeper.
+	if (!row) throw settledAlready(mustFind(ctx, input.requestId));
+
+	return settle(ctx, row, 'withdrawn');
+}
+
+export type EditRequestInput = {
+	requestId: string;
+	/** The asking agent, from its bearer token and never from an argument (§5). */
+	agentId: string;
+	/** Omit to leave it. */
+	question?: string;
+	/** Omit to leave it; `null` clears it. */
+	detail?: string | null;
+	/** Omit to leave them. Only for the kinds that have options at all. */
+	options?: readonly string[];
+	/** Omit to leave it; `null` clears it. The draft a form puts in its field. */
+	default?: string | null;
+};
+
+/**
+ * The asking agent rewrites its own question (migration 033).
+ *
+ * The owner: "let an agent edit any of their messages, questions or comments."
+ * The case that asks for it is a draft: an agent puts a message in a `form`,
+ * spots a mistake in it, and would otherwise have to withdraw the question and
+ * ask a second one — which loses whatever the owner had already typed into the
+ * field and makes the dashboard look like it is stuttering.
+ *
+ * **Pending only, and that is the safety of the whole thing.** An answer is
+ * validated against the options the row carried when it was given, so a settled
+ * question whose options changed afterwards would make the record disagree with
+ * the decision that was made. A question that has ended is history.
+ *
+ * **The kind cannot change.** It decides which control the owner is looking at,
+ * and swapping the buttons under somebody's cursor for a text box is a way to
+ * collect an answer to a question they were never shown. An agent that wants a
+ * different kind withdraws this one and asks again.
+ *
+ * The edit is stated: `editedAt` is set and the card says so, because an owner
+ * half way through deciding has to be able to tell that the question moved.
+ *
+ * @throws {@link DomainError} `not_found` for an unknown id, `invalid_argument`
+ *   for another agent's request, for values this kind does not take, or for an
+ *   edit that changes nothing, and `conflict` once it has ended.
+ */
+export function editRequest(ctx: DomainContext, input: EditRequestInput): OwnerRequest {
+	const request = expireIfDue(ctx, ownRequest(ctx, input.requestId, input.agentId));
+	if (request.state !== 'pending') throw settledAlready(request);
+
+	const edit: Parameters<typeof editApprovalRow>[2] = { editedAt: ctx.now() };
+
+	if (input.question !== undefined) {
+		edit.question = requiredText(input.question, 'question', QUESTION_MAX_LENGTH);
+	}
+	if (input.detail !== undefined) {
+		edit.detail = optionalText(input.detail, 'detail', DETAIL_MAX_LENGTH);
+	}
+	if (input.options !== undefined) {
+		edit.options = assertOptions(request.kind, input.options);
+	}
+
+	// The options the default has to agree with: the new ones when they are being
+	// replaced in the same edit, otherwise the ones already on the row.
+	const options = edit.options ?? request.options;
+
+	if (input.default !== undefined) {
+		const fallback = optionalText(input.default, 'default', TEXT_ANSWER_MAX_LENGTH);
+		if (fallback !== null) {
+			if (request.kind === 'multi_choice') throw invalid('a multi_choice takes no default');
+			if (request.kind === 'confirm' && fallback !== 'true' && fallback !== 'false') {
+				throw invalid('the default for a confirm is "true" or "false"');
+			}
+			// A form's options are its buttons, so its default has nothing to do
+			// with them; every other listed kind's default *is* one of the options.
+			if (options && request.kind !== 'form' && !options.includes(fallback)) {
+				throw invalid('the default must be one of the options');
+			}
+		}
+		// Merged rather than replacing the config: `placeholder`, `label`, `min`
+		// and `max` describe the control the owner is looking at, and an edit of
+		// the draft must not quietly take the field's name away with it.
+		const config = { ...(request.config ?? {}) };
+		if (fallback === null) delete config.default;
+		else config.default = fallback;
+		edit.config = Object.keys(config).length === 0 ? null : config;
+	} else if (edit.options !== undefined && request.config?.default !== undefined) {
+		// New options and an old default that is no longer one of them: the value
+		// would pre-select something that is not on the list any more.
+		const fallback = request.config.default;
+		if (options && request.kind !== 'form' && !options.includes(fallback)) {
+			throw invalid('the default must be one of the options');
+		}
+	}
+
+	// A picture belongs to its option: when the option goes, so does the link.
+	const pictured = request.config?.optionMedia;
+	if (edit.options && pictured) {
+		const kept = Object.fromEntries(
+			Object.entries(pictured).filter(([option]) => edit.options?.includes(option))
+		);
+		if (Object.keys(kept).length !== Object.keys(pictured).length) {
+			const config = { ...(edit.config === undefined ? request.config : (edit.config ?? {})) };
+			if (Object.keys(kept).length > 0) config.optionMedia = kept;
+			else delete config.optionMedia;
+			edit.config = Object.keys(config).length === 0 ? null : config;
+		}
+	}
+
+	if (
+		edit.question === undefined &&
+		edit.detail === undefined &&
+		edit.options === undefined &&
+		edit.config === undefined
+	) {
+		throw invalid('an edit must change the question, the detail, the options or the default');
+	}
+
+	// Lost a race with the owner answering, or with the sweeper.
+	const row = editApprovalRow(ctx.db, request.id, edit);
+	if (!row) throw settledAlready(mustFind(ctx, request.id));
+
+	// No waiter unblocks on this: nothing is settled. The browser refetches the
+	// prompt it is already showing (design §4).
+	ctx.bus.publish('request.updated', {
+		requestId: row.id,
+		agentId: row.agentId,
+		projectId: row.projectId
+	});
+
+	return toRequest(row);
+}
+
 /** What is waiting on the owner right now, longest-blocked first (design §7). */
 export function listPendingRequests(ctx: DomainContext): OwnerRequest[] {
 	const now = ctx.now();
@@ -391,6 +613,36 @@ export function findRequest(ctx: DomainContext, requestId: string): OwnerRequest
  */
 export function countPendingRequests(ctx: DomainContext, agentId: string): number {
 	return countPendingApprovals(ctx.db, agentId);
+}
+
+/**
+ * The same count, narrowed to what one connection subscribed to.
+ *
+ * Deliberately *not* what {@link countPendingRequests} does, and for exactly the
+ * reason the message and task counts are split the same way (`./messages.ts`,
+ * `./tasks.ts`): a heartbeat answers "is anything waiting on me anywhere", and a
+ * live stream answers "should I interrupt this agent right now".
+ *
+ * This was the one of the three that had been left unscoped, and the shape of
+ * the bug is worth writing down. Sessions share a bearer token, so they are one
+ * agent — and a request raised in one project therefore lit up
+ * `pending_approvals` on every other session of that token, in every project,
+ * whatever each had subscribed to. The owner saw it as one project's questions
+ * being announced to every agent they were running.
+ *
+ * - a **list** — those projects, plus requests filed under no project at all.
+ * - **`null`** — every project, asked for explicitly with `?project=*`.
+ * - **`undefined`** — no opinion, so fall back to every project.
+ */
+export function countPendingRequestsInScope(
+	ctx: DomainContext,
+	agentId: string,
+	subscribed: readonly string[] | null | undefined
+): number {
+	if (subscribed === null || subscribed === undefined) {
+		return countPendingApprovals(ctx.db, agentId);
+	}
+	return countPendingApprovals(ctx.db, agentId, subscribed);
 }
 
 /**
@@ -561,11 +813,16 @@ function resultFor(request: OwnerRequest): RequestResult {
 	}
 	if (request.state === 'timeout') return { state: 'timeout', request };
 	if (request.state === 'cancelled') return { state: 'cancelled', request };
+	if (request.state === 'withdrawn') return { state: 'withdrawn', request };
 	return { state: 'pending', request, pollAfterMs: POLL_AFTER_MS };
 }
 
 /** Publish the one settling event, and hand back the request it settled. */
-function settle(ctx: DomainContext, row: Approval, state: 'answered' | 'timeout' | 'cancelled') {
+function settle(
+	ctx: DomainContext,
+	row: Approval,
+	state: 'answered' | 'timeout' | 'cancelled' | 'withdrawn'
+) {
 	const request = toRequest(row);
 	ctx.bus.publish('request.answered', {
 		requestId: request.id,
@@ -615,6 +872,7 @@ function settledAlready(request: OwnerRequest) {
 		answered: 'has already been answered',
 		timeout: 'timed out',
 		cancelled: 'was dismissed',
+		withdrawn: 'was withdrawn',
 		pending: 'is still pending'
 	}[request.state];
 	return conflict(`request ${request.id} ${said}`);
@@ -633,7 +891,10 @@ function scalarOf(answer: RequestAnswer): string | null {
 /** The row's two settled states become one, and the JSON columns are decoded. */
 function toRequest(row: Approval): OwnerRequest {
 	const state: RequestState =
-		row.state === 'pending' || row.state === 'timeout' || row.state === 'cancelled'
+		row.state === 'pending' ||
+		row.state === 'timeout' ||
+		row.state === 'cancelled' ||
+		row.state === 'withdrawn'
 			? row.state
 			: 'answered';
 
@@ -652,7 +913,9 @@ function toRequest(row: Approval): OwnerRequest {
 		state,
 		expiresAt: row.expiresAt,
 		answeredAt: row.decidedAt,
-		answer: answerOf(row)
+		answer: answerOf(row),
+		editedAt: row.editedAt,
+		pinned: row.pinned
 	};
 }
 
@@ -696,6 +959,38 @@ function assertOptions(kind: RequestKind, options: readonly string[] | null | un
 	if (list.length > OPTIONS_MAX) throw invalid(`at most ${OPTIONS_MAX} options`);
 	if (new Set(list).size !== list.length) throw invalid('options must be distinct');
 	return list;
+}
+
+/** The kinds whose options are things to pick, and so can be pictures. */
+const PICTURED: readonly RequestKind[] = ['buttons', 'choice', 'multi_choice'];
+
+/**
+ * The pictures on the options: each for an option that was offered, each an
+ * image the agent uploaded and has not used, and no picture twice.
+ */
+function checkedOptionMedia(
+	ctx: DomainContext,
+	kind: RequestKind,
+	options: string[] | null,
+	input: CreateRequestInput
+): Record<string, string> | null {
+	const given = input.optionMedia;
+	if (!given || Object.keys(given).length === 0) return null;
+	if (!PICTURED.includes(kind)) {
+		throw invalid('pictures on options are for a buttons, choice or multi_choice request');
+	}
+	for (const option of Object.keys(given)) {
+		if (!options?.includes(option)) throw invalid(`${option} is not one of the options`);
+	}
+	const ids = Object.values(given);
+	if (new Set(ids).size !== ids.length) throw invalid('each picture may be used once');
+	assertAttachableToMessage(ctx, { mediaIds: ids, author: `agent:${input.agentId}` });
+	for (const id of ids) {
+		if (findMediaById(ctx.db, id)?.kind !== 'image') {
+			throw invalid(`media ${id} must be an image to go on an option`);
+		}
+	}
+	return { ...given };
 }
 
 /** The kind-specific knobs, each refused on a kind that has no use for it. */

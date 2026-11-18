@@ -37,6 +37,13 @@ describe('what the session guard covers', () => {
 		}
 	});
 
+	it('lets the app sign in without a session, and guards the rest of /api/devices', () => {
+		expect(requiresSession('/api/devices/sign-in')).toBe(false);
+		expect(requiresSession('/api/devices')).toBe(true);
+		expect(requiresSession('/api/devices/current/apns')).toBe(true);
+		expect(requiresSession('/api/devices/sign-inx')).toBe(true);
+	});
+
 	it('still guards a path that merely starts with the same letters', () => {
 		expect(requiresSession('/settings')).toBe(true);
 		expect(requiresSession('/shared')).toBe(true);

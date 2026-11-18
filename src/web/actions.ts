@@ -23,10 +23,13 @@ import type {
 	ProjectView,
 	RequestFormValue,
 	TaskState,
+	CardFieldView,
 	RequestView,
-	TaskView,
+	TagView,
 	UpdateView
 } from './types';
+import { canReportProgress, putBytes, UploadUnreachable, type UploadProgress } from './bytes';
+export type { UploadProgress } from './bytes';
 
 /** Just enough of `fetch`. The browser's own satisfies it. */
 export type Requester = (url: string, init: RequestInit) => Promise<Response>;
@@ -36,47 +39,6 @@ export type NewProject = {
 	name: string;
 	description?: string | null;
 	slug?: string;
-};
-
-/**
- * What the new-task form sends (design §7).
- *
- * `agentId` is the owner targeting one agent — the one place in this product
- * where an agent id is an argument rather than an identity, because the owner is
- * the one saying it and the session cookie is what proves that.
- */
-export type NewTask = {
-	project: string;
-	title: string;
-	body?: string | null;
-	agentId?: string | null;
-	/**
-	 * Hand it to the project's agents as it is created.
-	 *
-	 * What the board's composer sends: no assignee, offered to everybody, first
-	 * to claim takes it. Refused alongside `agentId`.
-	 */
-	broadcast?: boolean;
-};
-
-/**
- * What the owner may change about a task.
- *
- * Two things, and deliberately not the state machine: reassigning it, and
- * cancelling it. Claiming and completing belong to the agent doing the work
- * (design §5), so there is no `state: 'done'` here for a browser to fake.
- */
-export type TaskPatch = {
-	agentId?: string | null;
-	state?: 'cancelled';
-	/**
-	 * Offer this task to the project's agents, or take it back off the wire.
-	 *
-	 * Not an assignment: an assignment names who must do it, this says whoever
-	 * gets there first. The server refuses more than one of the three at a time,
-	 * so a caller sends exactly one field.
-	 */
-	broadcast?: boolean;
 };
 
 /**
@@ -108,6 +70,14 @@ export type NewMessage = {
 	 * can be read without nesting anything.
 	 */
 	answers?: string;
+	/**
+	 * The question being talked over rather than answered (migration 032).
+	 *
+	 * The owner: "allow me to reply to form questions, so I can discuss with the
+	 * agent before giving the answer." A request's discussion is its own thread,
+	 * so this is the whole anchor — no card, no project.
+	 */
+	request?: string;
 	/**
 	 * Images already uploaded with {@link OwnerActions.uploadMedia}.
 	 *
@@ -164,27 +134,66 @@ export class ActionError extends Error {
 	}
 }
 
+/** The four things that appear in the feed (migration 034). */
+export type CardKind = 'update' | 'message' | 'request' | 'task';
+
 export type OwnerActions = {
 	createProject(input: NewProject): Promise<ProjectView>;
 	patchProject(reference: string, patch: ProjectPatch): Promise<ProjectView>;
+	/**
+	 * Pin any card to the top of the feed, or unpin it (migration 034).
+	 *
+	 * The owner: "let me pin my own messages." Pinning was an update's alone
+	 * because updates were the only cards when it was written; it is a thing you
+	 * do to a card, so it takes a card.
+	 *
+	 * Nothing is changed here — the server publishes, the tab hears the card's own
+	 * updated event and refetches, so every window agrees.
+	 */
+	pinCard(kind: CardKind, id: string, pinned: boolean): Promise<void>;
+	/**
+	 * Mark a card as work, move it along, or stop calling it work
+	 * (migration 035).
+	 *
+	 * The owner: "instead agents can mark a card in the feed as a task, and
+	 * update the status of the card." `null` clears it.
+	 *
+	 * Nothing is changed here — the server publishes, the tab hears the card's
+	 * own updated event and refetches, so every window agrees.
+	 */
+	setCardStatus(kind: CardKind, id: string, status: string | null): Promise<void>;
+	/**
+	 * Put one of the project's words on a card, or take it off (migration 039).
+	 *
+	 * The picker holds the list, so this sends an id; `create` is for the "new
+	 * tag…" box, where the word is typed and the project may not have it yet.
+	 * Nothing is changed here — the server publishes and the tab refetches.
+	 */
+	tagCard(kind: CardKind, id: string, tag: string, on?: boolean, create?: boolean): Promise<void>;
+	/**
+	 * Note something on a card, correct it, or take it off (migration 040).
+	 *
+	 * `null` removes. Nobody owns a field — the owner may correct an agent's and
+	 * the other way round — so this is a plain write with no ownership check.
+	 */
+	setCardField(kind: CardKind, id: string, name: string, value: string | null): Promise<void>;
+	/**
+	 * Keep what an app saved for itself (migration 041).
+	 *
+	 * An app runs in a frame with no same-origin privileges, so it has no storage
+	 * of its own: the open tab and the half-filled form live here instead. It is
+	 * deliberately not announced on the stream — two tabs disagreeing about which
+	 * section is open is better than every tab redrawing because one was opened.
+	 */
+	saveAppState(viewId: string, state: Record<string, unknown> | null): Promise<void>;
+	/** Decide a new word for a project (migration 039). */
+	defineTag(project: string, name: string, colour?: string | null): Promise<TagView>;
+	/** Rename a word, or recolour it, on every card carrying it. */
+	renameTag(id: string, patch: { name?: string; colour?: string | null }): Promise<TagView>;
+	/** Retire a word, taking it off every card. */
+	retireTag(id: string): Promise<void>;
 	setUpdatePinned(id: string, pinned: boolean): Promise<UpdateView>;
 	deleteUpdate(id: string): Promise<UpdateView>;
-	createTask(input: NewTask): Promise<TaskView>;
-	patchTask(id: string, patch: TaskPatch): Promise<TaskView>;
-	/**
-	 * Record that the owner has opened a project, clearing its "new" badge.
-	 *
-	 * Fire-and-forget from the caller's point of view — the badge is a
-	 * convenience, and a failed stamp costs a count that clears on the next
-	 * visit rather than anything the owner has to redo.
-	 */
-	markProjectSeen(reference: string): Promise<ProjectView>;
-	/**
-	 * Record that the owner has read one card's thread (migration 015).
-	 *
-	 * What lets a card leave "Recent replies" and drop back into its day.
-	 */
-	markRepliesSeen(id: string): Promise<UpdateView>;
 	/**
 	 * Upload one image and get the row back (migration 016).
 	 *
@@ -193,8 +202,12 @@ export type OwnerActions = {
 	 * request does not already prove. The id comes back unattached — hold it and
 	 * send it with the message, exactly as an agent does between `create_upload`
 	 * and `post_message`.
+	 *
+	 * `onProgress` is called as the bytes leave, so the box can show a bar rather
+	 * than a dimmed thumbnail and no news. It is optional and best-effort: an
+	 * environment with no `XMLHttpRequest` still uploads, it just never reports.
 	 */
-	uploadMedia(file: File): Promise<MediaView>;
+	uploadMedia(file: File, onProgress?: UploadProgress): Promise<MediaView>;
 	/**
 	 * Rename an agent, leaving its token alone.
 	 *
@@ -226,6 +239,14 @@ export type OwnerActions = {
 	 * `reaction.updated` and refetches, so every window agrees.
 	 */
 	react(id: string, emoji: string, on?: boolean): Promise<ReactionView[]>;
+	/**
+	 * React to any card, or take a reaction back (migration 034).
+	 *
+	 * The same toggle {@link OwnerActions.react} has, addressed by card rather
+	 * than by message: an emoji on an update is the same act as an emoji on a
+	 * reply, and the owner asked for the cards to stop differing.
+	 */
+	reactToCard(kind: CardKind, id: string, emoji: string, on?: boolean): Promise<ReactionView[]>;
 	/**
 	 * Answer an agent's request (design §5).
 	 *
@@ -260,7 +281,17 @@ export type OwnerActions = {
  */
 export function ownerActions(request: Requester = defaultRequest): OwnerActions {
 	async function send<
-		Key extends 'project' | 'update' | 'task' | 'message' | 'request' | 'agent' | 'reactions'
+		Key extends
+			| 'project'
+			| 'update'
+			| 'message'
+			| 'request'
+			| 'agent'
+			| 'reactions'
+			| 'pinned'
+			| 'status'
+			| 'tag'
+			| 'fields'
 	>(key: Key, url: string, method: string, body?: unknown): Promise<Sent<Key>> {
 		const init: RequestInit = { method, headers: { accept: 'application/json' } };
 		if (body !== undefined) {
@@ -292,12 +323,54 @@ export function ownerActions(request: Requester = defaultRequest): OwnerActions 
 	 * put the file on the request. `Content-Type` is the file's own, which is
 	 * also what the server checks the bytes against.
 	 */
-	async function sendBytes(url: string, file: File): Promise<MediaView> {
+	/**
+	 * The type to declare for a chosen file.
+	 *
+	 * A browser guesses from the extension and answers `''` when it cannot — a
+	 * `.log`, a `.lock`, anything without a registered extension — and an empty
+	 * `Content-Type` is a request whose body the server discards. So the fallback
+	 * is the type that means "bytes": the server stores it as a file either way,
+	 * and a wrong label on a download costs nothing (migration 026).
+	 */
+	function fileType(file: File): string {
+		return file.type && file.type.trim() !== '' ? file.type : 'application/octet-stream';
+	}
+
+	async function sendBytes(
+		url: string,
+		file: File,
+		onProgress?: UploadProgress
+	): Promise<MediaView> {
+		// `fetch` has no upload progress event, so a watched upload goes over
+		// `XMLHttpRequest` instead (see `./bytes.ts`). The `fetch` path below is
+		// what runs when nobody is watching, and in a test that injected its own
+		// requester — swapping that out for XHR would make an injected `request`
+		// silently ignored.
+		if (onProgress && canReportProgress()) {
+			let outcome;
+			try {
+				outcome = await putBytes({
+					url,
+					file,
+					contentType: fileType(file),
+					onProgress
+				});
+			} catch (cause) {
+				if (cause instanceof UploadUnreachable) {
+					throw new ActionError('unreachable', 'Could not reach the server. Try again.', 0);
+				}
+				throw cause;
+			}
+
+			if (!outcome.ok) throw failure(outcome.status, outcome.body);
+			return (outcome.body as { media: MediaView }).media;
+		}
+
 		let response: Response;
 		try {
 			response = await request(url, {
 				method: 'POST',
-				headers: { accept: 'application/json', 'content-type': file.type },
+				headers: { accept: 'application/json', 'content-type': fileType(file) },
 				body: file
 			});
 		} catch {
@@ -317,10 +390,16 @@ export function ownerActions(request: Requester = defaultRequest): OwnerActions 
 	 * that answers with a row. The share endpoints do not: one answers with a URL
 	 * that exists nowhere else, the other with whether anything was live.
 	 */
-	async function json<Result>(url: string, method: string): Promise<Result> {
+	async function json<Result>(url: string, method: string, body?: unknown): Promise<Result> {
+		const init: RequestInit = { method, headers: { accept: 'application/json' } };
+		if (body !== undefined) {
+			init.body = JSON.stringify(body);
+			init.headers = { ...init.headers, 'content-type': 'application/json' };
+		}
+
 		let response: Response;
 		try {
-			response = await request(url, { method, headers: { accept: 'application/json' } });
+			response = await request(url, init);
 		} catch {
 			throw new ActionError('unreachable', 'Could not reach the server. Try again.', 0);
 		}
@@ -335,17 +414,63 @@ export function ownerActions(request: Requester = defaultRequest): OwnerActions 
 		createProject: (input) => send('project', '/api/projects', 'POST', input),
 		patchProject: (reference, patch) =>
 			send('project', `/api/projects/${encodeURIComponent(reference)}`, 'PATCH', patch),
+		pinCard: async (kind, id, pinned) => {
+			await send(
+				'pinned',
+				`/api/cards/${encodeURIComponent(kind)}/${encodeURIComponent(id)}/pin`,
+				'POST',
+				{ pinned }
+			);
+		},
+		setCardStatus: async (kind, id, status) => {
+			await send(
+				'status',
+				`/api/cards/${encodeURIComponent(kind)}/${encodeURIComponent(id)}/status`,
+				'POST',
+				{ status }
+			);
+		},
+		tagCard: async (kind, id, tag, on, create) => {
+			await send(
+				'tag',
+				`/api/cards/${encodeURIComponent(kind)}/${encodeURIComponent(id)}/tags`,
+				'POST',
+				{
+					tag,
+					...(typeof on === 'boolean' ? { on } : {}),
+					...(create ? { create: true } : {})
+				}
+			);
+		},
+		setCardField: async (kind, id, name, value) => {
+			await send(
+				'fields',
+				`/api/cards/${encodeURIComponent(kind)}/${encodeURIComponent(id)}/fields`,
+				'POST',
+				{ name, value }
+			);
+		},
+		saveAppState: async (viewId, state) => {
+			await json(`/api/apps/${encodeURIComponent(viewId)}/state`, 'POST', { state });
+		},
+		defineTag: (project, name, colour) =>
+			send('tag', `/api/projects/${encodeURIComponent(project)}/tags`, 'POST', {
+				name,
+				...(colour === undefined ? {} : { colour })
+			}),
+		renameTag: (id, patch) => send('tag', `/api/tags/${encodeURIComponent(id)}`, 'PATCH', patch),
+		retireTag: async (id) => {
+			await send('tag', `/api/tags/${encodeURIComponent(id)}`, 'DELETE');
+		},
 		setUpdatePinned: (id, pinned) =>
 			send('update', `/api/updates/${encodeURIComponent(id)}`, 'PATCH', { pinned }),
 		deleteUpdate: (id) => send('update', `/api/updates/${encodeURIComponent(id)}`, 'DELETE'),
-		createTask: (input) => send('task', '/api/tasks', 'POST', input),
-		patchTask: (id, patch) => send('task', `/api/tasks/${encodeURIComponent(id)}`, 'PATCH', patch),
-		markProjectSeen: (reference) =>
-			send('project', `/api/projects/${encodeURIComponent(reference)}/seen`, 'POST'),
-		markRepliesSeen: (id) =>
-			send('update', `/api/updates/${encodeURIComponent(id)}/replies-seen`, 'POST'),
-		uploadMedia: (file) =>
-			sendBytes(`/api/media?filename=${encodeURIComponent(file.name || 'upload')}`, file),
+		uploadMedia: (file, onProgress) =>
+			sendBytes(
+				`/api/media?filename=${encodeURIComponent(file.name || 'upload')}`,
+				file,
+				onProgress
+			),
 		renameAgent: (id, name) =>
 			send('agent', `/api/agents/${encodeURIComponent(id)}`, 'PATCH', { name }),
 		postMessage: (input) => send('message', '/api/messages', 'POST', input),
@@ -355,6 +480,13 @@ export function ownerActions(request: Requester = defaultRequest): OwnerActions 
 				emoji,
 				...(on === undefined ? {} : { on })
 			}),
+		reactToCard: (kind, id, emoji, on) =>
+			send(
+				'reactions',
+				`/api/cards/${encodeURIComponent(kind)}/${encodeURIComponent(id)}/reactions`,
+				'POST',
+				{ emoji, ...(on === undefined ? {} : { on }) }
+			),
 		answerRequest: (id, value) =>
 			send('request', `/api/requests/${encodeURIComponent(id)}/answer`, 'POST', { value }),
 		dismissRequest: (id) => send('request', `/api/requests/${encodeURIComponent(id)}`, 'DELETE'),
@@ -368,23 +500,39 @@ export function ownerActions(request: Requester = defaultRequest): OwnerActions 
 
 /** Which row an endpoint answers with, keyed by the field it arrives under. */
 type Sent<
-	Key extends 'project' | 'update' | 'task' | 'message' | 'request' | 'agent' | 'reactions'
-> = Key extends 'project'
-	? ProjectView
-	: Key extends 'update'
-		? UpdateView
-		: Key extends 'task'
-			? TaskView
-			: Key extends 'request'
-				? RequestView
-				: Key extends 'agent'
-					? { id: string; name: string }
-					: // The reaction endpoint answers with the whole list on the message
-						// rather than the one row that changed: a count is what the card
-						// renders, and asking for it separately would be a second request.
-						Key extends 'reactions'
-						? ReactionView[]
-						: MessageView;
+	Key extends
+		| 'project'
+		| 'update'
+		| 'message'
+		| 'request'
+		| 'agent'
+		| 'reactions'
+		| 'pinned'
+		| 'status'
+		| 'tag'
+		| 'fields'
+> = Key extends 'pinned'
+	? boolean
+	: Key extends 'status'
+		? string | null
+		: Key extends 'tag'
+			? TagView
+			: Key extends 'fields'
+				? CardFieldView[]
+				: Key extends 'project'
+					? ProjectView
+					: Key extends 'update'
+						? UpdateView
+						: Key extends 'request'
+							? RequestView
+							: Key extends 'agent'
+								? { id: string; name: string }
+								: // The reaction endpoint answers with the whole list on the message
+									// rather than the one row that changed: a count is what the card
+									// renders, and asking for it separately would be a second request.
+									Key extends 'reactions'
+									? ReactionView[]
+									: MessageView;
 
 /**
  * What to show the owner when an action failed.

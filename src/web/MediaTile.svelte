@@ -30,6 +30,7 @@
 		posterSrc,
 		thumbSrc,
 		thumbSrcset,
+		tileMaxWidth,
 		tileRatio,
 		videoSrc
 	} from './media';
@@ -53,6 +54,8 @@
 
 	const label = $derived(mediaLabel(item, index, total));
 	const ratio = $derived(tileRatio(item, total));
+	/** Keeps a lone upright clip off the whole screen (`./media.ts`). */
+	const maxWidth = $derived(tileMaxWidth(item, total));
 	const size = $derived(intrinsic(item));
 	const duration = $derived(durationLabel(item.durationMs));
 	const src = $derived(thumbSrc(item));
@@ -75,10 +78,12 @@
 	data-media-tile={item.id}
 	data-media-state={item.status}
 	data-media-kind={item.kind}
-	style="aspect-ratio: {ratio}"
+	style="aspect-ratio: {ratio}{maxWidth ? `; max-width: ${maxWidth}` : ''}"
 	class="relative overflow-hidden rounded-md border border-border-subtle bg-surface-sunken"
 >
 	{#if item.status === 'pending'}
+		<!-- A sweep across the shape the picture will be, so the wait has a pulse. -->
+		<span class="skeleton pointer-events-none absolute inset-0" aria-hidden="true"></span>
 		<div
 			role="img"
 			aria-label={label}

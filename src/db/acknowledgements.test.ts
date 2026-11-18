@@ -3,7 +3,7 @@ import { freshDatabase, type Db } from './testing';
 import { insertAgent } from './agents';
 import { insertProject } from './projects';
 import { insertMessage } from './messages';
-import { insertTask } from './tasks';
+import { insertUpdate } from './updates';
 import { listAcknowledgements, upsertAcknowledgement } from './acknowledgements';
 
 /**
@@ -17,7 +17,7 @@ let db: Db;
 let agentId: string;
 let otherId: string;
 let messageId: string;
-let taskId: string;
+let updateId: string;
 
 beforeEach(() => {
 	db = freshDatabase();
@@ -25,12 +25,17 @@ beforeEach(() => {
 	agentId = insertAgent(db, { name: 'scout', tokenHash: 'h1' }).id;
 	otherId = insertAgent(db, { name: 'other', tokenHash: 'h2' }).id;
 	messageId = insertMessage(db, { projectId, author: 'human', body: 'have a look' }).id;
-	taskId = insertTask(db, { projectId, title: 'do it' }).id;
+	updateId = insertUpdate(db, { projectId, agentId, body: 'shipped' }).id;
 });
 
 describe('upsertAcknowledgement', () => {
 	it('records a state against a message', () => {
-		const ack = upsertAcknowledgement(db, { agentId, messageId, state: 'thinking', at: 100 });
+		const ack = upsertAcknowledgement(db, {
+			agentId,
+			card: { kind: 'message', id: messageId },
+			state: 'thinking',
+			at: 100
+		});
 
 		expect(ack).toMatchObject({
 			agentId,
@@ -43,67 +48,130 @@ describe('upsertAcknowledgement', () => {
 	});
 
 	it('rewrites the state in place rather than growing a history nobody reads', () => {
-		upsertAcknowledgement(db, { agentId, messageId, state: 'thinking', at: 100 });
+		upsertAcknowledgement(db, {
+			agentId,
+			card: { kind: 'message', id: messageId },
+			state: 'thinking',
+			at: 100
+		});
 
-		const done = upsertAcknowledgement(db, { agentId, messageId, state: 'done', at: 900 });
+		const done = upsertAcknowledgement(db, {
+			agentId,
+			card: { kind: 'message', id: messageId },
+			state: 'done',
+			at: 900
+		});
 
 		expect(done.state).toBe('done');
-		expect(listAcknowledgements(db, { messageIds: [messageId] })).toHaveLength(1);
+		expect(listAcknowledgements(db, { message: [messageId] })).toHaveLength(1);
 	});
 
 	it('keeps created_at through the rewrite, so "seen then, finished now" survives', () => {
-		upsertAcknowledgement(db, { agentId, messageId, state: 'thinking', at: 100 });
+		upsertAcknowledgement(db, {
+			agentId,
+			card: { kind: 'message', id: messageId },
+			state: 'thinking',
+			at: 100
+		});
 
-		const done = upsertAcknowledgement(db, { agentId, messageId, state: 'done', at: 900 });
+		const done = upsertAcknowledgement(db, {
+			agentId,
+			card: { kind: 'message', id: messageId },
+			state: 'done',
+			at: 900
+		});
 
 		expect(done).toMatchObject({ createdAt: 100, updatedAt: 900 });
 	});
 
 	it('gives each agent its own row on the same message', () => {
-		upsertAcknowledgement(db, { agentId, messageId, state: 'thinking', at: 100 });
-		upsertAcknowledgement(db, { agentId: otherId, messageId, state: 'done', at: 200 });
+		upsertAcknowledgement(db, {
+			agentId,
+			card: { kind: 'message', id: messageId },
+			state: 'thinking',
+			at: 100
+		});
+		upsertAcknowledgement(db, {
+			agentId: otherId,
+			card: { kind: 'message', id: messageId },
+			state: 'done',
+			at: 200
+		});
 
-		expect(listAcknowledgements(db, { messageIds: [messageId] }).map((ack) => ack.state)).toEqual([
+		expect(listAcknowledgements(db, { message: [messageId] }).map((ack) => ack.state)).toEqual([
 			'thinking',
 			'done'
 		]);
 	});
 
-	it('does the same for a task, on its own index', () => {
-		upsertAcknowledgement(db, { agentId, taskId, state: 'thinking', at: 100 });
-		const done = upsertAcknowledgement(db, { agentId, taskId, state: 'done', at: 200 });
+	it('does the same for an update, on its own index', () => {
+		upsertAcknowledgement(db, {
+			agentId,
+			card: { kind: 'update', id: updateId },
+			state: 'thinking',
+			at: 100
+		});
+		const done = upsertAcknowledgement(db, {
+			agentId,
+			card: { kind: 'update', id: updateId },
+			state: 'done',
+			at: 200
+		});
 
-		expect(done).toMatchObject({ taskId, messageId: null, state: 'done', createdAt: 100 });
-		expect(listAcknowledgements(db, { taskIds: [taskId] })).toHaveLength(1);
+		expect(done).toMatchObject({ updateId, messageId: null, state: 'done', createdAt: 100 });
+		expect(listAcknowledgements(db, { update: [updateId] })).toHaveLength(1);
 	});
 
-	it('keeps a message acknowledgement and a task one apart', () => {
-		upsertAcknowledgement(db, { agentId, messageId, state: 'thinking', at: 100 });
-		upsertAcknowledgement(db, { agentId, taskId, state: 'done', at: 100 });
+	it('keeps a message acknowledgement and an update one apart', () => {
+		upsertAcknowledgement(db, {
+			agentId,
+			card: { kind: 'message', id: messageId },
+			state: 'thinking',
+			at: 100
+		});
+		upsertAcknowledgement(db, {
+			agentId,
+			card: { kind: 'update', id: updateId },
+			state: 'done',
+			at: 100
+		});
 
-		expect(listAcknowledgements(db, { messageIds: [messageId] })).toHaveLength(1);
-		expect(listAcknowledgements(db, { taskIds: [taskId] })).toHaveLength(1);
+		expect(listAcknowledgements(db, { message: [messageId] })).toHaveLength(1);
+		expect(listAcknowledgements(db, { update: [updateId] })).toHaveLength(1);
 	});
 });
 
 describe('listAcknowledgements', () => {
-	it('reads messages and tasks in one query', () => {
-		upsertAcknowledgement(db, { agentId, messageId, state: 'thinking', at: 100 });
-		upsertAcknowledgement(db, { agentId, taskId, state: 'done', at: 200 });
+	it('reads messages and updates in one query', () => {
+		upsertAcknowledgement(db, {
+			agentId,
+			card: { kind: 'message', id: messageId },
+			state: 'thinking',
+			at: 100
+		});
+		upsertAcknowledgement(db, {
+			agentId,
+			card: { kind: 'update', id: updateId },
+			state: 'done',
+			at: 200
+		});
 
-		expect(listAcknowledgements(db, { messageIds: [messageId], taskIds: [taskId] })).toHaveLength(
-			2
-		);
+		expect(listAcknowledgements(db, { message: [messageId], update: [updateId] })).toHaveLength(2);
 	});
 
 	it('answers nothing for a query that named nothing, rather than everything', () => {
-		upsertAcknowledgement(db, { agentId, messageId, state: 'thinking', at: 100 });
+		upsertAcknowledgement(db, {
+			agentId,
+			card: { kind: 'message', id: messageId },
+			state: 'thinking',
+			at: 100
+		});
 
 		expect(listAcknowledgements(db, {})).toEqual([]);
-		expect(listAcknowledgements(db, { messageIds: [], taskIds: [] })).toEqual([]);
+		expect(listAcknowledgements(db, { message: [], update: [] })).toEqual([]);
 	});
 
 	it('leaves out things nobody acknowledged', () => {
-		expect(listAcknowledgements(db, { messageIds: [messageId] })).toEqual([]);
+		expect(listAcknowledgements(db, { message: [messageId] })).toEqual([]);
 	});
 });

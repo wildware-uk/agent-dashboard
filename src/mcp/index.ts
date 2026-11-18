@@ -52,12 +52,9 @@ export {
 	TOOLS,
 	TOOL_NAMES,
 	attachMediaTool,
-	claimTaskTool,
-	completeTaskTool,
 	createProjectTool,
 	createUploadTool,
 	listProjectsTool,
-	listTasksTool,
 	postUpdateTool,
 	registerTools,
 	type AnyMcpTool,
@@ -70,9 +67,7 @@ export {
 	guard,
 	ok,
 	projectView,
-	taskView,
 	updateView,
 	type ProjectView,
-	type TaskView,
 	type UpdateView
 } from './results';

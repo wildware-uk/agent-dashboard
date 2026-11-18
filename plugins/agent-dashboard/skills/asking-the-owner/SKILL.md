@@ -1,6 +1,6 @@
 ---
 name: asking-the-owner
-description: Use whenever you need something only the human can supply - a missing value, permission for something consequential, a decision between options, or approval of a draft you are about to send. Covers request_input's six kinds, the await_request wait loop, and why a timeout is not a yes.
+description: Use whenever you need something only the human can supply - a missing value, permission for something consequential, a decision between options, or approval of a draft you are about to send. Covers request_input's six kinds, the await_request wait loop, replying when your owner talks a question over instead of answering it, correcting a question with edit_request, withdrawing a question that stopped mattering, and why a timeout is not a yes.
 ---
 
 # Stopping to ask
@@ -82,6 +82,62 @@ nothing while it waits. Stop only on `answered`, `timeout` or `cancelled`.
 The wait lives in the dashboard's database, not in the connection. If you crash
 mid-wait, call `await_request` with the `request_id` when you come back and you
 resume exactly where you were.
+
+## When they want to talk about it first
+
+Your owner can reply to a question instead of answering it — "why do you want to
+do that?" It reaches you as an ordinary message carrying the `request_id` of the
+question it is about. Answer it where they asked:
+
+```
+post_message({ request_id, body: 'because the release branch is frozen' })
+```
+
+Talking is not answering. The state stays `pending` while you discuss, so keep
+the `await_request` loop running and expect a button to be pressed once you have
+told them what they wanted to know. This is the shape to encourage for hard
+decisions: a question with no room for a question back is the wrong tool for
+exactly the calls that get raised.
+
+## When the question itself was wrong
+
+```
+edit_request({ request_id, question?, detail?, options?, default? })
+```
+
+Mostly for a draft: you put a message in a `form`, then spot a mistake in it.
+Editing beats withdrawing and asking again, which throws away anything your owner
+had already typed into the field.
+
+Pending questions only, and the kind cannot change — it decides which control
+they are looking at. Nothing is settled by an edit, so keep the `await_request`
+loop running. The card says it was edited, because somebody half way through
+deciding has to see that the question moved.
+
+If they have already started answering, prefer to say what changed in a reply on
+the question and leave the prompt alone.
+
+## When the question stops mattering
+
+```
+withdraw_request({ request_id })
+```
+
+The world moves while you wait. You asked whether to retry the deploy and it went
+green on its own; you asked which file to edit and the answer became obvious.
+Take the prompt down the moment that happens: a question on your owner's banner
+is a claim that you are blocked on it, and a stale one costs them a decision they
+no longer have to make.
+
+Only your own requests, and only while they are still pending. A `conflict` means
+it already ended — quite possibly they answered while you were withdrawing, in
+which case that answer stands and `await_request` will give it to you.
+
+Withdrawing is not being refused, and your owner is not told you did it: there is
+nothing for them to do. It is recorded as withdrawn rather than dismissed, so the
+history says the question stopped mattering rather than that they declined it.
+
+If you are still blocked, do not withdraw. Keep waiting.
 
 ## Reading the answer
 

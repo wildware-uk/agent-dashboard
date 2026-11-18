@@ -20,7 +20,15 @@
  * instead of being inserted. That is what makes the "N new" pill honest — the
  * viewport cannot move, because nothing above the reader has changed.
  */
-import type { ProjectView, SnapshotResponse, UpdateView } from './types';
+import type {
+	AppView,
+	CardFieldView,
+	CardTagView,
+	ProjectView,
+	SnapshotResponse,
+	TagView,
+	UpdateView
+} from './types';
 import {
 	DirectLink,
 	SharedStream,
@@ -88,6 +96,16 @@ const WATCHED = [
 	'media.ready',
 	'project.created',
 	'project.updated',
+	// A project decided a new word, renamed one, or retired it (migration 039).
+	// The picker on every card reads that list, and a retired word has to come
+	// off the cards wearing it in every open tab.
+	'tags.changed',
+	// A note on a card — a branch name, a pull request link (migration 040).
+	// Carried by the snapshot, like the tags, so the same rule applies.
+	'fields.changed',
+	// An app on a card was handed fresh data (migration 041). Same rule again:
+	// what an app is showing rides in the snapshot, not on the card row.
+	'apps.changed',
 	// A rename relabels every card that agent ever posted, and the names ride in
 	// the snapshot rather than on the cards — so this is a refetch like any other.
 	'agent.renamed',
@@ -107,14 +125,19 @@ export class Timeline {
 	/** Sidebar order comes from the server: pinned first, then newest. */
 	projects = $state<ProjectView[]>([]);
 	/**
-	 * Updates per project id since the owner last opened it — the sidebar badge.
+	 * The words the projects on this page use, and where they are worn
+	 * (migration 039).
 	 *
-	 * Server-authoritative rather than counted here. Every live event already
-	 * provokes a full-snapshot refetch, so the count arrives recomputed from
-	 * `owner_seen_at`, and a browser that kept its own tally would drift from the
-	 * other tab the moment one of them cleared a badge.
+	 * Server-authoritative like everything else here: a tag retired on the phone
+	 * has to leave the desk's cards too, and every event already provokes a
+	 * refetch that recomputes both.
 	 */
-	unseen = $state<Record<string, number>>({});
+	tags = $state<TagView[]>([]);
+	cardTags = $state<CardTagView[]>([]);
+	/** What is noted on the cards on this page (migration 040). */
+	cardFields = $state<CardFieldView[]>([]);
+	/** The apps showing on the cards on this page (migration 041). */
+	cardApps = $state<AppView[]>([]);
 	/** Newest first. What the timeline renders. */
 	items = $state<UpdateView[]>([]);
 	/** Arrivals held back while the reader is scrolled away from the top. */
@@ -374,10 +397,13 @@ export class Timeline {
 	 */
 	private apply(snapshot: SnapshotResponse, mode: 'merge' | 'replace'): void {
 		if (snapshot.projects) this.projects = snapshot.projects;
-		// Replaced wholesale rather than merged: a project that has dropped out of
-		// the map has nothing new, and folding the old value in would leave a badge
-		// lit that the server has just said should be dark.
-		if (snapshot.unseen) this.unseen = snapshot.unseen;
+		// Replaced wholesale rather than merged, for the reason a retired tag
+		// exists: a word folded in from the old value would stay on a card the
+		// server has just said is bare.
+		if (snapshot.tags) this.tags = snapshot.tags;
+		if (snapshot.cardTags) this.cardTags = snapshot.cardTags;
+		if (snapshot.cardFields) this.cardFields = snapshot.cardFields;
+		if (snapshot.cardApps) this.cardApps = snapshot.cardApps;
 		// Folded in even on `replace`: "this id is called that" is a fact about an
 		// agent, not a row in the timeline, so a document that does not mention an
 		// agent is not saying it has stopped having a name. The updates-only

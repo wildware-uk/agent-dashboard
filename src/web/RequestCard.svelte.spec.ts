@@ -3,9 +3,9 @@
 // if Tailwind is present.
 import '../http/routes/app.css';
 import { render } from 'vitest-browser-svelte';
-import { describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import RequestCard from './RequestCard.svelte';
-import { aRequest, fakeActions } from './testing';
+import { aMedia, aMessage, aRequest, anEmbed, fakeActions, insideTheApp } from './testing';
 import type { RequestView } from './types';
 
 /**
@@ -312,5 +312,227 @@ describe('a form request', () => {
 		await screen.getByRole('textbox', { name: 'Your answer' }).fill('long enough');
 
 		await expect.element(approve).toBeEnabled();
+	});
+});
+
+/**
+ * An approval carrying what every other card carries (migration 030).
+ *
+ * The owner: "approval boxes cannot contain embeds, standardize the approach on
+ * cards, all card types support all the same things." There was no decision
+ * behind the gap — media and embeds landed on updates and messages, and the card
+ * types nobody was looking at were left behind.
+ */
+describe('what an approval can show', () => {
+	it('renders its detail as markdown, as every other card does', async () => {
+		const screen = render(RequestCard, {
+			request: aRequest({ detail: 'The **canary** held for 20 minutes.' }),
+			actions: fakeActions().actions
+		});
+
+		// Plain text until now, for no reason anybody had decided.
+		await expect.element(screen.getByText('canary')).toBeInTheDocument();
+		expect(document.querySelector('[data-request-id] strong')).not.toBeNull();
+	});
+
+	it('shows the thing it is asking about', async () => {
+		render(RequestCard, {
+			request: aRequest({
+				media: [aMedia({ id: 'shot', updateId: null })],
+				embeds: [anEmbed({ id: 'e1' })]
+			}),
+			actions: fakeActions().actions
+		});
+
+		// "Does this look right" is a question you cannot ask without the thing
+		// being looked at.
+		expect(document.querySelector('[data-media-tile="shot"]')).not.toBeNull();
+		expect(document.querySelector('[data-embed="e1"]')).not.toBeNull();
+	});
+
+	it('is unchanged when it carries nothing, which is the ordinary case', async () => {
+		render(RequestCard, { request: aRequest(), actions: fakeActions().actions });
+
+		expect(document.querySelector('[data-media-grid]')).toBeNull();
+		expect(document.querySelector('[data-embeds]')).toBeNull();
+	});
+});
+
+/**
+ * Talking a question over before answering it (migration 032).
+ *
+ * The owner: "allow me to reply to form questions, so I can discuss with the
+ * agent before giving the answer." The buttons were the only thing you could
+ * say back, so asking "why?" meant answering something first.
+ */
+/**
+ * A question the asking agent rewrote (migration 033).
+ *
+ * An owner half way through deciding has to be able to tell that what they are
+ * answering has moved under them.
+ */
+describe('a question that has been corrected', () => {
+	it('says so on the card', async () => {
+		const { screen } = mount({ editedAt: Date.now() });
+
+		await expect.element(screen.getByTestId('request-edited')).toBeInTheDocument();
+	});
+
+	it('says nothing on one nobody has touched, which is nearly all of them', async () => {
+		const { screen } = mount();
+
+		expect(screen.container.querySelector('[data-testid="request-edited"]')).toBeNull();
+	});
+});
+
+describe('discussing a question instead of answering it', () => {
+	it('offers a reply box under the controls, with nothing said yet', async () => {
+		const { screen } = mount({ kind: 'form', options: ['Send', 'Cancel'] });
+
+		await expect.element(screen.getByRole('button', { name: 'Reply' })).toBeInTheDocument();
+		// The answer is still what the agent is waiting for: the buttons stay.
+		await expect.element(screen.getByRole('button', { name: 'Send' })).toBeInTheDocument();
+	});
+
+	it('posts what the owner types against the question, not against a card', async () => {
+		const { acts, screen } = mount({ id: 'r1' });
+
+		await screen.getByRole('button', { name: 'Reply' }).click();
+		await screen.getByRole('textbox', { name: /reply/i }).fill('why that wording?');
+		await screen.getByRole('button', { name: 'Send reply' }).click();
+
+		await expect
+			.poll(() => acts.calls.find((call) => call.name === 'postMessage')?.args[0])
+			.toMatchObject({ request: 'r1', body: 'why that wording?' });
+	});
+
+	it('shows what has been said so far', async () => {
+		const { screen } = mount(
+			{ id: 'r1' },
+			{
+				messages: [
+					aMessage({ id: 'm1', author: 'human', updateId: null, body: 'why that wording?' }),
+					aMessage({
+						id: 'm2',
+						author: 'agent:a1',
+						updateId: null,
+						body: 'because the ticket says so'
+					})
+				]
+			}
+		);
+
+		await expect.element(screen.getByText('why that wording?')).toBeInTheDocument();
+		await expect.element(screen.getByText('because the ticket says so')).toBeInTheDocument();
+	});
+
+	/**
+	 * A question asked inside a thread (migration 022) already sits in a
+	 * conversation, one reply box above the card. A second one would be two ways
+	 * to say the same thing in the same place.
+	 */
+	it('carries no box of its own when it is already inside a thread', async () => {
+		const inside = mount({}, { discussable: false });
+		expect(inside.screen.container.querySelector('[data-thread]')).toBeNull();
+
+		// The same card in the feed does carry one, so the assertion above is
+		// about the flag rather than about the selector.
+		const alone = mount();
+		expect(alone.screen.container.querySelector('[data-thread]')).not.toBeNull();
+	});
+});
+
+/**
+ * The features every card shares, on a question (migration 034).
+ *
+ * The owner: "there are many discrepancies between the card types, they should
+ * all share the same features." A question could be answered or dismissed and
+ * nothing else — no pin, no emoji.
+ */
+describe('the shared controls on a question', () => {
+	it('pins it, naming the card', async () => {
+		const { acts, screen } = mount({ id: 'r4' });
+
+		await screen.getByRole('button', { name: 'Pin question' }).click();
+
+		expect(acts.calls.find((call) => call.name === 'pinCard')?.args).toEqual([
+			'request',
+			'r4',
+			true
+		]);
+	});
+
+	it('takes an emoji, like every other card', async () => {
+		const { acts, screen } = mount({ id: 'r4' });
+
+		await screen.getByRole('button', { name: 'Add a reaction' }).click();
+		await screen.getByRole('button', { name: 'React 👀' }).click();
+
+		expect(acts.calls.find((call) => call.name === 'reactToCard')?.args).toEqual([
+			'request',
+			'r4',
+			'👀',
+			undefined
+		]);
+	});
+});
+
+describe('a typed answer inside the iPhone app', () => {
+	let app: ReturnType<typeof insideTheApp>;
+	beforeEach(() => {
+		app = insideTheApp();
+	});
+	afterEach(() => app.leave());
+
+	it('is written in the app bar, starting from the suggested answer', async () => {
+		const { screen, acts } = mount({
+			kind: 'text',
+			question: 'Commit message?',
+			config: { default: 'fix: parser' }
+		});
+
+		await screen.getByRole('button', { name: 'Answer' }).click();
+
+		expect(document.querySelector('input[type="text"], textarea')).toBeNull();
+		expect(app.handed).toEqual([
+			expect.objectContaining({ label: 'Answer scout', draft: 'fix: parser' })
+		]);
+
+		await app.type('fix: the parser');
+		expect(acts.calls).toEqual([{ name: 'answerRequest', args: ['r1', 'fix: the parser'] }]);
+	});
+});
+
+describe('a picture question', () => {
+	const red = aMedia({ id: 'red', updateId: null, requestId: 'r1' });
+	const blue = aMedia({ id: 'blue', updateId: null, requestId: 'r1' });
+	const evidence = aMedia({ id: 'shot', updateId: null, requestId: 'r1' });
+
+	it('puts each picture on its button, and answers with the option', async () => {
+		const { screen, acts } = mount({
+			kind: 'buttons',
+			options: ['Red logo', 'Blue logo'],
+			config: { optionMedia: { 'Red logo': 'red', 'Blue logo': 'blue' } },
+			media: [red, blue]
+		});
+
+		const button = screen.getByRole('button', { name: 'Red logo' });
+		expect(button.element().querySelector('img')?.getAttribute('src')).toContain('/media/red/');
+		await button.click();
+
+		expect(acts.calls).toEqual([{ name: 'answerRequest', args: ['r1', 'Red logo'] }]);
+	});
+
+	it('shows option pictures on the options only, and the rest in the card', async () => {
+		mount({
+			kind: 'choice',
+			options: ['Red', 'Blue'],
+			config: { optionMedia: { Red: 'red', Blue: 'blue' } },
+			media: [red, blue, evidence]
+		});
+
+		const shown = [...document.querySelectorAll('img')].map((img) => img.getAttribute('src'));
+		expect(shown.filter((src) => src?.includes('/media/red/'))).toHaveLength(1);
+		expect(shown.filter((src) => src?.includes('/media/shot/'))).toHaveLength(1);
 	});
 });

@@ -11,19 +11,19 @@ import {
 	editUpdateRow,
 	findAgentById,
 	findSessionById,
-	findTaskById,
 	findUpdateById,
 	insertUpdate,
 	listUpdates as listUpdateRows,
-	markRepliesSeenRow,
-	setUpdatePinned as setPinnedFlag,
 	softDeleteUpdate,
 	type Update,
 	type UpdateLevel,
 	type UpdatePriority
 } from '$db';
+import { pinCard } from './cards';
 import type { DomainContext } from './context';
 import { invalid, notFound } from './errors';
+import { attachEmbeds, checkedEmbeds, type NewEmbedInput } from './embeds';
+import { attachApps, checkedApps, type NewAppInput } from './apps';
 import { assertAttachable } from './media';
 import { resolveProject } from './projects';
 import { optionalText, requiredText } from './text';
@@ -51,15 +51,6 @@ export type PostUpdateInput = {
 	level?: UpdateLevel;
 	/** How much this needs the owner now (design §7). Defaults to `medium`. */
 	priority?: UpdatePriority;
-	/**
-	 * The task this is progress on (design §7).
-	 *
-	 * Optional, and most updates have none: an agent reporting that a deploy
-	 * finished is reporting on the world, not on a piece of assigned work. Given
-	 * one, the update appears on that task's page as well as in the feed, which is
-	 * how a long-running task accumulates a history.
-	 */
-	taskId?: string | null;
 	sessionId?: string | null;
 	/**
 	 * Uploads to show on the card (design §5).
@@ -71,6 +62,21 @@ export type PostUpdateInput = {
 	 * is `attach_media`'s job instead.
 	 */
 	mediaIds?: readonly string[];
+	/**
+	 * Things to show on the card in a registered look (migration 027).
+	 *
+	 * Checked before the insert for the same reason `mediaIds` is: a card that
+	 * published without the Slack message it was about is worse than one that
+	 * failed to post and said which embed was wrong.
+	 */
+	embeds?: readonly NewEmbedInput[];
+	/**
+	 * Interactive UI to put on the card (migration 041).
+	 *
+	 * Checked before the insert for the same reason the embeds are, and named the
+	 * same way an agent names one everywhere else: by its `ui://` URI.
+	 */
+	apps?: readonly NewAppInput[];
 };
 
 /** Post one update and announce it. */
@@ -91,16 +97,10 @@ export function postUpdate(ctx: DomainContext, input: PostUpdateInput): Update {
 		if (session.agentId !== agent.id) throw invalid('session belongs to another agent');
 	}
 
-	// The task, checked before anything is written. A task from another project
-	// is refused rather than filed anyway: the task page and the project timeline
-	// would then disagree about which project the work belongs to, and one of them
-	// would be wrong wherever the reader started.
-	const taskId = input.taskId ?? null;
-	if (taskId !== null) {
-		const task = findTaskById(ctx.db, taskId);
-		if (!task) throw notFound(`no such task: ${taskId}`);
-		if (task.projectId !== project.id) throw invalid('that task belongs to another project');
-	}
+	// `task_id` is never set any more: the board is gone and a card is the work
+	// (migration 035). The column stays because dropping one is a table rebuild
+	// for nothing, and its old values are the history of what was filed where.
+	const taskId = null;
 
 	// Checked first: attaching after the insert would leave a posted update whose
 	// media quietly went missing.
@@ -108,6 +108,11 @@ export function postUpdate(ctx: DomainContext, input: PostUpdateInput): Update {
 		input.mediaIds === undefined || input.mediaIds.length === 0
 			? []
 			: assertAttachable(ctx, { mediaIds: input.mediaIds, agentId: agent.id });
+
+	// Same rule, same reason: an unknown embed type is caught while there is
+	// still nothing on the timeline to be missing anything.
+	const embeds = input.embeds?.length ? checkedEmbeds(ctx, input.embeds) : [];
+	const apps = input.apps?.length ? checkedApps(ctx, input.apps) : [];
 
 	const update = insertUpdate(ctx.db, {
 		projectId: project.id,
@@ -125,6 +130,24 @@ export function postUpdate(ctx: DomainContext, input: PostUpdateInput): Update {
 		attachMediaToUpdate(ctx.db, { mediaIds, updateId: update.id, agentId: agent.id });
 	}
 
+	if (embeds.length > 0) {
+		attachEmbeds(ctx, {
+			embeds,
+			updateId: update.id,
+			agentId: agent.id,
+			author: `agent:${agent.id}`
+		});
+	}
+
+	if (apps.length > 0) {
+		attachApps(ctx, {
+			apps,
+			card: { kind: 'update', id: update.id },
+			agentId: agent.id,
+			author: `agent:${agent.id}`
+		});
+	}
+
 	ctx.bus.publish('update.created', {
 		updateId: update.id,
 		projectId: update.projectId,
@@ -138,8 +161,6 @@ export type ListUpdatesInput = {
 	/** A project slug or id. Omit for the whole timeline. */
 	project?: string;
 	agentId?: string;
-	/** Only the updates filed against this task (design §7). */
-	taskId?: string;
 	/** Defaults to {@link DEFAULT_LIMIT}, capped at {@link MAX_LIMIT}. */
 	limit?: number;
 	/** `nextCursor` from the previous page. Omit or pass `null` for the first. */
@@ -173,7 +194,6 @@ export function listUpdates(ctx: DomainContext, input: ListUpdatesInput = {}): U
 	const rows = listUpdateRows(ctx.db, {
 		projectId,
 		agentId: input.agentId,
-		taskId: input.taskId,
 		beforeSeq,
 		includeDeleted: input.includeDeleted,
 		limit: limit + 1
@@ -222,30 +242,23 @@ export function deleteUpdate(ctx: DomainContext, updateId: string): Update {
 /**
  * Pin or unpin an update (design §7).
  *
- * Quiet when the flag already says what was asked for, for the same reason
- * {@link deleteUpdate} is: a `update.updated` that changed nothing would make
- * every open tab refetch a timeline that cannot have moved.
+ * The act itself lives in `./cards.ts` since migration 034, because it is not
+ * an update's alone any more: the owner asked to pin their own posts, and a
+ * feed where one kind of thing can be kept in view and the others cannot is a
+ * feed that has decided for them what matters. This is the update-shaped door
+ * onto it, kept because the route and the card both speak in updates.
  *
- * A deleted update cannot be pinned. It is gone from every timeline, so pinning
- * it would put a row nobody can see at the top of an order nobody can read.
+ * Quiet when the flag already says what was asked for, for the same reason
+ * {@link deleteUpdate} is: an `update.updated` that changed nothing would make
+ * every open tab refetch a timeline that cannot have moved. A deleted update
+ * cannot be pinned — it is gone from every timeline, so pinning it would put a
+ * row nobody can see at the top of an order nobody can read.
  *
  * @throws {DomainError} `not_found` if there is no such live update.
  */
 export function setUpdatePinned(ctx: DomainContext, updateId: string, pinned: boolean): Update {
-	const update = findUpdateById(ctx.db, updateId);
-	if (!update || update.deletedAt !== null) throw notFound(`no such update: ${updateId}`);
-	if (update.pinned === pinned) return update;
-
-	// The row was just read and this is a single-process deployment (design §2),
-	// so a missing row here would be a bug, not a race.
-	const saved = setPinnedFlag(ctx.db, update.id, pinned)!;
-	ctx.bus.publish('update.updated', {
-		updateId: saved.id,
-		projectId: saved.projectId,
-		pinned: saved.pinned
-	});
-
-	return saved;
+	pinCard(ctx, { card: { kind: 'update', id: updateId }, pinned });
+	return findUpdateById(ctx.db, updateId)!;
 }
 
 /** The four levels (design §3), so an edit cannot invent a fifth. */
@@ -377,37 +390,4 @@ function decodeCursor(cursor: string | null | undefined): number | undefined {
 	if (cursor === undefined || cursor === null || cursor === '') return undefined;
 	if (!/^[0-9]+$/.test(cursor)) throw invalid('cursor is not one this server issued');
 	return Number(cursor);
-}
-
-/**
- * Record that the owner has read the conversation on one card (migration 015).
- *
- * "Recent replies" lifts a card out of its day while a conversation is live on
- * it, which was right for the first hour and wrong afterwards: with no way to
- * say "I have read this", the section only grew, and the cards riding above the
- * timeline became the ones that had been ignored the longest. This is the
- * missing half.
- *
- * Server-side rather than per browser, for the same reason as `markProjectSeen`:
- * one owner, more than one screen, and a section that cleared on the phone and
- * stayed lit on the desk would be worse than one that never cleared.
- *
- * It publishes `update.updated` so every open tab agrees, and deliberately does
- * **not** touch `edited_at` — reading a thread is not editing the card, and a
- * card marked edited because somebody read it would be a lie to the agent that
- * wrote it.
- *
- * @throws {DomainError} `not_found` for an unknown or deleted update.
- */
-export function markRepliesSeen(ctx: DomainContext, updateId: string): Update {
-	const seen = markRepliesSeenRow(ctx.db, updateId, ctx.now());
-	if (!seen) throw notFound(`no such update: ${updateId}`);
-
-	ctx.bus.publish('update.updated', {
-		updateId: seen.id,
-		projectId: seen.projectId,
-		pinned: seen.pinned
-	});
-
-	return seen;
 }

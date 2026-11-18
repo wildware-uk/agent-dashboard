@@ -51,6 +51,8 @@ export type {
 	MessageDelivery,
 	Notification,
 	NotificationKind,
+	Embed,
+	EmbedType,
 	Reaction,
 	Project,
 	BoardColumn,
@@ -64,6 +66,11 @@ export type {
 	RequestValue,
 	Session,
 	SessionMeta,
+	App,
+	AppView,
+	CardField,
+	CardTag,
+	Tag,
 	Task,
 	TaskState,
 	Update,
@@ -74,12 +81,10 @@ export type {
 
 // Repositories, one module per entity.
 export {
-	countUnseenUpdates,
 	findProjectById,
 	findProjectBySlug,
 	insertProject,
 	listProjects,
-	markProjectSeen,
 	updateProject,
 	type NewProject,
 	type ProjectPatch
@@ -109,7 +114,6 @@ export {
 	insertUpdate,
 	listUpdates,
 	editUpdate as editUpdateRow,
-	markRepliesSeen as markRepliesSeenRow,
 	setUpdatePinned,
 	softDeleteUpdate,
 	type NewUpdate,
@@ -117,6 +121,7 @@ export {
 } from './updates';
 export {
 	attachMediaToMessage,
+	attachMediaToRequest,
 	attachMediaToUpdate,
 	deleteMedia,
 	findMediaById,
@@ -124,6 +129,7 @@ export {
 	insertMedia,
 	listMediaByStatus,
 	listMediaForMessage,
+	listMediaForRequest,
 	listMediaForUpdate,
 	listOrphanedMedia,
 	setMediaBytes,
@@ -147,22 +153,65 @@ export {
 	type NewUploadToken
 } from './upload-tokens';
 export {
-	assignTask,
-	broadcastTask,
-	cancelTask,
-	claimTask,
-	completeTask,
-	countBroadcastTasks,
-	findTaskById,
-	insertTask,
-	listTasks,
-	type NewTask,
-	type TaskQuery
-} from './tasks';
+	deleteCardField,
+	findCardField,
+	listCardFields,
+	upsertCardField,
+	type NewCardField
+} from './fields';
+export {
+	findAppById,
+	findAppByUri,
+	findAppView,
+	insertAppView,
+	listAppViews,
+	listApps,
+	updateAppViewData,
+	updateAppViewState,
+	upsertApp,
+	type NewApp,
+	type NewAppView
+} from './apps';
+export {
+	addCardTag,
+	deleteTag,
+	findCardTag,
+	findTagById,
+	findTagBySlug,
+	insertTag,
+	listCardTags,
+	listTags,
+	removeCardTag,
+	updateTag,
+	type NewTag
+} from './tags';
+export {
+	CARD_ANCHOR,
+	CARD_ANCHORS,
+	CARD_KINDS,
+	CARD_STATUSES,
+	CARD_TABLE,
+	OPEN_STATUSES,
+	countOpenWork,
+	countWorkByStatus,
+	findCard,
+	isCardKind,
+	isCardStatus,
+	listWork,
+	setCardPinned,
+	setCardStatus,
+	type CardKind,
+	type CardRef,
+	type CardRow,
+	type CardStatus,
+	type WorkQuery,
+	type WorkRow
+} from './cards';
 export {
 	countMessagesAfter,
 	countUnreadMessages as countUnreadMessageRows,
 	listAgentProjectIds,
+	editMessage as editMessageRow,
 	findMessageById,
 	insertMessage,
 	listMessages,
@@ -181,7 +230,21 @@ export {
 	NO_PROJECT
 } from './read-cursors';
 export { deliveredMessageIds, listDeliveries, recordDelivery } from './deliveries';
+export { listMessageMentions, setMessageMentions } from './mentions';
 export { addReaction, listReactions, removeReaction } from './reactions';
+export {
+	findEmbedTypeById,
+	findEmbedTypeBySlug,
+	insertEmbed,
+	listEmbedTypes,
+	listEmbedsForMessage,
+	listEmbedsForRequest,
+	listEmbedsForTask,
+	listEmbedsForUpdate,
+	upsertEmbedType,
+	type NewEmbed,
+	type NewEmbedType
+} from './embeds';
 export {
 	countUnseenNotifications,
 	insertNotification,
@@ -199,6 +262,7 @@ export {
 export {
 	countPendingApprovals,
 	decideApproval,
+	editApproval as editApprovalRow,
 	expireApprovals,
 	findApprovalById,
 	insertApproval,
@@ -220,6 +284,25 @@ export {
 	type PushPrefs,
 	type PushSubscription
 } from './push';
+export {
+	clearOwnerDeviceToken,
+	deleteOwnerDevice,
+	findOwnerDeviceById,
+	findOwnerDeviceByTokenHash,
+	insertOwnerDevice,
+	listOwnerDevices,
+	markOwnerDevicePushed,
+	markOwnerDevicePushFailed,
+	setOwnerDeviceAlertProjects,
+	setOwnerDeviceApns,
+	setOwnerDeviceLiveActivity,
+	touchOwnerDevice,
+	type ApnsEnvironment,
+	type LiveActivityTokens,
+	type NewOwnerDevice,
+	type OwnerDevice,
+	type OwnerDeviceTokenColumn
+} from './owner-devices';
 export {
 	findLiveShareForUpdate,
 	findShareById,

@@ -66,6 +66,9 @@
 				}
 				const root = document.documentElement;
 				root.dataset.theme = theme;
+				// The iPhone app names itself here. It has its own message bar, so the
+				// page can drop the controls that bar already covers.
+				if (/\bAgentsiOS\//.test(navigator.userAgent)) root.dataset.nativeApp = '';
 				root.classList.toggle('dark', theme === 'dark');
 				// The status bar of an installed app, matched to the theme that just
 				// won. The two media-query copies above cannot do this on their own:

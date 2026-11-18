@@ -540,3 +540,21 @@ describe('telling a reply from a comment', () => {
 		expect(replyMessage(h, post.id, BASE)).toBeNull();
 	});
 });
+
+describe('markdown in a notification', () => {
+	const BASE = 'https://dash.example';
+
+	it('shows an agent’s markdown as plain text', () => {
+		const slug = createProject(h, { name: 'Agent Dashboard' }).project.slug;
+		const updateId = postUpdate(h, { project: slug, agentId, body: 'x' }).id;
+		const message = postMessage(h, {
+			author: { kind: 'agent', agentId },
+			updateId,
+			body: '**Merged.** Ran `npm test`:\n- 2502 passed\n- [log](https://ci.example/1)'
+		});
+
+		expect(replyMessage(h, message.id, BASE)?.message.body).toBe(
+			'Merged. Ran npm test:\n• 2502 passed\n• log'
+		);
+	});
+});

@@ -26,6 +26,7 @@ function aCard(over: Partial<SharedCardView> = {}): SharedCardView {
 		agentName: 'claude',
 		projectName: 'Agent Dashboard',
 		media: [],
+		embeds: [],
 		...over
 	};
 }

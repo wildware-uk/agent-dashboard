@@ -126,6 +126,26 @@ in one tab and both tabs' threads show it, with no reload.
 The `SameSite=Lax` session cookie is what makes these safe from cross-site
 forgery: a third-party page's request arrives with no session at all.
 
+## The owner's phones (`owner/devices.ts`)
+
+The iOS app cannot keep the session cookie, so each phone is minted its own key
+with `POST /api/devices` while the owner is signed in, and sends it as
+`Authorization: Bearer <key>`. Both locks accept it: the hook through a checker
+`src/hooks.server.ts` hands it (`auth/` may not reach the database), and
+`ownerAuthenticated` in `stream/owner.ts`. A bearer decides on its own — a key
+that names no device is a 401 even beside a valid cookie — and revoking a device
+deletes its row, so its key stops working on the next request.
+
+| Route                                     | Serves                                                |
+| ----------------------------------------- | ----------------------------------------------------- |
+| `POST /api/devices`                       | Mint a device key. Shown once, stored as an HMAC.     |
+| `GET /api/devices`                        | Every device, with whether it has push tokens.        |
+| `DELETE /api/devices/[id]`                | Revoke one. `{ removed }`.                            |
+| `PUT /api/devices/current/apns`           | The calling phone's alert token. Device key only.     |
+| `PUT /api/devices/current/live-activity`  | Its Live Activity tokens. Device key only.            |
+| `PUT /api/devices/current/alert-projects` | `{ projects: [slug] \| null }`: limit its alerts.     |
+| `GET /api/summary`                        | Online agents, waiting requests, open work, projects. |
+
 ## Media (`media/`)
 
 `src/http/media/` holds the two handlers; the route files are thin mounts over

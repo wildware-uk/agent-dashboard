@@ -15,8 +15,12 @@ export {
 	describeRise,
 	main,
 	newClientId,
+	quoting,
 	readFrames,
-	runBridge
+	runBridge,
+	withNotifyTimeout,
+	NOTIFY_TIMEOUT_MS,
+	STREAM_IDLE_MS
 } from './bridge';
 export type {
 	AnswerFrame,
@@ -37,3 +41,12 @@ export {
 	type Connection,
 	type MonitorOptions
 } from './monitor';
+export {
+	CLAIM_EVERY_MS,
+	CLAIM_FILE,
+	CLAIM_STALE_MS,
+	channelIsLive,
+	claimPath,
+	stampClaim,
+	type Claim
+} from './claim';

@@ -23,6 +23,8 @@
 	import RequestCard from './RequestCard.svelte';
 	import Attachments from './Attachments.svelte';
 	import Markdown from './Markdown.svelte';
+	import Apps from './Apps.svelte';
+	import Embeds from './Embeds.svelte';
 	import MediaGrid from './MediaGrid.svelte';
 	import { actionMessage } from './actions';
 	import { agentLabel } from './avatar';
@@ -32,6 +34,8 @@
 	import type {
 		AckView,
 		DeliveryView,
+		AppView,
+		EmbedView,
 		MediaView,
 		MessageView,
 		ReactionView,
@@ -39,6 +43,7 @@
 	} from './types';
 	import type { OwnerActions } from './actions';
 	import { Uploads } from './uploads.svelte';
+	import { replyInApp } from './native-composer';
 
 	let {
 		/** The thread, oldest first. Empty is the common case. */
@@ -65,6 +70,9 @@
 		onlineIds = [],
 		/** The images on each message, by message id (migration 016). */
 		media = {},
+		embeds = {},
+		/** The apps showing on the cards on this page (migration 041). */
+		cardApps = [],
 		/**
 		 * Which agents each message has reached, by message id (migration 018).
 		 *
@@ -110,6 +118,9 @@
 		acks?: Record<string, AckView[]>;
 		onlineIds?: string[];
 		media?: Record<string, MediaView[]>;
+		/** The embeds on each message, keyed by message id (migration 027). */
+		embeds?: Record<string, EmbedView[]>;
+		cardApps?: AppView[];
 		deliveries?: Record<string, DeliveryView[]>;
 		uploader?: Pick<OwnerActions, 'uploadMedia'>;
 		ondelete?: (id: string) => Promise<void>;
@@ -217,11 +228,25 @@
 		answering = null;
 	}
 
-	/** Open the box addressed to one comment. */
-	function replyTo(messageId: string): void {
+	/**
+	 * Open the box, addressed to one comment or to the card as a whole.
+	 *
+	 * Inside the iPhone app the app's own bar takes the words instead, so no
+	 * second box opens on a phone.
+	 */
+	function replyTo(messageId: string | null): void {
+		if (replyInApp(replyLabel(messageId), (text) => onreply(text, [], messageId ?? undefined))) {
+			return;
+		}
 		answering = messageId;
 		open = true;
 		error = null;
+	}
+
+	function replyLabel(messageId: string | null): string {
+		const who = speakerOf(messageId);
+		if (who === null) return 'Reply on this card';
+		return who === 'You' ? 'Reply to your comment' : `Reply to ${who}`;
 	}
 
 	/** The line being answered, for the label above the box. */
@@ -282,12 +307,109 @@
 		}
 	}
 
+	/**
+	 * The thread as it is read: newest first.
+	 *
+	 * The owner: "long threads are hard to follow, reverse the order replies are
+	 * shown in." A conversation on a card is not a chat window you sit inside —
+	 * it is something you come back to, and what you came back for is the last
+	 * thing said. Oldest-first buried it under everything already read, and the
+	 * longer the thread the further down it went.
+	 *
+	 * Reversed here rather than in the server or the store, because it is a
+	 * decision about reading: `$db` hands conversations over oldest first (a
+	 * thread is caught up on, not scrolled back through), the ids and the
+	 * "answering <them>" labels are order-free, and a copy is made so the array
+	 * the parent handed down is not turned round underneath it.
+	 */
+	const shown = $derived([...messages].reverse());
+
 	/** The page's one ticking clock, so "4m ago" keeps up (design §7). */
 	const ticking = clock();
 	onMount(() => ticking.hold());
 </script>
 
 <section data-thread class="flex min-w-0 flex-col gap-2" aria-label="Replies">
+	<!--
+		The box first, because the newest reply is now first (the owner: "long
+		threads are hard to follow, reverse the order replies are shown in").
+		Under a long thread it was a scroll away from everything it was about.
+	-->
+	{#if open}
+		<div class="flex min-w-0 flex-col gap-2">
+			<label class="flex flex-col gap-1 text-xs text-content-muted">
+				{#if answered}
+					Answering {speaker(answered.author)}
+				{:else}
+					Reply to this update
+				{/if}
+				<!--
+					Focused by an effect rather than by `autofocus`: the attribute focuses
+					on page load as well, which would steal the cursor from a reader who
+					never asked for a reply box.
+				-->
+				<textarea
+					bind:this={box}
+					bind:value={draft}
+					{onkeydown}
+					{onpaste}
+					{ondrop}
+					ondragover={(event) => {
+						if (!uploads) return;
+						// Preventing this is what tells the browser a drop is welcome;
+						// without it the page navigates to the file instead.
+						event.preventDefault();
+						dragging = true;
+					}}
+					ondragleave={() => (dragging = false)}
+					rows="3"
+					placeholder={uploads
+						? 'Markdown, images, Cmd/Ctrl+Enter sends.'
+						: 'Markdown. Cmd/Ctrl+Enter sends.'}
+					class="w-full rounded border bg-surface px-2 py-1.5 text-sm text-content {dragging
+						? 'border-accent'
+						: 'border-border-subtle'}"></textarea>
+			</label>
+
+			{#if uploads}
+				<Attachments {uploads} label="Add file" />
+			{/if}
+
+			{#if error}
+				<p role="alert" class="text-xs text-rose-400">{error}</p>
+			{/if}
+
+			<div class="flex flex-wrap justify-end gap-2">
+				<button
+					type="button"
+					onclick={close}
+					class="min-h-11 rounded px-3 text-sm text-content-muted hover:text-content"
+				>
+					Cancel
+				</button>
+				<button
+					type="button"
+					disabled={!ready}
+					onclick={send}
+					class="min-h-11 rounded bg-accent px-3 text-sm font-medium text-surface disabled:opacity-50"
+				>
+					Send reply
+				</button>
+			</div>
+		</div>
+	{:else}
+		<button
+			type="button"
+			aria-expanded={false}
+			onclick={() => replyTo(null)}
+			class="flex min-h-11 w-fit items-center gap-1.5 rounded px-2 text-xs font-medium text-content-muted hover:bg-surface-raised hover:text-content"
+		>
+			<svg class="size-3" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+				<path d="M2 3h12v8H6l-4 3z" />
+			</svg>
+			Reply
+		</button>
+	{/if}
 	{#if messages.length > 0}
 		<!--
 			Each reply is its own box rather than a run of paragraphs down one shared
@@ -303,7 +425,7 @@
 			thing everywhere on the page rather than one thing per component.
 		-->
 		<ol class="flex min-w-0 flex-col gap-1.5">
-			{#each messages as message (message.id)}
+			{#each shown as message (message.id)}
 				<li
 					data-message
 					data-message-id={message.id}
@@ -327,6 +449,20 @@
 								answering {speakerOf(message.answers)}
 							</span>
 						{/if}
+						{#if message.editedAt}
+							<!--
+								Stated, not silent (migration 033). Somebody who read this line
+								earlier has to be able to tell that what it says now is not what
+								it said then — the same mark an edited card carries.
+							-->
+							<span
+								class="text-content-muted italic"
+								data-testid="message-edited"
+								title="Edited {absoluteLabel(message.editedAt)}"
+							>
+								edited
+							</span>
+						{/if}
 						<time
 							class="ml-auto text-content-muted"
 							datetime={new Date(message.createdAt).toISOString()}
@@ -339,11 +475,20 @@
 					{#if (media[message.id] ?? []).length > 0}
 						<MediaGrid items={media[message.id]} />
 					{/if}
+					<Embeds items={embeds[message.id] ?? []} />
+					<!--
+						An app an agent put on this reply (migration 041). A reply may carry
+						one exactly as a card may: post_message takes `apps`, and a frame
+						that posted but never rendered would be the tool lying.
+					-->
+					<Apps card={{ kind: 'message', id: message.id }} apps={cardApps} {actions} />
 					<Ack
 						acks={acks[message.id] ?? []}
 						deliveries={deliveries[message.id] ?? []}
 						{agentNames}
 						{onlineIds}
+						now={ticking.now}
+						expects={message.author === 'human' ? { createdAt: message.createdAt } : undefined}
 					/>
 
 					<!--
@@ -379,7 +524,17 @@
 								feed's, so a question asked in a thread is answered with exactly
 								the controls a question asked anywhere else has.
 							-->
-							<RequestCard {request} agentName={agentNames[request.agentId]} {actions} />
+							<!--
+								No discussion of its own (migration 032): this question is
+								already inside a conversation, and the box for talking it over
+								is the one this thread ends with.
+							-->
+							<RequestCard
+								{request}
+								agentName={agentNames[request.agentId]}
+								{actions}
+								discussable={false}
+							/>
 						{/each}
 					{/if}
 
@@ -435,81 +590,5 @@
 				</li>
 			{/each}
 		</ol>
-	{/if}
-
-	{#if open}
-		<div class="flex min-w-0 flex-col gap-2">
-			<label class="flex flex-col gap-1 text-xs text-content-muted">
-				{#if answered}
-					Answering {speaker(answered.author)}
-				{:else}
-					Reply to this update
-				{/if}
-				<!--
-					Focused by an effect rather than by `autofocus`: the attribute focuses
-					on page load as well, which would steal the cursor from a reader who
-					never asked for a reply box.
-				-->
-				<textarea
-					bind:this={box}
-					bind:value={draft}
-					{onkeydown}
-					{onpaste}
-					{ondrop}
-					ondragover={(event) => {
-						if (!uploads) return;
-						// Preventing this is what tells the browser a drop is welcome;
-						// without it the page navigates to the file instead.
-						event.preventDefault();
-						dragging = true;
-					}}
-					ondragleave={() => (dragging = false)}
-					rows="3"
-					placeholder={uploads
-						? 'Markdown, images, Cmd/Ctrl+Enter sends.'
-						: 'Markdown. Cmd/Ctrl+Enter sends.'}
-					class="w-full rounded border bg-surface px-2 py-1.5 text-sm text-content {dragging
-						? 'border-accent'
-						: 'border-border-subtle'}"></textarea>
-			</label>
-
-			{#if uploads}
-				<Attachments {uploads} label="Add image" />
-			{/if}
-
-			{#if error}
-				<p role="alert" class="text-xs text-rose-400">{error}</p>
-			{/if}
-
-			<div class="flex flex-wrap justify-end gap-2">
-				<button
-					type="button"
-					onclick={close}
-					class="min-h-11 rounded px-3 text-sm text-content-muted hover:text-content"
-				>
-					Cancel
-				</button>
-				<button
-					type="button"
-					disabled={!ready}
-					onclick={send}
-					class="min-h-11 rounded bg-accent px-3 text-sm font-medium text-surface disabled:opacity-50"
-				>
-					Send reply
-				</button>
-			</div>
-		</div>
-	{:else}
-		<button
-			type="button"
-			aria-expanded={false}
-			onclick={() => (open = true)}
-			class="flex min-h-11 w-fit items-center gap-1.5 rounded px-2 text-xs font-medium text-content-muted hover:bg-surface-raised hover:text-content"
-		>
-			<svg class="size-3" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-				<path d="M2 3h12v8H6l-4 3z" />
-			</svg>
-			Reply
-		</button>
 	{/if}
 </section>

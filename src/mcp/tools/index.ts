@@ -14,11 +14,14 @@
 import type { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { attachMediaTool } from './attach-media';
 import { awaitRequestTool } from './await-request';
-import { claimTaskTool } from './claim-task';
-import { completeTaskTool } from './complete-task';
 import { createProjectTool } from './create-project';
-import { createTaskTool } from './create-task';
 import { createUploadTool } from './create-upload';
+import { editMessageTool } from './edit-message';
+import { setStatusTool } from './set-status';
+import { listWorkTool } from './list-work';
+import { listTagsTool, tagCardTool } from './tag-card';
+import { getCardFieldsTool, setCardFieldTool } from './card-fields';
+import { editRequestTool } from './edit-request';
 import { editUpdateTool } from './edit-update';
 import { endSessionTool } from './end-session';
 import { getMessagesTool } from './get-messages';
@@ -27,21 +30,29 @@ import { deleteMessageTool } from './delete-message';
 import { postMessageTool } from './post-message';
 import { reactTool } from './react';
 import { heartbeatTool } from './heartbeat';
+import { listEmbedTypesTool } from './list-embed-types';
 import { listProjectsTool } from './list-projects';
-import { listTasksTool } from './list-tasks';
 import { postUpdateTool } from './post-update';
+import { registerEmbedTypeTool } from './register-embed-type';
+import { listAppsTool } from './list-apps';
+import { registerAppTool } from './register-app';
+import { setAppDataTool } from './set-app-data';
 import { registerSessionTool } from './register-session';
 import { requestInputTool } from './request-input';
+import { withdrawRequestTool } from './withdraw-request';
 import { setProjectThemeTool } from './set-project-theme';
 import type { AnyMcpTool, ToolDeps } from './types';
 
 export { attachMediaTool } from './attach-media';
 export { awaitRequestTool } from './await-request';
-export { claimTaskTool } from './claim-task';
-export { completeTaskTool } from './complete-task';
 export { createProjectTool } from './create-project';
-export { createTaskTool } from './create-task';
 export { createUploadTool } from './create-upload';
+export { editMessageTool } from './edit-message';
+export { setStatusTool } from './set-status';
+export { listWorkTool } from './list-work';
+export { listTagsTool, tagCardTool } from './tag-card';
+export { getCardFieldsTool, setCardFieldTool } from './card-fields';
+export { editRequestTool } from './edit-request';
 export { editUpdateTool } from './edit-update';
 export { endSessionTool } from './end-session';
 export { getMessagesTool } from './get-messages';
@@ -50,11 +61,16 @@ export { deleteMessageTool } from './delete-message';
 export { postMessageTool } from './post-message';
 export { reactTool } from './react';
 export { heartbeatTool } from './heartbeat';
+export { listEmbedTypesTool, placeholdersIn } from './list-embed-types';
 export { listProjectsTool } from './list-projects';
-export { listTasksTool } from './list-tasks';
 export { postUpdateTool } from './post-update';
+export { registerEmbedTypeTool } from './register-embed-type';
+export { listAppsTool } from './list-apps';
+export { registerAppTool } from './register-app';
+export { setAppDataTool } from './set-app-data';
 export { registerSessionTool } from './register-session';
 export { requestInputTool } from './request-input';
+export { withdrawRequestTool } from './withdraw-request';
 export { setProjectThemeTool } from './set-project-theme';
 export type { AnyMcpTool, McpTool, ToolDeps, ToolShape } from './types';
 
@@ -67,20 +83,30 @@ export const TOOLS: readonly AnyMcpTool[] = [
 	editUpdateTool,
 	createUploadTool,
 	attachMediaTool,
+	listEmbedTypesTool,
+	registerEmbedTypeTool,
+	listAppsTool,
+	registerAppTool,
+	setAppDataTool,
 	registerSessionTool,
 	heartbeatTool,
 	endSessionTool,
-	listTasksTool,
-	createTaskTool,
-	claimTaskTool,
-	completeTaskTool,
 	getMessagesTool,
 	postMessageTool,
+	editMessageTool,
+	setStatusTool,
+	listWorkTool,
+	listTagsTool,
+	tagCardTool,
+	getCardFieldsTool,
+	setCardFieldTool,
 	deleteMessageTool,
 	reactTool,
 	acknowledgeTool,
 	requestInputTool,
-	awaitRequestTool
+	awaitRequestTool,
+	editRequestTool,
+	withdrawRequestTool
 ];
 
 /** Just the names, for tests and for a README that cannot drift. */
@@ -109,6 +135,21 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
 	server.registerTool(attachMediaTool.name, attachMediaTool.config, (args) =>
 		attachMediaTool.run(deps, args)
 	);
+	server.registerTool(listEmbedTypesTool.name, listEmbedTypesTool.config, (args) =>
+		listEmbedTypesTool.run(deps, args)
+	);
+	server.registerTool(registerEmbedTypeTool.name, registerEmbedTypeTool.config, (args) =>
+		registerEmbedTypeTool.run(deps, args)
+	);
+	server.registerTool(listAppsTool.name, listAppsTool.config, (args) =>
+		listAppsTool.run(deps, args)
+	);
+	server.registerTool(registerAppTool.name, registerAppTool.config, (args) =>
+		registerAppTool.run(deps, args)
+	);
+	server.registerTool(setAppDataTool.name, setAppDataTool.config, (args) =>
+		setAppDataTool.run(deps, args)
+	);
 	server.registerTool(registerSessionTool.name, registerSessionTool.config, (args) =>
 		registerSessionTool.run(deps, args)
 	);
@@ -118,17 +159,21 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
 	server.registerTool(endSessionTool.name, endSessionTool.config, (args) =>
 		endSessionTool.run(deps, args)
 	);
-	server.registerTool(listTasksTool.name, listTasksTool.config, (args) =>
-		listTasksTool.run(deps, args)
+	server.registerTool(setStatusTool.name, setStatusTool.config, (args) =>
+		setStatusTool.run(deps, args)
 	);
-	server.registerTool(createTaskTool.name, createTaskTool.config, (args) =>
-		createTaskTool.run(deps, args)
+	server.registerTool(listWorkTool.name, listWorkTool.config, (args) =>
+		listWorkTool.run(deps, args)
 	);
-	server.registerTool(claimTaskTool.name, claimTaskTool.config, (args) =>
-		claimTaskTool.run(deps, args)
+	server.registerTool(listTagsTool.name, listTagsTool.config, (args) =>
+		listTagsTool.run(deps, args)
 	);
-	server.registerTool(completeTaskTool.name, completeTaskTool.config, (args) =>
-		completeTaskTool.run(deps, args)
+	server.registerTool(tagCardTool.name, tagCardTool.config, (args) => tagCardTool.run(deps, args));
+	server.registerTool(setCardFieldTool.name, setCardFieldTool.config, (args) =>
+		setCardFieldTool.run(deps, args)
+	);
+	server.registerTool(getCardFieldsTool.name, getCardFieldsTool.config, (args) =>
+		getCardFieldsTool.run(deps, args)
 	);
 	server.registerTool(getMessagesTool.name, getMessagesTool.config, (args) =>
 		getMessagesTool.run(deps, args)
@@ -139,6 +184,9 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
 	server.registerTool(postMessageTool.name, postMessageTool.config, (args) =>
 		postMessageTool.run(deps, args)
 	);
+	server.registerTool(editMessageTool.name, editMessageTool.config, (args) =>
+		editMessageTool.run(deps, args)
+	);
 	server.registerTool(deleteMessageTool.name, deleteMessageTool.config, (args) =>
 		deleteMessageTool.run(deps, args)
 	);
@@ -148,5 +196,11 @@ export function registerTools(server: McpServer, deps: ToolDeps): void {
 	);
 	server.registerTool(awaitRequestTool.name, awaitRequestTool.config, (args) =>
 		awaitRequestTool.run(deps, args)
+	);
+	server.registerTool(editRequestTool.name, editRequestTool.config, (args) =>
+		editRequestTool.run(deps, args)
+	);
+	server.registerTool(withdrawRequestTool.name, withdrawRequestTool.config, (args) =>
+		withdrawRequestTool.run(deps, args)
 	);
 }

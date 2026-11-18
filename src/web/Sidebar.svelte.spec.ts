@@ -15,9 +15,10 @@ describe('the project sidebar', () => {
 	it('puts pinned projects first, whatever order it was handed', async () => {
 		render(Sidebar, { projects });
 
-		// "All projects" and "Tasks" are the fixed destinations; the pinned project
-		// leads the list of projects under them.
-		expect(names()).toEqual(['All projects', 'Tasks', 'Pinned Beta', 'Alpha']);
+		// "All projects" is the fixed destination; the pinned project leads the
+		// list of projects under it. (The Tasks link went with the board, migration
+		// 035: work is a card in the feed now.)
+		expect(names()).toEqual(['All projects', 'Pinned Beta', 'Alpha']);
 	});
 
 	it('hides archived projects behind a toggle', async () => {
@@ -129,7 +130,6 @@ describe('agents waiting on the owner', () => {
 
 		expect(badges()).toEqual([
 			{ row: 'All projects', count: undefined },
-			{ row: 'Tasks', count: undefined },
 			{ row: 'Pinned', count: undefined },
 			{ row: 'Alpha', count: '3' }
 		]);
@@ -161,85 +161,5 @@ describe('agents waiting on the owner', () => {
 		render(Sidebar, { projects, requestCounts: {}, totalRequests: 0 });
 
 		expect(document.querySelectorAll('[data-testid="request-badge"]')).toHaveLength(0);
-	});
-});
-
-/**
- * Tasks are the long-running half of the product, and until this link they
- * lived only in a rail that is `xl:block` — invisible below 1280px.
- */
-describe('getting to the tasks', () => {
-	it('offers a way there from every width', async () => {
-		const screen = render(Sidebar, { projects });
-
-		const link = screen.getByTestId('tasks-link').element();
-		expect(link.getAttribute('href')).toBe('/tasks');
-	});
-
-	it('counts what is outstanding, not what has ever existed', async () => {
-		const screen = render(Sidebar, { projects, openTasks: 4 });
-
-		await expect.element(screen.getByTestId('open-tasks')).toHaveTextContent('4');
-	});
-
-	it('says nothing when there is nothing outstanding', async () => {
-		const screen = render(Sidebar, { projects, openTasks: 0 });
-
-		await expect.element(screen.getByTestId('open-tasks')).not.toBeInTheDocument();
-	});
-});
-
-/**
- * The "new since you last looked" badge.
- *
- * A different question from the amber one, and the test that matters is that
- * they stay different: a row carrying both must show both, or "an agent is
- * blocked on you" and "three things happened" collapse into one number that
- * means neither.
- */
-describe('what is new in a project', () => {
-	const unseenOn = (name: string) =>
-		[...document.querySelectorAll('nav a')]
-			.find((link) => link.textContent?.includes(name))
-			?.querySelector('[data-testid="unseen-badge"] [aria-hidden]')
-			?.textContent?.trim();
-
-	it('puts the count on the project the updates landed in', async () => {
-		render(Sidebar, { projects, unseenCounts: { p1: 4 } });
-
-		expect(unseenOn('Alpha')).toBe('4');
-		expect(unseenOn('Beta')).toBeUndefined();
-	});
-
-	it('says what the number means rather than leaving a bare digit', async () => {
-		const screen = render(Sidebar, { projects, unseenCounts: { p1: 4 } });
-
-		await expect.element(screen.getByText('4 new since you last looked')).toBeInTheDocument();
-	});
-
-	it('shows both badges on a row that has earned both, and keeps them apart', async () => {
-		const screen = render(Sidebar, {
-			projects,
-			requestCounts: { p1: 1 },
-			unseenCounts: { p1: 4 }
-		});
-
-		const row = screen.getByRole('link', { name: /Alpha/ }).element();
-		expect(row.querySelector('[data-testid="request-badge"] [aria-hidden]')?.textContent).toBe('1');
-		expect(row.querySelector('[data-testid="unseen-badge"] [aria-hidden]')?.textContent).toBe('4');
-	});
-
-	it('badges an archived project too, once it is revealed', async () => {
-		const screen = render(Sidebar, { projects, unseenCounts: { p3: 2 } });
-
-		await screen.getByRole('button', { name: /Archived/ }).click();
-
-		expect(unseenOn('Old')).toBe('2');
-	});
-
-	it('shows nothing for a project that is caught up', async () => {
-		render(Sidebar, { projects, unseenCounts: {} });
-
-		expect(document.querySelector('[data-testid="unseen-badge"]')).toBeNull();
 	});
 });

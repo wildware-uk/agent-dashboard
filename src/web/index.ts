@@ -41,11 +41,9 @@ export {
 	ownerActions,
 	type NewMessage,
 	type NewProject,
-	type NewTask,
 	type OwnerActions,
 	type ProjectPatch,
-	type Requester,
-	type TaskPatch
+	type Requester
 } from './actions';
 export { renderMarkdown } from './markdown';
 export {
@@ -96,8 +94,6 @@ export type {
 	RequestsSnapshot,
 	SnapshotResponse,
 	TaskState,
-	TaskView,
-	TasksSnapshot,
 	UpdateLevel,
 	UpdateView,
 	UpdatesPage
@@ -112,8 +108,6 @@ export type { ThreadSource, ThreadsOptions, ThreadsStatus } from './threads.svel
  * The owner's task list (design §5, §7). One store per page, rendered in the
  * rail on a desktop and in the rail drawer on a phone.
  */
-export { Tasks } from './tasks.svelte';
-export type { TasksOptions, TasksStatus } from './tasks.svelte';
 /**
  * What agents are waiting on the owner for (design §5, §7). One store per page,
  * read by two regions: the cards at the top of the feed, and the sidebar's

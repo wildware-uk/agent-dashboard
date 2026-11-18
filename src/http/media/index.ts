@@ -21,8 +21,10 @@ export {
 export {
 	IMMUTABLE_CACHE_CONTROL,
 	createMediaHandler,
+	disposition,
 	type MediaHandler,
 	type MediaHandlerOptions,
 	type MediaRequestEvent
 } from './serve';
 export { mediaConfig } from './env';
+export { createAgentMediaHandler, type AgentMediaHandlerOptions } from './agent';

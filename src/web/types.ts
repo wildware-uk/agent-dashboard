@@ -61,7 +61,92 @@ export type ProjectView = {
 };
 
 /** Media a card can carry (design §3, §6). */
-export type MediaKind = 'image' | 'video';
+/**
+ * What an attachment is for.
+ *
+ * `image`, `video` and `audio` are rendered on the card; `file` is anything else
+ * — a PDF, a log, a zip — which is listed with its name and downloaded, never
+ * rendered (migrations 026, 038).
+ */
+/**
+ * A word a project decided for itself (migration 039).
+ *
+ * The owner: "allow users and agents to define tags for a project, ie 'feature,
+ * bug, high priority' etc, and these can be included on feed posts by agents and
+ * users in one click."
+ */
+export type TagView = {
+	id: string;
+	projectId: string;
+	name: string;
+	slug: string;
+	/** A palette name — see `tags.ts` — or `null` for the default grey. */
+	colour: string | null;
+	/** The agent that decided it, or `null` for the owner. */
+	agentId: string | null;
+	createdAt: number;
+};
+
+/** One of those words, on one card. */
+export type CardTagView = {
+	id: string;
+	tagId: string;
+	card: { kind: string; id: string };
+	/** Who put it there: `human`, or `agent:<agent_id>`. */
+	author: string;
+	createdAt: number;
+};
+
+/**
+ * A note pinned to a card (migration 040).
+ *
+ * The owner: "allow agents to set metadata on cards, for example, branch name,
+ * PR link, anything they like, they are hidden by default, but can be viewed on
+ * the dashboard, and updated by the user and agent alike."
+ */
+export type CardFieldView = {
+	id: string;
+	card: { kind: string; id: string };
+	name: string;
+	slug: string;
+	value: string;
+	/** Who set it last: `human`, or `agent:<agent_id>`. */
+	author: string;
+	createdAt: number;
+	updatedAt: number;
+};
+
+/**
+ * One showing of an app on a card (migration 041).
+ *
+ * The shape `$domain/apps.ts` returns, named here rather than imported for the
+ * reason every other view type is: `$web` may not reach past the wire.
+ */
+export type AppView = {
+	id: string;
+	card: { kind: string; id: string };
+	/** The app's `ui://` handle. */
+	uri: string;
+	name: string;
+	description: string | null;
+	/**
+	 * The page this app frames, or `null` for a document the dashboard serves
+	 * (migration 042). A service's own page runs on its own origin; a document
+	 * the dashboard serves runs on none.
+	 */
+	url: string | null;
+	title: string | null;
+	/** What the agent handed it. */
+	data: Record<string, unknown>;
+	/** What the app saved for itself, or `null` if it never has. */
+	state: Record<string, unknown> | null;
+	author: string;
+	agentId: string | null;
+	createdAt: number;
+	updatedAt: number;
+};
+
+export type MediaKind = 'image' | 'video' | 'audio' | 'file';
 
 /**
  * Where a media item is in the pipeline (design §6).
@@ -92,13 +177,26 @@ export type MediaVariant = 'original' | 'thumb-640' | 'thumb-1600' | 'poster' | 
  */
 export type MediaView = {
 	id: string;
+	/** Which card it is on: exactly one of the four (migration 030). */
 	updateId: string | null;
+	messageId: string | null;
+	requestId: string | null;
+	taskId: string | null;
 	kind: MediaKind;
 	mime: string;
 	status: MediaStatus;
+	/** How big it is, so a download can say so before it is fetched. */
+	bytes: number;
 	width: number | null;
 	height: number | null;
 	durationMs: number | null;
+	/**
+	 * What it was called when it was uploaded, for a `file`.
+	 *
+	 * `null` for a picture, which is its own label. It is the only thing a
+	 * download tile has to show, so it travels with the row.
+	 */
+	filename: string | null;
 	variants: MediaVariant[];
 };
 
@@ -134,14 +232,24 @@ export type UpdateView = {
 	 */
 	/** The task this update is progress on, if any (design §7). */
 	taskId?: string | null;
-	/**
-	 * When the owner last read this card's thread (migration 015).
-	 *
-	 * `null` or absent means never, which is what keeps a card in "Recent
-	 * replies" while its conversation is unread.
-	 */
-	repliesSeenAt?: number | null;
 	share?: { views: number; sharedAt: number };
+	/**
+	 * The emoji on the card itself (migration 034).
+	 *
+	 * Optional on the same terms as `media`: it rides with every real response,
+	 * and a spec that builds a card from three fields should not have to say
+	 * "nobody reacted" to do so.
+	 */
+	reactions?: ReactionView[];
+	/**
+	 * Where the work on this card has got to (migration 035).
+	 *
+	 * `null` or absent for an ordinary card, which is most of them. Marking one
+	 * is what the task board used to be.
+	 */
+	status?: string | null;
+	/** When that state last changed, which moves the card up the feed (037). */
+	statusAt?: number | null;
 	/**
 	 * The media grid's contents, in upload order (design §7).
 	 *
@@ -151,6 +259,13 @@ export type UpdateView = {
 	 * included.
 	 */
 	media?: MediaView[];
+	/**
+	 * The embeds on this card (migration 027).
+	 *
+	 * Optional on the same terms as `media`: a spec that builds a card from three
+	 * fields should not have to say "no embeds" to do so.
+	 */
+	embeds?: EmbedView[];
 };
 
 /**
@@ -177,6 +292,8 @@ export type RequestConfig = {
 	max?: number;
 	/** `form`: what to call the editable field. */
 	label?: string;
+	/** Picture questions: the media id of the image on an option, by option. */
+	optionMedia?: Record<string, string>;
 };
 
 /** What the owner said, typed by kind. */
@@ -217,6 +334,21 @@ export type RequestView = {
 	expiresAt: number;
 	answeredAt: number | null;
 	answer: RequestAnswer | null;
+	/**
+	 * What the card carries, on the same terms as an update's (migration 030).
+	 *
+	 * "Does this look right" is a question you cannot ask without the thing being
+	 * looked at. Optional so a spec that builds a request from its five real
+	 * fields does not have to say "nothing attached" to do so.
+	 */
+	media?: MediaView[];
+	embeds?: EmbedView[];
+	/** When the asking agent last rewrote the question (migration 033). */
+	editedAt?: number | null;
+	/** Kept at the top of the feed by the owner (migration 034). */
+	pinned?: boolean;
+	/** The emoji on the question itself (migration 034). */
+	reactions?: ReactionView[];
 };
 
 /**
@@ -240,6 +372,7 @@ export type SharedCardView = {
 	agentName: string;
 	projectName: string | null;
 	media: MediaView[];
+	embeds: EmbedView[];
 };
 
 /** `GET /api/snapshot/requests`: everything waiting on the owner right now. */
@@ -268,12 +401,14 @@ export type SnapshotResponse = {
 	seq: number;
 	at: string;
 	projects?: ProjectView[];
-	/**
-	 * Updates per project id that landed since the owner last opened it — the
-	 * sidebar's "new" badge. Absent from the updates-only endpoint, and a project
-	 * with nothing new is absent from the map rather than zero.
-	 */
-	unseen?: Record<string, number>;
+	/** The words the projects in this snapshot use (migration 039). */
+	tags?: TagView[];
+	/** Where those words are worn, across every card in this snapshot. */
+	cardTags?: CardTagView[];
+	/** What is noted on the cards in this snapshot (migration 040). */
+	cardFields?: CardFieldView[];
+	/** The apps showing on the cards in this snapshot (migration 041). */
+	cardApps?: AppView[];
 	updates: UpdatesPage;
 	/**
 	 * Agent id to display name, for every agent this deployment knows — the
@@ -291,6 +426,8 @@ export type SnapshotResponse = {
 	acks?: AckView[];
 	/** The images on them, keyed by message id (migration 016). */
 	messageMedia?: Record<string, MediaView[]>;
+	/** The embeds on them, keyed by message id (migration 027). */
+	messageEmbeds?: Record<string, EmbedView[]>;
 };
 
 /**
@@ -307,7 +444,9 @@ export type AckView = {
 	id: string;
 	seq: number;
 	agentId: string;
-	/** Exactly one of these two is set. */
+	/** The card it is on — any of the four, since migration 034. */
+	card: { kind: string; id: string };
+	/** The same fact by the older names, for the two kinds that had them first. */
 	messageId: string | null;
 	taskId: string | null;
 	state: AckState;
@@ -334,47 +473,6 @@ export type DeliveryView = {
 
 /** Where a task is in its life (design §3). */
 export type TaskState = 'todo' | 'claimed' | 'done' | 'cancelled';
-
-/**
- * One task as `GET /api/snapshot/tasks` sends it.
- *
- * `body` is the brief the owner wrote and `result` is what the agent reported,
- * so both are untrusted text as far as rendering goes — they are shown as text,
- * never as markup, for the same reason an update's markdown renders with raw HTML
- * disabled (design §8).
- */
-export type TaskView = {
-	id: string;
-	seq: number;
-	projectId: string;
-	/** The claimant, or the agent the owner targeted it at, or `null`. */
-	agentId: string | null;
-	title: string;
-	body: string;
-	state: TaskState;
-	createdAt: number;
-	claimedAt: number | null;
-	doneAt: number | null;
-	result: string | null;
-	/**
-	 * When the owner sent this out to the project's agents, or `null`.
-	 *
-	 * Unassigned work is nobody's and notifies nobody; this is the owner offering
-	 * it to whoever gets there first, which is a different thing and looks
-	 * different on the board.
-	 */
-	broadcastAt?: number | null;
-};
-
-/** `GET /api/snapshot/tasks`. */
-export type TasksSnapshot = {
-	/** The newest event seq this state accounts for. */
-	seq: number;
-	at: string;
-	tasks: TaskView[];
-	/** What agents have said about these tasks (migration 013). */
-	acks?: AckView[];
-};
 
 /**
  * One message as `GET /api/messages` sends it (design §3, §7).
@@ -407,9 +505,36 @@ export type MessageView = {
 	 * carrying two conversations readable without nesting anything.
 	 */
 	answers?: string | null;
+	/**
+	 * The request whose discussion this belongs to (migration 032).
+	 *
+	 * A question can be talked over before it is answered, and those lines live
+	 * on the request rather than in the feed: a message with a `requestId` is not
+	 * a post, and renders under the question it is about.
+	 */
+	requestId?: string | null;
 	author: string;
 	body: string;
 	createdAt: number;
+	/**
+	 * Kept at the top of the feed by the owner (migration 034).
+	 *
+	 * The owner: "let me pin my own messages." A post is a card, and every card
+	 * can be pinned — it was an update's alone only because updates were the only
+	 * cards when the pin was written.
+	 */
+	pinned?: boolean;
+	/** Where the work on this post has got to (migration 035). */
+	status?: string | null;
+	/** When that state last changed, which moves the card up the feed (037). */
+	statusAt?: number | null;
+	/**
+	 * When its author last corrected it (migration 033).
+	 *
+	 * Rendered, never silent: a reader who saw the line earlier has to be able to
+	 * tell that what it says now is not what it said then.
+	 */
+	editedAt?: number | null;
 };
 
 /** `GET /api/messages`: every thread in scope, stamped with the cursor it is good to. */
@@ -437,7 +562,10 @@ export type NotificationView = {
 export type ReactionView = {
 	id: string;
 	seq: number;
-	messageId: string;
+	/** The card it is on — any of the four, since migration 034. */
+	card: { kind: string; id: string };
+	/** The message, when it is one; `null` on any other kind of card. */
+	messageId: string | null;
 	/** The literal `human` for the owner, or `agent:<agent_id>` (design §3). */
 	actor: string;
 	emoji: string;
@@ -463,8 +591,136 @@ export type MessagesSnapshot = {
 	acks?: AckView[];
 	/** The images on them, keyed by message id (migration 016). */
 	media?: Record<string, MediaView[]>;
+	/** The embeds on them, keyed by message id (migration 027). */
+	embeds?: Record<string, EmbedView[]>;
 	/** Who each message has actually reached (migration 018). */
 	deliveries?: DeliveryView[];
 	/** The emoji reactions on them (migration 024). */
 	reactions?: ReactionView[];
+};
+
+/**
+ * Embeds: something shown in the style of where it came from (migration 027).
+ *
+ * The shapes here mirror `$domain/embeds.ts` rather than importing them, as
+ * every view type in this file does: `$web` talks to the HTTP API and to
+ * nothing below it (design §2).
+ *
+ * The important thing to know while reading the renderer is that **none of this
+ * is markup**. A spec names blocks from a closed list and colours that are hex
+ * literals, both checked on the server before the row exists, and every value in
+ * it is drawn as text. There is nothing here to sanitise because there is
+ * nothing here that could become HTML.
+ */
+export type EmbedFont = 'sans' | 'serif' | 'mono';
+export type EmbedRadius = 'none' | 'sm' | 'md' | 'lg';
+
+/**
+ * The layout knobs (migration 028).
+ *
+ * A palette alone cannot make a card look like where it came from: a Slack
+ * message is a rounded-square avatar with the name and time on one line, and a
+ * GitHub comment is a circular avatar in a tinted bar above a white body. These
+ * say which, and every one is a closed list the renderer turns into a class it
+ * wrote itself.
+ */
+export type EmbedAvatarShape = 'circle' | 'rounded' | 'square';
+export type EmbedSize = 'sm' | 'md' | 'lg';
+export type EmbedHeaderLayout = 'inline' | 'stacked';
+export type EmbedTone = 'normal' | 'muted' | 'accent';
+export type EmbedChipStyle = 'pill' | 'lozenge' | 'tag';
+export type EmbedFieldLayout = 'rows' | 'inline';
+export type EmbedPadding = 'tight' | 'normal' | 'roomy';
+
+/**
+ * The brand marks the client can draw (migration 029).
+ *
+ * Inline SVG owned by `EmbedMark.svelte`, so a mark never fetches anything and a
+ * look carries only a name.
+ */
+export type EmbedMark =
+	'slack' | 'github' | 'gitlab' | 'jira' | 'confluence' | 'linear' | 'notion' | 'figma' | 'link';
+
+/** The card itself, rather than what is in it. */
+export type EmbedFrame = {
+	/** Draw the outer border. `true` unless a look says otherwise. */
+	border?: boolean;
+	/** The accent bar down the left edge. Off unless a look asks. */
+	stripe?: boolean;
+	padding?: EmbedPadding;
+	/** Line the body up under the header's words rather than under its avatar. */
+	indent?: boolean;
+};
+
+/** The palette one look is drawn in. Every colour is `#rrggbb`. */
+export type EmbedTheme = {
+	accent?: string;
+	background?: string;
+	foreground?: string;
+	muted?: string;
+	border?: string;
+	font?: EmbedFont;
+	radius?: EmbedRadius;
+};
+
+/** The badge along the top: where this came from. */
+export type EmbedChrome = {
+	label?: string;
+	icon?: string;
+	/** The source's own brand mark, drawn in the card's top corner. */
+	mark?: EmbedMark;
+	/** A mark for a source we ship none for: a media id or an https image URL. */
+	image?: string;
+};
+
+/** One drawable piece. The `type` is the whole of what decides how it renders. */
+export type EmbedBlock =
+	| {
+			type: 'header';
+			avatar?: string;
+			title?: string;
+			subtitle?: string;
+			meta?: string;
+			shape?: EmbedAvatarShape;
+			size?: EmbedSize;
+			layout?: EmbedHeaderLayout;
+			bar?: boolean;
+	  }
+	| { type: 'heading'; value: string; level?: 1 | 2 }
+	| { type: 'text'; value: string; tone?: EmbedTone; size?: EmbedSize }
+	| { type: 'markdown'; value: string; size?: EmbedSize }
+	| { type: 'code'; value: string; language?: string }
+	| { type: 'quote'; value: string }
+	| { type: 'fields'; items: { label: string; value: string }[]; layout?: EmbedFieldLayout }
+	| { type: 'chips'; value: string; style?: EmbedChipStyle }
+	| { type: 'image'; value: string; alt?: string }
+	| { type: 'divider' }
+	| { type: 'footer'; value?: string; url?: string };
+
+export type EmbedSpec = {
+	theme: EmbedTheme;
+	chrome: EmbedChrome;
+	frame: EmbedFrame;
+	blocks: EmbedBlock[];
+};
+
+/** The values one embed shows. A string, or a list of them for chips. */
+export type EmbedData = Record<string, string | string[]>;
+
+/** One embed as a card renders it: the values, and the look to draw them in. */
+export type EmbedView = {
+	id: string;
+	/** Which card it is on: exactly one of the four (migration 030). */
+	updateId: string | null;
+	messageId: string | null;
+	requestId: string | null;
+	taskId: string | null;
+	/** The look's slug, for a `data-` attribute a test can find it by. */
+	type: string;
+	typeName: string;
+	spec: EmbedSpec;
+	data: EmbedData;
+	/** Where it was copied from, if the poster said. Always http or https. */
+	sourceUrl: string | null;
+	createdAt: number;
 };

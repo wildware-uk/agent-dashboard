@@ -24,13 +24,26 @@ import {
 	listAgentNames,
 	listProjects,
 	listThread,
+	listUpdateEmbeds,
 	listUpdateMedia,
 	acknowledgementsFor,
+	listMessageEmbeds,
 	listMessageMedia,
 	listUpdateShares,
+	appsForCards,
+	fieldsForCards,
+	listPendingRequests,
+	listTags,
 	listUpdates,
-	unseenUpdateCounts,
-	type MediaAttachment
+	reactionsFor,
+	tagsForCards,
+	type EmbedView,
+	type MediaAttachment,
+	type AppViewData,
+	type CardField,
+	type CardTag,
+	type Reaction as ReactionView,
+	type Tag
 } from '$domain';
 import type { AuthConfig, SessionCookieReader } from '../auth';
 import { ownerAuthenticated, unauthenticatedResponse } from './owner';
@@ -85,6 +98,13 @@ export type SnapshotProjects = ReturnType<typeof listProjects>;
 export type SnapshotUpdate = ReturnType<typeof listUpdates>['updates'][number] & {
 	media: MediaAttachment[];
 	/**
+	 * The embeds on this card (migration 027), on the same terms as its media:
+	 * always an array, and carrying the look each one is drawn in, so a card
+	 * arriving on the stream can be rendered without a registry the client would
+	 * have to keep in step.
+	 */
+	embeds: EmbedView[];
+	/**
 	 * The public link on this card, if it has one (design §7, §8).
 	 *
 	 * Present only when the card is shared, so the owner can see at a glance which
@@ -93,6 +113,14 @@ export type SnapshotUpdate = ReturnType<typeof listUpdates>['updates'][number] &
 	 * the URL back (`src/domain/shares.ts`).
 	 */
 	share?: { views: number; sharedAt: number };
+	/**
+	 * The emoji on the card itself (migration 034).
+	 *
+	 * Riding with the card for the same reason its media does: the owner asked
+	 * for the card types to stop differing, and a reaction fetched separately
+	 * would paint a beat after the thing it is on.
+	 */
+	reactions: ReactionView[];
 };
 
 export type SnapshotUpdates = {
@@ -127,16 +155,6 @@ export type SnapshotAgentNames = Record<string, string>;
 export type SnapshotMessages = ReturnType<typeof listThread>;
 
 /**
- * Updates per project the owner has not looked at yet, for the sidebar badge.
- *
- * Beside the project list rather than a field on each project, because it is not
- * a property of the project: `list_projects` is the same call agents make over
- * MCP, and what the owner has read is none of their business. A project with
- * nothing new is absent rather than zero.
- */
-export type SnapshotUnseen = Record<string, number>;
-
-/**
  * What agents have said about the messages in this snapshot (migration 013).
  *
  * Rides with the threads for the same reason the threads ride with the timeline:
@@ -148,14 +166,56 @@ export type SnapshotAcks = ReturnType<typeof acknowledgementsFor>;
 /** The images on the messages in this snapshot, keyed by message id. */
 export type SnapshotMessageMedia = Record<string, MediaAttachment[]>;
 
+/**
+ * The embeds on those messages, keyed by message id (migration 027).
+ *
+ * Its own map beside the media's, for the same reason that one is its own map:
+ * an embed is a property of the message that came back, not a filter on which
+ * messages come back, and a thread of plain replies costs no keys at all.
+ */
+export type SnapshotMessageEmbeds = Record<string, EmbedView[]>;
+
+/**
+ * A project's own words, and where they are worn (migration 039).
+ *
+ * Two lists rather than tags folded into each card: the picker on every card
+ * needs the project's whole vocabulary whether or not this page happens to show
+ * a card wearing each word, and a definition repeated on forty cards would be
+ * forty copies of the same three facts.
+ */
+export type SnapshotTags = Tag[];
+export type SnapshotCardTags = CardTag[];
+
+/**
+ * What is known about the cards on this page (migration 040).
+ *
+ * A flat list for the reason the tags are one: the client keys it by card, and
+ * a map nested per kind would be three shapes to merge rather than one to
+ * filter.
+ */
+export type SnapshotCardFields = CardField[];
+
+/**
+ * The apps showing on the cards on this page (migration 041).
+ *
+ * A flat list for the reason the fields are one: the client keys it by card, and
+ * an app is a property of the card it is on rather than a filter on which cards
+ * came back.
+ */
+export type SnapshotCardApps = AppViewData[];
+
 export type FullSnapshot = {
 	projects: SnapshotProjects;
-	unseen: SnapshotUnseen;
+	tags: SnapshotTags;
+	cardTags: SnapshotCardTags;
+	cardFields: SnapshotCardFields;
+	cardApps: SnapshotCardApps;
 	updates: SnapshotUpdates;
 	agentNames: SnapshotAgentNames;
 	messages: SnapshotMessages;
 	acks: SnapshotAcks;
 	messageMedia: SnapshotMessageMedia;
+	messageEmbeds: SnapshotMessageEmbeds;
 };
 
 /** Just the timeline, for paging and for a scoped refetch. */
@@ -207,17 +267,41 @@ export function readFullSnapshot(
 	// must not reach an update whose poster the client cannot name, and the whole
 	// map is smaller than one card's markdown.
 	const messages = listThread(ctx, query.project ? { project: query.project } : {});
+	const updates = readUpdates(query, ctx);
+	// The cards on this page, in the three kinds that can carry a word. Requests
+	// are read for the whole scope rather than per page: there are never many
+	// pending at once, and one that is waiting on the owner is the card most
+	// likely to be labelled.
+	const onPage = {
+		update: updates.items.map((update) => update.id),
+		message: messages.map((message) => message.id),
+		// Every pending question, not this page's: there are never many, and one
+		// waiting on the owner is the card most likely to be labelled.
+		request: listPendingRequests(ctx).map((request) => request.id)
+	};
+	const cardTags = tagsForCards(ctx, onPage);
+	const cardFields = fieldsForCards(ctx, onPage);
+	const cardApps = appsForCards(ctx, onPage);
+
 	return {
 		projects,
-		unseen: unseenUpdateCounts(ctx),
-		updates: readUpdates(query, ctx),
+		tags: listTags(ctx, { project: query.project ?? null }),
+		cardTags,
+		cardFields,
+		cardApps,
+		updates,
 		agentNames: listAgentNames(ctx),
 		messages,
-		acks: acknowledgementsFor(ctx, { messageIds: messages.map((message) => message.id) }),
+		acks: acknowledgementsFor(ctx, { message: messages.map((message) => message.id) }),
 		messageMedia: Object.fromEntries(
 			messages
 				.map((message) => [message.id, listMessageMedia(ctx, message.id)] as const)
 				.filter(([, media]) => media.length > 0)
+		),
+		messageEmbeds: Object.fromEntries(
+			messages
+				.map((message) => [message.id, listMessageEmbeds(ctx, message.id)] as const)
+				.filter(([, embeds]) => embeds.length > 0)
 		)
 	};
 }
@@ -233,7 +317,6 @@ export function readUpdatesSnapshot(
 function readUpdates(query: SnapshotQuery, ctx: DomainContext): SnapshotUpdates {
 	const page = listUpdates(ctx, {
 		project: query.project,
-		taskId: query.task,
 		limit: query.limit,
 		cursor: query.cursor
 	});
@@ -244,13 +327,24 @@ function readUpdates(query: SnapshotQuery, ctx: DomainContext): SnapshotUpdates 
 		ctx,
 		page.updates.map((update) => update.id)
 	);
+	const embeds = listUpdateEmbeds(
+		ctx,
+		page.updates.map((update) => update.id)
+	);
 	const shares = listUpdateShares(
 		ctx,
+		page.updates.map((update) => update.id)
+	);
+	const reactions = reactionsFor(
+		ctx,
+		'update',
 		page.updates.map((update) => update.id)
 	);
 	const items = page.updates.map((update) => ({
 		...update,
 		media: media[update.id] ?? [],
+		embeds: embeds[update.id] ?? [],
+		reactions: reactions.filter((reaction) => reaction.card.id === update.id),
 		...(shares[update.id] ? { share: shares[update.id] } : {})
 	}));
 

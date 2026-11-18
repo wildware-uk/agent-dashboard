@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { SESSION_COOKIE, signSession } from '../auth';
-import { ownerAuthenticated, unauthenticatedResponse } from './owner';
+import type { OwnerDevice } from '$domain';
+import { ownerAuthenticated, requestDevice, unauthenticatedResponse } from './owner';
 
 const SESSION_SECRET = 's'.repeat(32);
 const config = () => ({ sessionSecret: SESSION_SECRET, adminPasswordHash: '$argon2id$x' });
@@ -24,6 +25,30 @@ describe('the owner check the live endpoints repeat for themselves', () => {
 
 	it('fails closed when the environment does not validate', () => {
 		expect(ownerAuthenticated(cookies(signSession(SESSION_SECRET)), () => null)).toBe(false);
+	});
+});
+
+describe('a device key in place of the cookie', () => {
+	const phone = { id: 'dev1' } as OwnerDevice;
+	const devices = (token: string) => (token === 'good' ? phone : null);
+	const bearer = (token: string, cookie?: string) => ({
+		...cookies(cookie),
+		request: { headers: new Headers({ authorization: `Bearer ${token}` }) }
+	});
+
+	it('accepts a key that names a device', () => {
+		expect(ownerAuthenticated(bearer('good'), config, devices)).toBe(true);
+		expect(requestDevice(bearer('good'), devices)).toBe(phone);
+	});
+
+	it('refuses a key that names none, whatever the cookie says', () => {
+		expect(ownerAuthenticated(bearer('bad', signSession(SESSION_SECRET)), config, devices)).toBe(
+			false
+		);
+	});
+
+	it('has no device to name for a cookie caller', () => {
+		expect(requestDevice(cookies(signSession(SESSION_SECRET)), devices)).toBeNull();
 	});
 });
 

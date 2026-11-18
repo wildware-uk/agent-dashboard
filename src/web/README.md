@@ -45,12 +45,69 @@ Notes carried from the design (§7):
   a draft the owner has not read, let alone edited, is the one way to make that
   kind dangerous. The service worker answers over the same endpoint the dashboard
   uses, with the owner's own cookie, and opens the card if that fails.
-- **A replied-to card rides at the top under "Recent replies"**, lifted clear of
-  the day groups exactly as a pinned one is — reordering it inside its own day
-  would put it at the top of Tuesday and nowhere near the top of the feed. Its
-  `created_at` never moves, so it drops back into history the moment it stops
-  being one of the most recently answered. Capped, because on an old board
-  "every card with a reply" is most of them.
+- **One feed, sorted by what happened last** — a reply or a work-state change
+  lifts its card to the top (`activity.ts`), and the day heading reads the same
+  figure so the two always agree. The card still shows its own age, so "3d ago"
+  under Today means posted three days ago, answered this morning. There is no
+  separate "Recent replies" section: the owner asked for it gone once the feed
+  sorted this way, and a card copied into a section was a card to read twice.
+- **A card's time is when it last changed, not when it was written** — a reply,
+  a work state that moved or an edit all make it read "updated 4m ago"
+  (`activity.ts`). The instant it was posted moves into the tooltip, so nothing
+  is lost. An edit counts here and deliberately does not count for ordering: a
+  typo fix is not news to anybody.
+- **Only the feed scrolls** — `Shell.svelte` pins `<html>` and `<body>` while
+  the dashboard is mounted (`app-locked` in `app.css`) and takes the lock off
+  when it unmounts, because the login page and a shared card are ordinary
+  documents. A fixed body is the part that matters on a phone: `100dvh` moves as
+  the browser's own bar slides, and the leftover height is what a flick drags to
+  show a strip of nothing.
+- **A card can carry notes** (`CardFields.svelte`, migration 040) — a branch, a
+  pull request, an environment — behind one "Details" line, because a feed is
+  read by scanning what people said. Nobody owns a field: the owner corrects an
+  agent's and the other way round, and each row records who touched it last. A
+  value that parses as `http`/`https` renders as a link; everything else is
+  text, which is what keeps `javascript:` out of a card an agent wrote.
+- **A card wears its project's own words** (`TagChips.svelte`, migration 039) —
+  the picker is the project's list, so adding one is a single press, and typing
+  is only for a word that does not exist yet. Chips are ordered by the project's
+  list rather than by when each was clicked, so a feed scans the same way down.
+- **A small panel closes the way people expect** (`dismiss.ts`) — a press
+  anywhere else or Escape. `pointerdown` rather than `click`, because the press
+  often removes the element the click would have landed on, and the button that
+  opened it is ignored so pressing it again still closes rather than reopening.
+- **The same picker labels a post before it exists** (`TagPicker.svelte` in
+  `Composer.svelte`): a draft has no id, so the choice is held and written the
+  moment the post comes back with one. A label that fails to land does not fail
+  the post. Colours are picked on the _word_, Trello-style, so repainting "bug"
+  repaints every card wearing it.
+- **A notification always lands on its target** (`Timeline.svelte`) — the card it
+  names is exempt from the feed filter and unfolded if it was folded, a reply id
+  resolves to the card carrying it (and falls back to that card if the thread
+  never renders), and a question is matched by `data-request-id`, which the
+  lookup used to walk straight past. When it genuinely is not there, the feed
+  says so instead of doing nothing.
+- **Sound plays on the card** (`MediaSounds.svelte`, migration 038) — the
+  browser's own `<audio controls>`, which is keyboard-operable and labelled in
+  the reader's language, with `preload="metadata"` so a card of voice notes
+  fetches nothing until asked, and one player at a time.
+- **Motion means something** (`motion.ts`) — cards slide to their new place
+  (FLIP) and wear a fading ring for a moment when they move, a spinner turns
+  while something is actually in flight, a bar sweeps under "… is thinking…",
+  and a skeleton sweeps where a picture will land. Everything collapses to
+  nothing under `prefers-reduced-motion`, in one block at the end of `app.css`.
+- **A card marks its comments read by being looked at**, measured as reaching
+  the middle band of the viewport (`visible.ts`) — not as a fraction of the card,
+  which a report taller than the screen can never satisfy.
+- **A card folds when its header or title is clicked** (`headerclick.ts`) —
+  anywhere that is not itself a control, and not a click that was really a text
+  selection. The chevron stays the labelled, focusable way to do it, so the
+  header never becomes a tab stop full of tab stops.
+- **A card badges how many comments are new to this reader** (`unread.svelte.ts`)
+  and clears it by being looked at — on screen, not folded, for the best part of
+  a second. Per browser, like folding and filtering, because it is a fact about
+  reading. A card this browser has never met starts level rather than badging its
+  whole history, and the owner's own replies never count as unread.
 - **Times on cards are relative, with the instant behind them** — "4m ago" is
   the question a timeline reader is asking; `14:02` makes them work it out. The
   exact instant lives in the `title` and the `datetime`, so hovering, a screen

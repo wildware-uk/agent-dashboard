@@ -8,8 +8,14 @@
  * a fat payload would make the bus a second, drifting copy of the data model.
  */
 
-/** Media a payload can describe (design §3). */
-export type MediaKind = 'image' | 'video';
+/**
+ * Media a payload can describe (design §3, migration 026).
+ *
+ * Its own literal rather than `$db`'s, as everything in this file is — but the
+ * same three words, because a browser hearing `media.ready` for a `file` has to
+ * be able to tell it from a picture.
+ */
+export type MediaKind = 'image' | 'video' | 'audio' | 'file';
 
 /** Lifecycle of a task (design §3). */
 export type TaskState = 'todo' | 'claimed' | 'done' | 'cancelled';
@@ -23,11 +29,15 @@ export type RequestKind = 'text' | 'confirm' | 'buttons' | 'choice' | 'multi_cho
 /**
  * How a pending request ended. `pending` is not an outcome, so it is absent.
  *
+ * `cancelled` is the owner declining to answer; `withdrawn` is the asking agent
+ * taking the question back (migration 031). The owner's dashboard needs both, so
+ * that a banner clears either way.
+ *
  * `answered` covers all five kinds: what the owner actually said is a string, a
  * boolean or a list depending on the kind, and none of that belongs on the wire
  * here — a waiter re-reads the row, which is the durable copy either way.
  */
-export type RequestOutcome = 'answered' | 'timeout' | 'cancelled';
+export type RequestOutcome = 'answered' | 'timeout' | 'cancelled' | 'withdrawn';
 
 /**
  * Every event type, mapped to its payload.
@@ -36,9 +46,40 @@ export type RequestOutcome = 'answered' | 'timeout' | 'cancelled';
  * subscriber narrow off this map, so a payload that does not match its type is a
  * compile error at the call site.
  */
+/**
+ * Which thread a message is in, so a client can re-read that one thread rather
+ * than every thread it has. Optional: a message that was never in one, or an
+ * announcement that only knows the id, leaves them out.
+ */
+export type MessageThread = {
+	updateId?: string | null;
+	replyTo?: string | null;
+	requestId?: string | null;
+	taskId?: string | null;
+};
+
 export interface EventPayloads {
 	'project.created': { projectId: string; slug: string };
 	'project.updated': { projectId: string; slug: string };
+	/**
+	 * A project's vocabulary changed (migration 039): a tag defined, renamed or
+	 * retired. Its own event because the picker on every card reads that list,
+	 * and a project event would make every store refetch the project instead.
+	 */
+	'tags.changed': { projectId: string };
+	/**
+	 * A card's fields changed (migration 040): one set, corrected or taken off.
+	 * Its own event for the reason `tags.changed` is one — which card carries
+	 * what rides in the feed's snapshot rather than on the card row, and the feed
+	 * does not watch message or request events.
+	 */
+	'fields.changed': { projectId: string | null };
+	/**
+	 * A card's apps changed (migration 041): one was handed fresh data. Its own
+	 * event for the reason `fields.changed` is one — what an app is showing rides
+	 * in the feed's snapshot rather than on the card row.
+	 */
+	'apps.changed': { projectId: string | null };
 	'update.created': { updateId: string; projectId: string; agentId: string };
 	/**
 	 * An update the owner curated in place — today only its pin (design §7).
@@ -56,7 +97,14 @@ export interface EventPayloads {
 	/** Deletes are soft, so the browser is told to drop a row it already rendered. */
 	'update.deleted': { updateId: string; projectId: string };
 	/** A derivative job finished; the browser swaps its placeholder. */
-	'media.ready': { mediaId: string; updateId: string | null; kind: MediaKind };
+	'media.ready': {
+		mediaId: string;
+		updateId: string | null;
+		kind: MediaKind;
+		/** The message or question it is on, when it is on one. */
+		messageId?: string | null;
+		requestId?: string | null;
+	};
 	'task.created': {
 		taskId: string;
 		projectId: string;
@@ -70,7 +118,11 @@ export interface EventPayloads {
 		state: TaskState;
 	};
 	/** `author` is the literal `human` or `agent:<agent_id>` (design §3). */
-	'message.created': { messageId: string; projectId: string | null; author: string };
+	'message.created': {
+		messageId: string;
+		projectId: string | null;
+		author: string;
+	} & MessageThread;
 	/**
 	 * A message is gone: the owner deleted it, or the agent that wrote it
 	 * unsent it (migration 017).
@@ -84,7 +136,29 @@ export interface EventPayloads {
 	 * and a subscriber that knows how many lines went can decide whether it
 	 * cares before refetching.
 	 */
-	'message.deleted': { messageId: string; projectId: string | null; replies: number };
+	'message.deleted': {
+		messageId: string;
+		projectId: string | null;
+		replies: number;
+	} & MessageThread;
+	/**
+	 * A line was corrected by whoever wrote it (migration 033).
+	 *
+	 * Its own name rather than a second `message.created`, because the two mean
+	 * opposite things to almost every subscriber: an arrival is unread work to
+	 * announce, and an edit is a line already on screen that now reads
+	 * differently. Publishing a creation would push the message at agents again
+	 * and buzz the owner's phone about something they have read.
+	 *
+	 * The new body is deliberately not here. The row is the authority and every
+	 * browser refetches by id (design §4), which is what keeps a replayed or
+	 * out-of-order frame harmless.
+	 */
+	'message.updated': {
+		messageId: string;
+		projectId: string | null;
+		author: string;
+	} & MessageThread;
 	/**
 	 * A message reached an agent: the server pushed it onto that agent's live
 	 * stream (migration 018).
@@ -98,7 +172,11 @@ export interface EventPayloads {
 	 * across a new connection is the same fact, and an event announcing it again
 	 * would make a card flicker for nothing.
 	 */
-	'message.delivered': { messageId: string; agentId: string; projectId: string | null };
+	'message.delivered': {
+		messageId: string;
+		agentId: string;
+		projectId: string | null;
+	} & MessageThread;
 	/**
 	 * An agent's read cursor moved, so its unread count fell (design §5).
 	 *
@@ -137,6 +215,16 @@ export interface EventPayloads {
 		settledAt: string;
 	};
 	/**
+	 * The asking agent rewrote its own pending question (migration 033).
+	 *
+	 * Separate from `request.answered` because nothing is settled: no waiter
+	 * unblocks, and a browser hearing this refetches the prompt it is already
+	 * showing. Separate from `request.created` because the card is on screen —
+	 * announcing it again would ring the owner's bell for a question they are
+	 * already looking at.
+	 */
+	'request.updated': { requestId: string; agentId: string; projectId: string | null };
+	/**
 	 * An agent has said something about a message or a task without saying it in
 	 * words: "I have this" or "this is done".
 	 *
@@ -151,6 +239,8 @@ export interface EventPayloads {
 	'ack.updated': {
 		ackId: string;
 		agentId: string;
+		/** The card it is on — any of the four, since migration 034. */
+		card: { kind: string; id: string };
 		messageId: string | null;
 		taskId: string | null;
 		state: AckState;
@@ -183,7 +273,10 @@ export interface EventPayloads {
 	 * refetching, exactly as `pinned` does on `update.updated`.
 	 */
 	'reaction.updated': {
-		messageId: string;
+		/** The card it is on — any of the four, since migration 034. */
+		card: { kind: string; id: string };
+		/** The message, when it is one; `null` on any other kind of card. */
+		messageId: string | null;
 		projectId: string | null;
 		/** The literal `human`, or `agent:<agent_id>` (design §3). */
 		actor: string;

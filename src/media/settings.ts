@@ -26,6 +26,8 @@ export type MediaSettings = {
 	maxImageBytes: number;
 	/** `MAX_VIDEO_BYTES`. */
 	maxVideoBytes: number;
+	/** `MAX_FILE_BYTES`: everything that is neither image nor video (migration 026). */
+	maxFileBytes: number;
 };
 
 /**
@@ -40,6 +42,7 @@ export function mediaSettings(env: RawEnv = process.env): MediaSettings {
 		tokenSecret: config.TOKEN_SECRET,
 		baseUrl: config.PUBLIC_BASE_URL,
 		maxImageBytes: config.MAX_IMAGE_BYTES,
-		maxVideoBytes: config.MAX_VIDEO_BYTES
+		maxVideoBytes: config.MAX_VIDEO_BYTES,
+		maxFileBytes: config.MAX_FILE_BYTES
 	};
 }

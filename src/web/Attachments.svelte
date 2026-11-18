@@ -1,6 +1,6 @@
 <script lang="ts">
 	/**
-	 * The images going out with a message (migration 016).
+	 * The files going out with a message (migration 016, migration 026).
 	 *
 	 * Three ways in, because they are three different habits and a picker that
 	 * answers only one of them is a picker people work around:
@@ -18,14 +18,20 @@
 	 * Thumbnails come from a local object URL, so a picture is on screen before
 	 * the round trip finishes. A still-uploading one is dimmed rather than hidden:
 	 * it is going, and hiding it would read as the drop having missed.
+	 *
+	 * Anything may be attached, not only pictures (migration 026). A file with
+	 * nothing to preview shows its name in the same sized box, so a row of four
+	 * attachments is still a row of four boxes whatever is in them — and the
+	 * chooser offers no `accept` filter, because the server's answer to "will you
+	 * take this" is now "yes, unless it is too big".
 	 */
 	import type { Uploads } from './uploads.svelte';
-	import { ATTACHMENT_MAX, IMAGE_TYPES } from './uploads.svelte';
+	import { ATTACHMENT_MAX } from './uploads.svelte';
 
 	let {
 		uploads,
 		/** Text for the chooser, so a reply box and the composer can differ. */
-		label = 'Add image'
+		label = 'Add file'
 	}: {
 		uploads: Uploads;
 		label?: string;
@@ -58,7 +64,10 @@
 						/>
 					{:else}
 						<span
-							class="flex size-16 items-center justify-center rounded border border-border-subtle bg-surface px-1 text-center text-[0.6rem] text-content-muted"
+							class="flex size-16 items-center justify-center overflow-hidden rounded border border-border-subtle bg-surface px-1 text-center text-[0.6rem] break-all text-content-muted {item.state ===
+							'uploading'
+								? 'opacity-50'
+								: ''}"
 						>
 							{item.name}
 						</span>
@@ -74,7 +83,42 @@
 					</button>
 
 					{#if item.state === 'uploading'}
-						<span class="sr-only">Uploading {item.name}</span>
+						<!--
+							A bar across the bottom of the thumbnail, because that is where
+							the thumbnail already is: a row of bars somewhere else would move
+							the composer's controls down and back up again as files land.
+
+							`percent` is null when nothing can be measured — no
+							`XMLHttpRequest`, or a body of unknown length — and then it is the
+							indeterminate sweep instead. A bar stuck at zero reads as broken;
+							a sweep reads as working.
+						-->
+						{#if item.percent === null}
+							<span
+								data-upload-progress
+								role="progressbar"
+								aria-label="Uploading {item.name}"
+								class="thinking-bar absolute inset-x-0 bottom-0 h-1"
+							></span>
+						{:else}
+							<span
+								data-upload-progress
+								role="progressbar"
+								aria-label="Uploading {item.name}"
+								aria-valuemin="0"
+								aria-valuemax="100"
+								aria-valuenow={item.percent}
+								class="upload-trough absolute inset-x-0 bottom-0 h-1 overflow-hidden rounded-full"
+							>
+								<span
+									class="block h-full rounded-full bg-accent transition-[width] duration-150"
+									style="width: {item.percent}%"
+								></span>
+							</span>
+						{/if}
+						<span class="sr-only">
+							Uploading {item.name}{item.percent === null ? '' : `, ${item.percent}%`}
+						</span>
 					{/if}
 				</li>
 			{/each}
@@ -99,7 +143,6 @@
 		<input
 			bind:this={chooser}
 			type="file"
-			accept={IMAGE_TYPES.join(',')}
 			multiple
 			onchange={chosen}
 			class="hidden"

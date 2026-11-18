@@ -3,6 +3,9 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vites
 import TimelineView from './Timeline.svelte';
 import { Timeline } from './timeline.svelte';
 import { FakeStream, aMessage, anAck, aRequest, anUpdate, fakeActions, fakeApi } from './testing';
+import { Collapsed } from './collapse.svelte';
+import { Filtering } from './filters.svelte';
+import { ReadComments } from './unread.svelte';
 
 /**
  * The live behaviour of the centre column, in a real browser with a real
@@ -79,6 +82,15 @@ function mount(items = updates(12), props: Record<string, unknown> = {}) {
 	pillLayer.style.position = 'sticky';
 	pillLayer.style.top = '0';
 	pillLayer.style.height = '0';
+	// And the layer the way-back button lives in, for the same reason: without a
+	// zero height it would take real space and move the very scroll position it
+	// exists to let somebody escape. It is the *last* child, because a `bottom`
+	// sticky is only ever pulled up out of the content below the fold — one placed
+	// first simply scrolls away.
+	const topLayer = viewport.lastElementChild as HTMLElement;
+	topLayer.style.position = 'sticky';
+	topLayer.style.bottom = '0';
+	topLayer.style.height = '0';
 
 	return { feed, screen, viewport };
 }
@@ -123,7 +135,9 @@ describe('an update arriving while the reader is at the top', () => {
 
 		expect(feed.items[0].id).toBe('new');
 		expect(document.querySelector('[data-update-id="new"]')?.className).toContain('update-enter');
-		expect(document.querySelector('[data-timeline] button')).toBeNull();
+		// No "N new updates" pill: the card went straight in. (Scoped to the pill
+		// rather than to any button, since the feed's filter chips are buttons too.)
+		expect(document.querySelector('[data-testid="new-updates"]')).toBeNull();
 	});
 });
 
@@ -321,17 +335,15 @@ describe('requests waiting on the owner', () => {
 });
 
 /**
- * Cards with a conversation on them, lifted to the top (design §7).
+ * Cards with a conversation on them (design §7).
  *
- * The same shape as pinning, and for the same reason: reordering a card inside
- * its own day group would put it at the top of Tuesday and nowhere near the top
- * of the feed.
+ * There is no "Recent replies" section any more — the owner: "remove recent
+ * replies section, cards are already sorted by recent activity." A reply is
+ * activity, so the card it landed on rises through the one feed instead of
+ * being copied into a section of its own.
  */
-describe('recent replies', () => {
+describe('a card that has been replied to', () => {
 	const threadsFor = (byUpdate: Record<string, ReturnType<typeof aMessage>[]>) => ({
-		// The section only lifts conversations the owner is part of, so a fixture
-		// thread is "they said something, an agent answered" — the newest message
-		// is what the section sorts on, and it has to be the agent's.
 		for: (updateId: string) =>
 			(byUpdate[updateId] ?? []).flatMap((message, index) => [
 				aMessage({ id: `${message.id}-asked`, updateId, author: 'human', createdAt: index }),
@@ -340,24 +352,24 @@ describe('recent replies', () => {
 		forTask: () => []
 	});
 
-	it('lifts a replied-to card above the day groups', async () => {
+	it('rises to the top of the feed, in one copy, with no section of its own', async () => {
 		mount(
 			[
 				anUpdate({ id: 'chatty', seq: 2, createdAt: older, body: 'an older card' }),
 				anUpdate({ id: 'fresh', seq: 3, createdAt: day, body: 'a newer card' })
 			],
 			{
-				threads: threadsFor({ chatty: [aMessage({ updateId: 'chatty', createdAt: day })] })
+				threads: threadsFor({ chatty: [aMessage({ updateId: 'chatty', createdAt: day + 5_000 })] })
 			}
 		);
 
+		expect(document.querySelector('[data-testid="replied-section"]')).toBeNull();
 		const headings = [...document.querySelectorAll('section h2')].map((h) => h.textContent?.trim());
-		expect(headings).toEqual(['Recent replies', 'Today']);
+		expect(headings).toEqual(['Today']);
 
 		const rendered = [...document.querySelectorAll('[data-update-id]')].map((card) =>
 			card.getAttribute('data-update-id')
 		);
-		// Lifted once, and gone from the day group it would otherwise sit in.
 		expect(rendered).toEqual(['chatty', 'fresh']);
 	});
 
@@ -375,10 +387,10 @@ describe('recent replies', () => {
 			}
 		);
 
-		const lifted = [
-			...document.querySelectorAll('[data-testid="replied-section"] [data-update-id]')
-		];
-		expect(lifted.map((card) => card.getAttribute('data-update-id'))).toEqual(['second', 'first']);
+		const rendered = [...document.querySelectorAll('[data-update-id]')].map((card) =>
+			card.getAttribute('data-update-id')
+		);
+		expect(rendered).toEqual(['second', 'first']);
 	});
 
 	it('leaves a pinned card where pinning already put it', async () => {
@@ -389,36 +401,6 @@ describe('recent replies', () => {
 		const headings = [...document.querySelectorAll('section h2')].map((h) => h.textContent?.trim());
 		expect(headings).toEqual(['Pinned']);
 		expect(document.querySelectorAll('[data-update-id="pinned"]')).toHaveLength(1);
-	});
-
-	it('caps the section rather than becoming most of the feed', async () => {
-		const items = Array.from({ length: 8 }, (_, index) =>
-			anUpdate({ id: `u${index}`, seq: 8 - index, createdAt: day })
-		);
-		const byUpdate = Object.fromEntries(
-			items.map((item, index) => [
-				item.id,
-				[aMessage({ updateId: item.id, createdAt: day + index })]
-			])
-		);
-
-		mount(items, { threads: threadsFor(byUpdate) });
-
-		expect(
-			document.querySelectorAll('[data-testid="replied-section"] [data-update-id]')
-		).toHaveLength(5);
-	});
-
-	it('offers no section when nothing has been replied to', async () => {
-		mount(updates(2), { threads: threadsFor({}) });
-
-		expect(document.querySelector('[data-testid="replied-section"]')).toBeNull();
-	});
-
-	it('offers no section at all without a thread store', async () => {
-		mount(updates(2));
-
-		expect(document.querySelector('[data-testid="replied-section"]')).toBeNull();
 	});
 });
 
@@ -517,87 +499,6 @@ describe('what the owner posted', () => {
 });
 
 /**
- * Marking a conversation read (migration 015).
- *
- * Without it "Recent replies" only ever grew, and the cards riding above the
- * timeline became the ones that had been ignored the longest.
- */
-describe('finishing with a conversation', () => {
-	const chatty = () => anUpdate({ id: 'chatty', seq: 2, createdAt: day, body: 'a card' });
-	/** The owner asked, an agent answered: what the section lifts. */
-	const threadsFor = (byUpdate: Record<string, ReturnType<typeof aMessage>[]>) => ({
-		for: (updateId: string) =>
-			(byUpdate[updateId] ?? []).flatMap((message, index) => [
-				aMessage({ id: `${message.id}-asked`, updateId, author: 'human', createdAt: index }),
-				{ ...message, author: 'agent:a1' }
-			]),
-		forTask: () => []
-	});
-
-	it('offers a way to be done with one, and calls it with that card', async () => {
-		const acts = fakeActions();
-		const { screen } = mount([chatty()], {
-			threads: threadsFor({ chatty: [aMessage({ updateId: 'chatty', createdAt: day })] }),
-			actions: acts.actions
-		});
-
-		await screen.getByTestId('mark-replies-read').click();
-
-		expect(acts.calls).toEqual([{ name: 'markRepliesSeen', args: ['chatty'] }]);
-	});
-
-	it('marks the whole section read in one click', async () => {
-		const acts = fakeActions();
-		const items = [
-			anUpdate({ id: 'a', seq: 3, createdAt: day }),
-			anUpdate({ id: 'b', seq: 2, createdAt: day })
-		];
-		const { screen } = mount(items, {
-			threads: threadsFor({
-				a: [aMessage({ updateId: 'a', createdAt: day })],
-				b: [aMessage({ updateId: 'b', createdAt: day + 1 })]
-			}),
-			actions: acts.actions
-		});
-
-		await screen.getByTestId('mark-all-replies-read').click();
-
-		expect(acts.calls.map((call) => call.args[0]).sort()).toEqual(['a', 'b']);
-	});
-
-	it('drops a card back into its day once the owner has read it', async () => {
-		const read = anUpdate({ id: 'chatty', seq: 2, createdAt: day, repliesSeenAt: day + 5_000 });
-
-		mount([read], {
-			threads: threadsFor({ chatty: [aMessage({ updateId: 'chatty', createdAt: day + 1_000 })] })
-		});
-
-		expect(document.querySelector('[data-testid="replied-section"]')).toBeNull();
-		const headings = [...document.querySelectorAll('section h2')].map((h) => h.textContent?.trim());
-		expect(headings).toEqual(['Today']);
-	});
-
-	it('lifts it again when a newer reply lands', async () => {
-		const read = anUpdate({ id: 'chatty', seq: 2, createdAt: day, repliesSeenAt: day });
-
-		mount([read], {
-			threads: threadsFor({ chatty: [aMessage({ updateId: 'chatty', createdAt: day + 9_000 })] })
-		});
-
-		expect(document.querySelector('[data-testid="replied-section"]')).not.toBeNull();
-	});
-
-	it('offers no dismissal at all without a server behind it', async () => {
-		mount([chatty()], {
-			threads: threadsFor({ chatty: [aMessage({ updateId: 'chatty', createdAt: day })] })
-		});
-
-		expect(document.querySelector('[data-testid="mark-replies-read"]')).toBeNull();
-		expect(document.querySelector('[data-testid="mark-all-replies-read"]')).toBeNull();
-	});
-});
-
-/**
  * Acknowledging what the owner posted (#feedback: "allow agents to acknowledge
  * user posted messages, just like they can comments").
  *
@@ -659,57 +560,753 @@ describe('an agent acknowledging a post', () => {
 });
 
 /**
- * Whose conversations ride the top (#feedback: "Recent replies should only show
- * replies to me, not to other agents").
+ * The way back to the top (design §7).
  *
- * The section exists so an answer to the owner is not buried in a day group.
- * One agent leaving a note on another's card is not that, and a section holding
- * both is one the owner has to filter by eye.
+ * The owner: "when you are scrolled down add a floating button to scroll back to
+ * the top." It appears by the screenful rather than by the pixel, and it costs no
+ * layout when it comes and goes — a button that shifted the feed as it appeared
+ * would move the cards under the thumb that scrolled to it.
  */
-describe('recent replies, scoped to the owner', () => {
-	const threadsFor = (byUpdate: Record<string, ReturnType<typeof aMessage>[]>) => ({
+describe('getting back to the top', () => {
+	it('is absent until a whole screen has gone by', async () => {
+		const { viewport } = mount(updates(30));
+
+		expect(document.querySelector('[data-testid="to-top"]')).toBeNull();
+
+		// The harness gives the scroller a 240px box, so half a screen is not it.
+		await scrollTo(viewport, 100);
+		expect(document.querySelector('[data-testid="to-top"]')).toBeNull();
+	});
+
+	it('appears once the reader is a screen down', async () => {
+		const { viewport } = mount(updates(30));
+
+		await scrollTo(viewport, 400);
+
+		expect(document.querySelector('[data-testid="to-top"]')).not.toBeNull();
+	});
+
+	it('takes the feed back to the top when pressed', async () => {
+		const { viewport } = mount(updates(30));
+		await scrollTo(viewport, 400);
+
+		(document.querySelector('[data-testid="to-top"]') as HTMLButtonElement).click();
+
+		await expect.poll(() => viewport.scrollTop).toBe(0);
+	});
+
+	it('goes away again once it is not needed', async () => {
+		const { viewport } = mount(updates(30));
+		await scrollTo(viewport, 400);
+		expect(document.querySelector('[data-testid="to-top"]')).not.toBeNull();
+
+		await scrollTo(viewport, 0);
+
+		expect(document.querySelector('[data-testid="to-top"]')).toBeNull();
+	});
+
+	it('lives after the cards, which is what makes it stick to the bottom', async () => {
+		// The property the first version of these specs could not see. They set the
+		// sticky styles by hand — Tailwind is not loaded here — so they passed while
+		// the button scrolled away with the first screenful in a real browser: a
+		// `bottom` sticky is only ever pulled *up* out of the content below the
+		// fold, never pushed down past where it sits, so one placed first is not
+		// sticky at all. Its position in the DOM is the whole fix, and it is the one
+		// thing about this that a component test can check honestly.
+		const { viewport } = mount(updates(30));
+		await scrollTo(viewport, 400);
+
+		const button = document.querySelector('[data-testid="to-top"]') as HTMLElement;
+		expect(viewport.lastElementChild?.contains(button)).toBe(true);
+	});
+
+	it('says what it does, for somebody who cannot see the arrow', async () => {
+		const { viewport } = mount(updates(30));
+		await scrollTo(viewport, 400);
+
+		expect(document.querySelector('[data-testid="to-top"]')?.getAttribute('aria-label')).toBe(
+			'Scroll back to the top of the feed'
+		);
+	});
+});
+
+/**
+ * A commented card comes to the top (design §7).
+ *
+ * The owner: "a comment on a post should move that post to the top of the feed."
+ * The point is not the sort — it is that a reply to something from Tuesday is
+ * news on Thursday, and a feed that files it under Tuesday has hidden the only
+ * new thing on it.
+ */
+describe('cards move when somebody comments', () => {
+	const daysAgo = day - 3 * 24 * 60 * 60 * 1000;
+
+	/**
+	 * A thread source, as the shell hands one to the timeline.
+	 *
+	 * The replies here are the owner's own, but any reply counts the same now:
+	 * the feed sorts on the newest thing that happened to a card, whoever it came
+	 * from.
+	 */
+	function threadsWith(replies: Record<string, ReturnType<typeof aMessage>[]>) {
+		return {
+			for: (updateId: string) => replies[updateId] ?? [],
+			posts: () => [],
+			repliesTo: () => []
+		};
+	}
+
+	it('lifts an old card above a newer one when it is answered', async () => {
+		const items = [
+			anUpdate({ id: 'new', seq: 2, createdAt: day }),
+			anUpdate({ id: 'old', seq: 1, createdAt: daysAgo })
+		];
+
+		mount(items, {
+			threads: threadsWith({
+				old: [aMessage({ id: 'r1', updateId: 'old', createdAt: day + 60_000 })]
+			})
+		});
+
+		const order = [...document.querySelectorAll('[data-update-id]')].map((card) =>
+			card.getAttribute('data-update-id')
+		);
+		expect(order.indexOf('old')).toBeLessThan(order.indexOf('new'));
+	});
+
+	it('leaves the order alone when nothing has been said', async () => {
+		const items = [
+			anUpdate({ id: 'new', seq: 2, createdAt: day }),
+			anUpdate({ id: 'old', seq: 1, createdAt: daysAgo })
+		];
+
+		mount(items, { threads: threadsWith({}) });
+
+		const order = [...document.querySelectorAll('[data-update-id]')].map((card) =>
+			card.getAttribute('data-update-id')
+		);
+		expect(order.indexOf('new')).toBeLessThan(order.indexOf('old'));
+	});
+
+	it('files it under the day it was answered, not the day it was written', async () => {
+		// Ordering and the heading have to agree: a card sorted to the top under a
+		// three-day-old heading would sit above today's cards saying otherwise.
+		const { screen } = mount([anUpdate({ id: 'old', seq: 1, createdAt: daysAgo })], {
+			threads: threadsWith({
+				old: [aMessage({ id: 'r1', updateId: 'old', createdAt: day })]
+			})
+		});
+
+		await expect.element(screen.getByText('Today')).toBeInTheDocument();
+	});
+
+	it('puts it back once the comment is gone', async () => {
+		// Deleting a comment is not a special case here: a soft-deleted message
+		// never reaches the client, so the card simply has no replies again.
+		const items = [
+			anUpdate({ id: 'new', seq: 2, createdAt: day }),
+			anUpdate({ id: 'old', seq: 1, createdAt: daysAgo })
+		];
+
+		mount(items, { threads: threadsWith({ old: [] }) });
+
+		const order = [...document.querySelectorAll('[data-update-id]')].map((card) =>
+			card.getAttribute('data-update-id')
+		);
+		expect(order.indexOf('new')).toBeLessThan(order.indexOf('old'));
+	});
+});
+
+/**
+ * A pinned card of any kind (migration 034).
+ *
+ * The owner: "let me pin my own messages." The pinned section drew updates
+ * only, so a pinned post had nowhere to go — it stayed down in its day group,
+ * which is the one place pinning it says not to be.
+ */
+describe('what the pinned section holds', () => {
+	const pinnedPost = () =>
+		aMessage({
+			id: 'm1',
+			author: 'human',
+			projectId: 'p1',
+			updateId: null,
+			taskId: null,
+			replyTo: null,
+			body: 'kept in view',
+			pinned: true
+		});
+
+	const threadsWith = (posts: ReturnType<typeof aMessage>[]) => ({
+		for: () => [],
+		forTask: () => [],
+		posts: () => posts,
+		repliesTo: () => []
+	});
+
+	it('carries the owner`s own pinned post, not only pinned updates', async () => {
+		const { screen } = mount(updates(2), {
+			threads: threadsWith([pinnedPost()]),
+			actions: fakeActions().actions
+		});
+
+		const section = screen.container.querySelector('[aria-labelledby="day-pinned"]');
+		expect(section).not.toBeNull();
+		expect(section?.textContent).toContain('kept in view');
+	});
+
+	it('does not also leave it down in its day group', async () => {
+		const { screen } = mount(updates(2), {
+			threads: threadsWith([pinnedPost()]),
+			actions: fakeActions().actions
+		});
+
+		// Once on the page, at the top — a card that appeared twice would read as
+		// two posts.
+		expect(screen.container.querySelectorAll('[data-post="m1"]')).toHaveLength(1);
+	});
+});
+
+/**
+ * Folds that survive the feed being refetched (design §7).
+ *
+ * The timeline replaces rows by id whenever anything is published, so a fold
+ * kept on the row would spring open every time somebody reacted to something.
+ */
+describe('collapsing a card in the feed', () => {
+	it('folds the card the owner clicked, and remembers which', async () => {
+		const collapsed = new Collapsed({ getItem: () => null, setItem: () => {} });
+		const { screen } = mount(updates(2), { actions: fakeActions().actions, collapsed });
+
+		await screen.getByRole('button', { name: 'Collapse update' }).first().click();
+
+		// The store is the memory, so the fold outlives the row it was made on.
+		expect(collapsed.has('u2')).toBe(true);
+		await expect.element(screen.getByTestId('card-summary').first()).toBeInTheDocument();
+	});
+
+	it('leaves the other cards alone', async () => {
+		const collapsed = new Collapsed({ getItem: () => null, setItem: () => {} });
+		const { screen } = mount(updates(3), { actions: fakeActions().actions, collapsed });
+
+		await screen.getByRole('button', { name: 'Collapse update' }).first().click();
+
+		expect(screen.container.querySelectorAll('[data-testid="card-summary"]')).toHaveLength(1);
+	});
+});
+
+describe('filtering the feed by work status', () => {
+	/** A store of its own, so one test's choice cannot leak into the next. */
+	function memory(start: string | null = null) {
+		let held = start;
+		return {
+			getItem: () => held,
+			setItem: (_key: string, value: string) => {
+				held = value;
+			},
+			read: () => held
+		};
+	}
+
+	/**
+	 * A chip in the filter bar — scoped, because a card's own status chip carries
+	 * the same words ("Done" is both a filter and a state).
+	 */
+	function chip(screen: ReturnType<typeof mount>['screen'], label: string) {
+		return screen.getByTestId('feed-filters').getByRole('button', { name: label });
+	}
+
+	const marked = [
+		anUpdate({ id: 'doing', seq: 3, createdAt: day, body: 'in flight', status: 'in_progress' }),
+		anUpdate({ id: 'shipped', seq: 2, createdAt: day, body: 'landed', status: 'done' }),
+		anUpdate({ id: 'chatter', seq: 1, createdAt: day, body: 'no status at all' })
+	];
+
+	it('shows only the cards in that state', async () => {
+		const store = memory();
+		const { screen } = mount(marked, { filtering: new Filtering(store) });
+
+		await chip(screen, 'Blocked').click();
+
+		expect(document.querySelectorAll('[data-update-id]')).toHaveLength(0);
+
+		await chip(screen, 'In progress').click();
+
+		const shown = [...document.querySelectorAll('[data-update-id]')].map((el) =>
+			el.getAttribute('data-update-id')
+		);
+		expect(shown).toEqual(['doing']);
+	});
+
+	it('counts anything unfinished as open work, and nothing else', async () => {
+		const { screen } = mount(marked, { filtering: new Filtering(memory()) });
+
+		await chip(screen, 'Open work').click();
+
+		const shown = [...document.querySelectorAll('[data-update-id]')].map((el) =>
+			el.getAttribute('data-update-id')
+		);
+		expect(shown).toEqual(['doing']);
+	});
+
+	it('remembers the choice, so a reload reads the same feed', async () => {
+		const store = memory();
+		const { screen } = mount(marked, { filtering: new Filtering(store) });
+
+		await chip(screen, 'Done').click();
+
+		expect(store.read()).toBe('done');
+		// What the next visit would build from that store.
+		expect(new Filtering(store).current).toBe('done');
+	});
+
+	it('says why the page looks empty rather than leaving it blank', async () => {
+		const { screen } = mount(marked, { filtering: new Filtering(memory()) });
+
+		await chip(screen, 'Blocked').click();
+
+		await expect.element(screen.getByTestId('filter-empty')).toBeInTheDocument();
+	});
+});
+
+/**
+ * What a card says about its own age (design §7).
+ *
+ * The owner: "when a card is updated for any reason, display how long ago it was
+ * updated, instead of how long ago it was created."
+ */
+describe('the time on a card', () => {
+	const threadsWith = (byUpdate: Record<string, ReturnType<typeof aMessage>[]>) => ({
 		for: (updateId: string) => byUpdate[updateId] ?? [],
-		forTask: () => []
+		forTask: () => [],
+		posts: () => [],
+		repliesTo: () => []
 	});
 
-	it('lifts a card where an agent answered the owner', async () => {
-		mount([anUpdate({ id: 'mine', seq: 2, createdAt: day })], {
-			threads: threadsFor({
-				mine: [
-					aMessage({ id: 'm1', updateId: 'mine', author: 'human', createdAt: day }),
-					aMessage({ id: 'm2', updateId: 'mine', author: 'agent:a1', createdAt: day + 1_000 })
-				]
+	it('is the card’s own age while nothing has happened to it', async () => {
+		mount([anUpdate({ id: 'quiet', seq: 2, createdAt: day - 60 * 60 * 1000 })], {
+			threads: threadsWith({})
+		});
+
+		const time = document.querySelector('[data-testid="update-time"]');
+		expect(time?.getAttribute('data-updated')).toBeNull();
+		expect(time?.textContent?.trim()).not.toContain('updated');
+	});
+
+	it('is when it was last updated once somebody has replied', async () => {
+		mount([anUpdate({ id: 'chatty', seq: 2, createdAt: day - 60 * 60 * 1000 })], {
+			threads: threadsWith({
+				chatty: [aMessage({ updateId: 'chatty', author: 'agent:a1', createdAt: day - 60_000 })]
 			})
 		});
 
-		expect(document.querySelector('[data-testid="replied-section"]')).not.toBeNull();
+		const time = document.querySelector('[data-testid="update-time"]');
+		expect(time?.getAttribute('data-updated')).toBe('true');
+		expect(time?.textContent?.trim()).toMatch(/^updated 1m ago/);
+		// The instant it was posted is not lost, only moved into the tooltip.
+		expect(time?.getAttribute('title')).toContain('Posted');
 	});
 
-	it('leaves a thread the owner never spoke in where it is', async () => {
-		mount([anUpdate({ id: 'theirs', seq: 2, createdAt: day })], {
-			threads: threadsFor({
-				theirs: [
-					aMessage({ id: 'm1', updateId: 'theirs', author: 'agent:a1', createdAt: day }),
-					aMessage({ id: 'm2', updateId: 'theirs', author: 'agent:a2', createdAt: day + 1_000 })
-				]
-			})
-		});
+	it('counts a work state that moved, not only a reply', async () => {
+		mount(
+			[
+				anUpdate({
+					id: 'moved',
+					seq: 2,
+					createdAt: day - 60 * 60 * 1000,
+					status: 'in_progress',
+					statusAt: day - 60_000
+				})
+			],
+			{ threads: threadsWith({}) }
+		);
 
-		expect(document.querySelector('[data-testid="replied-section"]')).toBeNull();
+		expect(
+			document.querySelector('[data-testid="update-time"]')?.getAttribute('data-updated')
+		).toBe('true');
+	});
+});
+
+/**
+ * The unread-comment badge (design §7).
+ *
+ * The owner: "add a badge of how many new unread comments on a card." It clears
+ * by the card being looked at, which is the point — the dashboard had just lost
+ * its "mark as read" button and is not getting another one.
+ */
+describe('new comments on a card', () => {
+	function memory(start: string | null = null) {
+		let held = start;
+		return {
+			getItem: () => held,
+			setItem: (_key: string, value: string) => {
+				held = value;
+			}
+		};
+	}
+
+	const threadsWith = (byUpdate: Record<string, ReturnType<typeof aMessage>[]>) => ({
+		for: (updateId: string) => byUpdate[updateId] ?? [],
+		forTask: () => [],
+		posts: () => [],
+		repliesTo: () => []
 	});
 
-	it('does not lift a card whose newest message is the owner’s own', async () => {
-		// Nobody has answered yet. Parking your own words at the top of your own
-		// feed is not news.
-		mount([anUpdate({ id: 'mine', seq: 2, createdAt: day })], {
-			threads: threadsFor({
-				mine: [
-					aMessage({ id: 'm1', updateId: 'mine', author: 'agent:a1', createdAt: day }),
-					aMessage({ id: 'm2', updateId: 'mine', author: 'human', createdAt: day + 1_000 })
-				]
-			})
+	/** A card the reader last looked at before the newest comment landed. */
+	function halfRead() {
+		const marks = new ReadComments(memory());
+		marks.markRead('chatty', [{ createdAt: day - 60 * 60 * 1000, author: 'agent:a1' }]);
+		return marks;
+	}
+
+	const answered = {
+		chatty: [
+			aMessage({ id: 'm1', updateId: 'chatty', author: 'agent:a1', createdAt: day - 30_000 }),
+			aMessage({ id: 'm2', updateId: 'chatty', author: 'agent:a1', createdAt: day - 20_000 })
+		]
+	};
+
+	it('counts the comments that landed since the reader last looked', async () => {
+		mount([anUpdate({ id: 'chatty', seq: 2, createdAt: day - 60 * 60 * 1000 })], {
+			threads: threadsWith(answered),
+			read: halfRead()
 		});
 
-		expect(document.querySelector('[data-testid="replied-section"]')).toBeNull();
+		expect(
+			document.querySelector('[data-testid="unread-badge"]')?.getAttribute('data-unread')
+		).toBe('2');
+	});
+
+	it('clears itself once the card has been on screen a moment', async () => {
+		mount([anUpdate({ id: 'chatty', seq: 2, createdAt: day - 60 * 60 * 1000 })], {
+			threads: threadsWith(answered),
+			read: halfRead()
+		});
+
+		await vi.waitFor(
+			() => expect(document.querySelector('[data-testid="unread-badge"]')).toBeNull(),
+			{ timeout: 4_000 }
+		);
+	});
+
+	it('badges nothing on a feed this browser has never seen before', async () => {
+		mount([anUpdate({ id: 'chatty', seq: 2, createdAt: day - 60 * 60 * 1000 })], {
+			threads: threadsWith(answered),
+			read: new ReadComments(memory())
+		});
+
+		expect(document.querySelector('[data-testid="unread-badge"]')).toBeNull();
+	});
+});
+
+/**
+ * Folding a card by clicking its header (design §7).
+ *
+ * The owner: "clicking on any empty part (or the title) of the header of a card
+ * should collapse and expand it."
+ */
+describe('clicking a card header', () => {
+	function store() {
+		return new Collapsed({ getItem: () => null, setItem: () => {} });
+	}
+
+	it('folds the card, and unfolds it on the next click', async () => {
+		const collapsed = store();
+		mount([anUpdate({ id: 'u1', seq: 2, createdAt: day, title: 'a report' })], {
+			actions: fakeActions().actions,
+			collapsed
+		});
+
+		const header = document.querySelector('[data-update-id="u1"] header') as HTMLElement;
+		header.click();
+		expect(collapsed.has('u1')).toBe(true);
+
+		header.click();
+		expect(collapsed.has('u1')).toBe(false);
+	});
+
+	it('folds from the title too', async () => {
+		const collapsed = store();
+		mount([anUpdate({ id: 'u1', seq: 2, createdAt: day, title: 'a report' })], {
+			actions: fakeActions().actions,
+			collapsed
+		});
+
+		(document.querySelector('[data-update-id="u1"] h3') as HTMLElement).click();
+
+		expect(collapsed.has('u1')).toBe(true);
+	});
+
+	it('leaves the controls in the header doing their own job', async () => {
+		const collapsed = store();
+		const acts = fakeActions();
+		mount([anUpdate({ id: 'u1', seq: 2, createdAt: day, pinned: false })], {
+			actions: acts.actions,
+			collapsed
+		});
+
+		const pin = document.querySelector(
+			'[data-update-id="u1"] [data-testid="pin-card"]'
+		) as HTMLElement | null;
+		pin?.click();
+
+		expect(pin).not.toBeNull();
+		expect(collapsed.has('u1')).toBe(false);
+		expect(acts.calls.map((call) => call.name)).toContain('pinCard');
+	});
+
+	it('folds an owner post from its header as well', async () => {
+		const collapsed = store();
+		mount([], {
+			actions: fakeActions().actions,
+			collapsed,
+			threads: {
+				for: () => [],
+				forTask: () => [],
+				posts: () => [
+					aMessage({
+						id: 'post1',
+						updateId: null,
+						taskId: null,
+						replyTo: null,
+						author: 'human',
+						body: 'have a look',
+						createdAt: day
+					})
+				],
+				repliesTo: () => []
+			}
+		});
+
+		(document.querySelector('[data-post="post1"] p') as HTMLElement).click();
+
+		expect(collapsed.has('post1')).toBe(true);
+	});
+});
+
+/**
+ * Cards that move say so (design §7).
+ *
+ * The owner: "cards flow to the top when they are updated." The sliding itself
+ * is the browser's, so what is checked here is the mark left on the card that
+ * moved — that is the part a reader who was looking elsewhere relies on.
+ */
+describe('a card that has just moved', () => {
+	it('wears the marker when its activity moves forward', async () => {
+		mount([
+			anUpdate({ id: 'a', seq: 3, createdAt: day }),
+			anUpdate({ id: 'b', seq: 2, createdAt: day - 60_000 })
+		]);
+
+		expect(document.querySelector('[data-update-id="b"][data-bumped]')).toBeNull();
+
+		// The same card, now carrying a work state that moved a moment ago.
+		api.replace({
+			seq: 4,
+			items: [
+				anUpdate({
+					id: 'b',
+					seq: 4,
+					createdAt: day - 60_000,
+					status: 'in_progress',
+					statusAt: day + 60_000
+				}),
+				anUpdate({ id: 'a', seq: 3, createdAt: day })
+			]
+		});
+		stream.emit('update.updated', { seq: 4, payload: { updateId: 'b' } });
+		await api.settle();
+
+		await vi.waitFor(() =>
+			expect(document.querySelector('[data-update-id="b"][data-bumped="true"]')).not.toBeNull()
+		);
+	});
+});
+
+/**
+ * A card taller than the screen still clears its badge.
+ *
+ * The owner: "the unread replies badge on cards never seems to disappear." It
+ * was asking for a fraction of the *card* to be showing, which a long report
+ * with a long thread under it can never satisfy.
+ */
+describe('a very tall card', () => {
+	function memory() {
+		let held: string | null = null;
+		return {
+			getItem: () => held,
+			setItem: (_key: string, value: string) => {
+				held = value;
+			}
+		};
+	}
+
+	it('marks itself read anyway', async () => {
+		const marks = new ReadComments(memory());
+		marks.markRead('tall', [{ createdAt: day - 60 * 60 * 1000, author: 'agent:a1' }]);
+
+		mount([anUpdate({ id: 'tall', seq: 2, createdAt: day - 60 * 60 * 1000 })], {
+			read: marks,
+			threads: {
+				for: (id: string) =>
+					id === 'tall'
+						? [aMessage({ id: 'm1', updateId: 'tall', author: 'agent:a1', createdAt: day })]
+						: [],
+				forTask: () => [],
+				posts: () => [],
+				repliesTo: () => []
+			}
+		});
+
+		const card = document.querySelector('[data-update-id="tall"]') as HTMLElement;
+		// Twenty screens tall: no fraction of this card is ever on screen at once.
+		card.style.height = '5000px';
+
+		expect(document.querySelector('[data-testid="unread-badge"]')).not.toBeNull();
+		await vi.waitFor(
+			() => expect(document.querySelector('[data-testid="unread-badge"]')).toBeNull(),
+			{ timeout: 4_000 }
+		);
+	});
+});
+
+/**
+ * Following a notification to the thing it is about (migration 021).
+ *
+ * The owner: "sometimes clicking a notification does not take me to the
+ * card/comment." Three things could swallow it — a filter chip, a folded card,
+ * and a question, which the lookup did not know about at all.
+ */
+describe('focusing what a notification points at', () => {
+	function stored() {
+		return new Collapsed({ getItem: () => null, setItem: () => {} });
+	}
+
+	function filteredTo(choice: string) {
+		let held: string | null = choice;
+		return new Filtering({
+			getItem: () => held,
+			setItem: (_key: string, value: string) => {
+				held = value;
+			}
+		});
+	}
+
+	it('shows a card the filter would have hidden', async () => {
+		// Reading "only blocked work" must not hide the card being linked to.
+		mount([anUpdate({ id: 'wanted', seq: 2, createdAt: day, status: 'done' })], {
+			filtering: filteredTo('blocked'),
+			focus: 'wanted'
+		});
+
+		await vi.waitFor(() =>
+			expect(
+				document.querySelector('[data-update-id="wanted"][data-focused="true"]')
+			).not.toBeNull()
+		);
+	});
+
+	it('opens a folded card, so the reply inside it can be seen', async () => {
+		const collapsed = stored();
+		collapsed.set('chatty', true);
+
+		mount([anUpdate({ id: 'chatty', seq: 2, createdAt: day })], {
+			actions: fakeActions().actions,
+			collapsed,
+			focus: 'r1',
+			threads: {
+				for: (id: string) =>
+					id === 'chatty'
+						? [aMessage({ id: 'r1', updateId: 'chatty', author: 'agent:a1', createdAt: day })]
+						: [],
+				forTask: () => [],
+				posts: () => [],
+				repliesTo: () => []
+			}
+		});
+
+		await vi.waitFor(() => expect(collapsed.has('chatty')).toBe(false));
+		await vi.waitFor(() =>
+			expect(document.querySelector('[data-message-id="r1"][data-focused="true"]')).not.toBeNull()
+		);
+	});
+
+	it('finds a question, which it used to walk straight past', async () => {
+		mount([], {
+			actions: fakeActions().actions,
+			focus: 'q1',
+			requests: [aRequest({ id: 'q1', kind: 'confirm', question: 'ship it?' })]
+		});
+
+		await vi.waitFor(() =>
+			expect(document.querySelector('[data-request-id="q1"][data-focused="true"]')).not.toBeNull()
+		);
+	});
+
+	it('says so when the thing is not there at all, rather than doing nothing', async () => {
+		mount(updates(2), { focus: 'gone-for-ever' });
+
+		await vi.waitFor(
+			() => expect(document.querySelector('[data-testid="focus-missing"]')).not.toBeNull(),
+			{ timeout: 6_000 }
+		);
+	});
+});
+
+/**
+ * A question asked inside a thread (migration 022).
+ *
+ * Its notification names the question, which is drawn under the message it was
+ * asked on rather than as a card of its own — so the lookup has to walk from the
+ * question to that message, and from there to the card carrying it.
+ */
+describe('focusing a question asked in a thread', () => {
+	it('lands on the question where it is actually drawn', async () => {
+		const asked = aMessage({ id: 'm1', updateId: 'card', author: 'human', createdAt: day });
+
+		mount([anUpdate({ id: 'card', seq: 2, createdAt: day })], {
+			actions: fakeActions().actions,
+			focus: 'q1',
+			threadRequests: { m1: [aRequest({ id: 'q1', kind: 'confirm', question: 'ship it?' })] },
+			threads: {
+				for: (id: string) => (id === 'card' ? [asked] : []),
+				forTask: () => [],
+				posts: () => [],
+				repliesTo: () => []
+			}
+		});
+
+		await vi.waitFor(() =>
+			expect(document.querySelector('[data-request-id="q1"][data-focused="true"]')).not.toBeNull()
+		);
+	});
+
+	it('falls back to the card when the question itself is not drawn', async () => {
+		// The thread has not arrived (no `threads` source at all), so the question
+		// is nowhere — but the notification still has somewhere honest to land.
+		mount([anUpdate({ id: 'card', seq: 2, createdAt: day })], {
+			actions: fakeActions().actions,
+			focus: 'q1',
+			threadRequests: { m1: [aRequest({ id: 'q1', kind: 'confirm', question: 'ship it?' })] },
+			threads: {
+				for: (id: string) =>
+					id === 'card'
+						? [aMessage({ id: 'm1', updateId: 'card', author: 'human', createdAt: day })]
+						: [],
+				forTask: () => [],
+				posts: () => [],
+				repliesTo: () => []
+			}
+		});
+
+		await vi.waitFor(
+			() =>
+				expect(
+					document.querySelector('[data-focused="true"]')?.getAttribute('data-request-id') ??
+						document.querySelector('[data-focused="true"]')?.getAttribute('data-message-id') ??
+						document.querySelector('[data-focused="true"]')?.getAttribute('data-update-id')
+				).not.toBeUndefined(),
+			{ timeout: 4_000 }
+		);
 	});
 });

@@ -13,7 +13,7 @@
  * MCP server (`../server.ts`), so this description is the contract. It is
  * written for an agent that has never seen this server before.
  */
-import { requestInput, type RequestKind } from '$domain';
+import { EMBEDS_PER_POST_MAX, MEDIA_PER_UPDATE_MAX, requestInput, type RequestKind } from '$domain';
 import { z } from 'zod';
 import { guarded, requestResult } from '../results';
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js';
@@ -116,6 +116,46 @@ const inputSchema = {
 				'question came out of something you were discussing. Supplies the project and the ' +
 				'card, so naming it is enough.'
 		),
+	media_ids: z
+		.array(z.string())
+		.max(MEDIA_PER_UPDATE_MAX)
+		.optional()
+		.describe(
+			`Files to show with this: ids from create_upload whose bytes you have already PUT, at ` +
+				`most ${MEDIA_PER_UPDATE_MAX}. Images and video render; anything else is listed as a ` +
+				`download. All must be yours and unused, or the whole call is refused.`
+		),
+	option_media: z
+		.record(z.string(), z.string())
+		.optional()
+		.describe(
+			'Picture questions: an image on an option, so your owner picks the picture itself. ' +
+				'Maps an option to a media_id from create_upload (bytes already PUT), e.g. ' +
+				'{ "Logo A": "01J...", "Logo B": "01K..." }. For kind "buttons", "choice" and ' +
+				'"multi_choice". Every key must be one of your options; options without a picture ' +
+				'show as text. Images only, each used once, and not also in media_ids. The answer ' +
+				'is still the option string.'
+		),
+	embeds: z
+		.array(
+			z.object({
+				type: z.string().describe("The look's slug, from list_embed_types."),
+				data: z
+					.record(z.string(), z.unknown())
+					.describe('The values it shows, e.g. { "username": "sam", "text": "it is green" }.'),
+				source_url: z
+					.string()
+					.optional()
+					.describe('Where you copied it from, if anywhere. http or https.')
+			})
+		)
+		.max(EMBEDS_PER_POST_MAX)
+		.optional()
+		.describe(
+			`Things to show in a registered look — a Slack message, a GitHub comment, a Jira ` +
+				`ticket — instead of pasting them as flat text. At most ${EMBEDS_PER_POST_MAX}. Call ` +
+				`list_embed_types for the looks and the values each one reads.`
+		),
 	timeout_s: z
 		.number()
 		.int()
@@ -154,6 +194,8 @@ export const requestInputTool: McpTool<typeof inputSchema, Promise<CallToolResul
 			'options is required for buttons, choice, multi_choice and form, and refused for the',
 			'rest. placeholder, multiline, label, default, min, max are the kind-specific knobs',
 			'listed above.',
+			'option_media makes it a picture question: { option: media_id } puts an uploaded image',
+			'on that option (buttons, choice, multi_choice), and your owner picks the picture.',
 			'project (a slug or id) and update (an update id) say what the request is about.',
 			'message_id asks *inside a thread*: pass the id of the message you were replying to and',
 			'the question appears in that conversation, under the words that led to it, rather than',
@@ -161,6 +203,12 @@ export const requestInputTool: McpTool<typeof inputSchema, Promise<CallToolResul
 			'discussing — it is the difference between "what about this?" answered in context and',
 			'a prompt your owner has to reconstruct.',
 			'timeout_s is how long the request stays answerable, one hour by default.',
+			'',
+			'media_ids and embeds put things on the card, exactly as they do on an update: the',
+			'screenshot the question is about, the Slack message you are asking whether to send.',
+			'"Does this look right" is a question you cannot ask without the thing being looked at.',
+			'media_ids are ids from create_upload whose bytes you have already PUT; embeds are',
+			'{ type, data, source_url? }, and list_embed_types says which looks exist.',
 			'',
 			'HOW THE WAITING WORKS. READ THIS BEFORE YOU CALL IT.',
 			'',
@@ -177,6 +225,11 @@ export const requestInputTool: McpTool<typeof inputSchema, Promise<CallToolResul
 			'long as it keeps answering "pending". Each call parks for another 55 seconds, so a loop',
 			'of them costs nothing while it waits. Stop looping only when state is "answered",',
 			'"timeout" or "cancelled".',
+			'',
+			'Your owner can also reply to the question rather than answer it — "why do you want to',
+			'do that?". That arrives as a message carrying this request_id; answer it with',
+			'post_message({ request_id }) and keep waiting. Talking is not answering, and the state',
+			'stays "pending" until they decide.',
 			'',
 			'The wait survives your own restart: the request lives in the dashboard database, not in',
 			'this connection. If you crash mid-wait, call await_request with the request_id when you',
@@ -227,7 +280,14 @@ export const requestInputTool: McpTool<typeof inputSchema, Promise<CallToolResul
 						project: args.project,
 						update: args.update,
 						message: args.message_id,
-						timeoutS: args.timeout_s
+						timeoutS: args.timeout_s,
+						mediaIds: args.media_ids,
+						optionMedia: args.option_media,
+						embeds: args.embeds?.map((embed) => ({
+							type: embed.type,
+							data: embed.data,
+							sourceUrl: embed.source_url
+						}))
 					},
 					{ holdMs }
 				)

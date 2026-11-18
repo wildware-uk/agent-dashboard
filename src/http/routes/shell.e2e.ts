@@ -437,6 +437,23 @@ test.describe('the authenticated shell', () => {
 		expect(layout.innerWidth).toBe(375);
 		expect(layout.scrollWidth).toBeLessThanOrEqual(375);
 
+		// And nothing scrolls but the feed (the owner: "can scroll down the entire
+		// page… causes some weird bugs like scrolling down to black"). The document
+		// is pinned while the dashboard is up, so a flick cannot drag the app off
+		// the screen and leave a strip of nothing under it.
+		const page_ = await page.evaluate(() => {
+			window.scrollTo(0, 2000);
+			return {
+				scrollY: window.scrollY,
+				docHeight: document.documentElement.scrollHeight,
+				visible: window.innerHeight,
+				locked: document.documentElement.classList.contains('app-locked')
+			};
+		});
+		expect(page_.locked).toBe(true);
+		expect(page_.scrollY).toBe(0);
+		expect(page_.docHeight).toBeLessThanOrEqual(page_.visible);
+
 		await page.getByRole('button', { name: 'Open projects' }).click();
 
 		const drawer = page.getByRole('dialog', { name: 'Projects' });
@@ -523,5 +540,41 @@ test.describe('on a touch screen', () => {
 		);
 
 		expect(viewport).not.toMatch(/maximum-scale|user-scalable/);
+	});
+});
+
+/**
+ * The iPhone app has its own message bar along the bottom, so the page's own box
+ * at the top of the feed only took up height there. The owner: "we're wasting
+ * too much vertical real estate."
+ */
+test.describe('inside the iPhone app', () => {
+	test.use({
+		viewport: { width: 390, height: 844 },
+		hasTouch: true,
+		isMobile: true,
+		userAgent:
+			'Mozilla/5.0 (iPhone; CPU iPhone OS 26_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) AgentsiOS/1'
+	});
+
+	test('leaves the feed box out, because the app has its own', async ({ page }) => {
+		const server = fakeServer(page);
+		await server.install();
+		await signIn(page);
+
+		await expect(page.getByLabel('Update timeline')).toBeVisible();
+		await expect(page.getByRole('region', { name: 'Post to the feed' })).toBeHidden();
+	});
+});
+
+test.describe('in a phone browser', () => {
+	test.use({ viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
+
+	test('keeps the feed box, the only way to post there', async ({ page }) => {
+		const server = fakeServer(page);
+		await server.install();
+		await signIn(page);
+
+		await expect(page.getByRole('region', { name: 'Post to the feed' })).toBeVisible();
 	});
 });

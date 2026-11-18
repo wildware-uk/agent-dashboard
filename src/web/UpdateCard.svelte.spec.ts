@@ -152,7 +152,8 @@ describe('the owner controls on a card', () => {
 
 		await screen.getByRole('button', { name: 'Pin update' }).click();
 
-		expect(api.calls).toEqual([{ name: 'setUpdatePinned', args: ['u9', true] }]);
+		// Generic since migration 034: one call pins any kind of card.
+		expect(api.calls).toEqual([{ name: 'pinCard', args: ['update', 'u9', true] }]);
 		await expect.element(screen.getByRole('button', { name: 'Delete update' })).toBeInTheDocument();
 	});
 
@@ -263,32 +264,55 @@ describe('when a card was posted', () => {
 });
 
 /**
- * A card that is progress on a task links to it (design §7).
+ * Folding a card away (design §7).
  *
- * A feed entry is "what happened"; the task is "what is being worked on", and
- * one is only useful next to the other.
+ * The owner: "allow me to collapse a card, which will hide the replies, and
+ * shorten the message content, if its too long."
  */
-describe('a card filed against a task', () => {
-	it('offers a way into the task, named where the name is known', async () => {
+describe('a folded card', () => {
+	it('keeps one line of what it said, and hides the rest', async () => {
 		const screen = render(UpdateCard, {
-			update: anUpdate({ taskId: 't1' }),
-			taskTitle: 'Ship the parser'
+			update: anUpdate({ id: 'u1', body: '## Shipped it\n\nThe canary held for twenty minutes.' }),
+			messages: [aMessage({ id: 'm1', body: 'nice one' })],
+			actions: fakeActions().actions,
+			collapsed: true
 		});
 
-		const link = screen.getByTestId('update-task').element();
-		expect(link.getAttribute('href')).toBe('/tasks/t1');
-		expect(link.textContent?.trim()).toBe('Ship the parser');
+		await expect
+			.element(screen.getByTestId('card-summary'))
+			.toHaveTextContent('Shipped it The canary held for twenty minutes.');
+		// The thread and the body itself are gone: hiding the replies is what the
+		// owner asked a fold to do.
+		expect(screen.container.querySelector('[data-thread]')).toBeNull();
+		await expect.element(screen.getByTestId('card-hidden')).toHaveTextContent('1 reply hidden');
 	});
 
-	it('still offers the way in when the title is not to hand', async () => {
-		const screen = render(UpdateCard, { update: anUpdate({ taskId: 't1' }) });
+	it('says so on the control, and asks to be opened again', async () => {
+		const acts = fakeActions();
+		const screen = render(UpdateCard, {
+			update: anUpdate({ id: 'u1' }),
+			actions: acts.actions,
+			collapsed: true,
+			oncollapse: (fold: boolean) => acts.calls.push({ name: 'collapse', args: [fold] })
+		});
 
-		await expect.element(screen.getByTestId('update-task')).toHaveTextContent('View task');
+		const control = screen.getByRole('button', { name: 'Expand update' });
+		await control.click();
+
+		expect(acts.calls).toEqual([{ name: 'collapse', args: [false] }]);
 	});
 
-	it('says nothing about tasks on an ordinary update', async () => {
-		const screen = render(UpdateCard, { update: anUpdate() });
+	it('renders in full when it is not folded, which is the ordinary case', async () => {
+		const screen = render(UpdateCard, {
+			update: anUpdate({ id: 'u1', body: 'the whole body' }),
+			actions: fakeActions().actions,
+			oncollapse: () => {}
+		});
 
-		await expect.element(screen.getByTestId('update-task')).not.toBeInTheDocument();
+		await expect.element(screen.getByText('the whole body')).toBeInTheDocument();
+		expect(screen.container.querySelector('[data-testid="card-summary"]')).toBeNull();
+		await expect
+			.element(screen.getByRole('button', { name: 'Collapse update' }))
+			.toBeInTheDocument();
 	});
 });

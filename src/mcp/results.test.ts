@@ -120,7 +120,7 @@ describe('updateView', () => {
 			created_at: '2026-08-25T09:30:00.000Z',
 			edited_at: null,
 			// Migration 008: most updates are not progress on a task.
-			task_id: null
+			status: null
 		});
 	});
 

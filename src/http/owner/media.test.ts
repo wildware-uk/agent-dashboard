@@ -82,10 +82,22 @@ describe('the owner uploading an image', () => {
 		expect(body.media).toMatchObject({ updateId: null, messageId: null });
 	});
 
-	it('refuses a type off the allowlist, exactly as an agent is refused', async () => {
-		const { status } = await upload(PNG, { mime: 'image/svg+xml', filename: 'x.svg' });
+	it('refuses a declared type that is not a type, exactly as an agent is refused', async () => {
+		const { status } = await upload(PNG, { mime: 'image/*', filename: 'x.svg' });
 
 		expect(status).toBe(400);
+	});
+
+	it('takes a file that is not a picture, and keeps the name it came with', async () => {
+		// The owner asked to be able to send agents any file (migration 026). An
+		// SVG is the sharp case: never rendered, perfectly storable as a download.
+		const { status, body } = await upload(new TextEncoder().encode('<svg />'), {
+			mime: 'image/svg+xml',
+			filename: 'diagram.svg'
+		});
+
+		expect(status).toBe(201);
+		expect(body.media).toMatchObject({ kind: 'file', mime: 'image/svg+xml' });
 	});
 
 	it('refuses a request with no body rather than storing an empty row', async () => {

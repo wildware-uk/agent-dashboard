@@ -1,9 +1,9 @@
 // The real stylesheet, so the thumb-target assertion measures what a phone gets.
 import '../http/routes/app.css';
 import { render } from 'vitest-browser-svelte';
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import Composer from './Composer.svelte';
-import { aProject, fakeActions } from './testing';
+import { aProject, aTag, fakeActions } from './testing';
 
 /**
  * The box at the top of the feed (design §7).
@@ -248,5 +248,108 @@ describe('attaching images', () => {
 		await screen.getByRole('button', { name: 'Post' }).click();
 
 		await expect.poll(() => document.querySelectorAll('[data-attachments] li').length).toBe(0);
+	});
+});
+
+/**
+ * Labelling a post before it exists (migration 039).
+ *
+ * The owner: "let me set tags on a post before I actually post it."
+ */
+describe('tagging a post before posting it', () => {
+	function withTags() {
+		const acts = fakeActions();
+		return {
+			acts,
+			screen: render(Composer, {
+				project: 'agent-dashboard',
+				projects: [aProject({ id: 'p1', slug: 'agent-dashboard', name: 'Agent Dashboard' })],
+				tags: [
+					aTag({ id: 't1', projectId: 'p1', name: 'Bug' }),
+					aTag({ id: 't2', projectId: 'p1', name: 'Feature' })
+				],
+				actions: acts.actions
+			})
+		};
+	}
+
+	it('holds the chosen words, then puts them on the post it made', async () => {
+		const { acts, screen } = withTags();
+
+		await screen.getByTestId('tag-add').click();
+		(document.querySelector('[data-pick="t1"]') as HTMLElement).click();
+		await vi.waitFor(() =>
+			expect(document.querySelector('[data-testid="composer-tags"] [data-tag="t1"]')).not.toBeNull()
+		);
+
+		box().value = 'the fee service is down';
+		box().dispatchEvent(new Event('input', { bubbles: true }));
+		await screen.getByRole('button', { name: 'Post' }).click();
+
+		await vi.waitFor(() =>
+			expect(acts.calls.map((call) => call.name)).toEqual(['postMessage', 'tagCard'])
+		);
+		// The post first, then the label on the id it came back with.
+		expect(acts.calls[1].args.slice(0, 4)).toEqual(['message', 'new', 't1', true]);
+	});
+
+	it('forgets the choice once the post has gone', async () => {
+		const { screen } = withTags();
+
+		await screen.getByTestId('tag-add').click();
+		(document.querySelector('[data-pick="t1"]') as HTMLElement).click();
+		box().value = 'something';
+		box().dispatchEvent(new Event('input', { bubbles: true }));
+		await screen.getByRole('button', { name: 'Post' }).click();
+
+		await vi.waitFor(() =>
+			expect(document.querySelector('[data-testid="composer-tags"] [data-tag]')).toBeNull()
+		);
+	});
+
+	it('takes a chosen word off again before anything is sent', async () => {
+		const { acts, screen } = withTags();
+
+		await screen.getByTestId('tag-add').click();
+		(document.querySelector('[data-pick="t2"]') as HTMLElement).click();
+		await vi.waitFor(() =>
+			expect(document.querySelector('[data-testid="composer-tags"] [data-tag="t2"]')).not.toBeNull()
+		);
+		(
+			document.querySelector('[data-testid="composer-tags"] [data-tag="t2"]') as HTMLElement
+		).click();
+
+		await vi.waitFor(() =>
+			expect(document.querySelector('[data-testid="composer-tags"] [data-tag]')).toBeNull()
+		);
+		expect(acts.calls).toEqual([]);
+	});
+
+	it('decides a new word, in the colour picked for it', async () => {
+		const { acts, screen } = withTags();
+
+		await screen.getByTestId('tag-add').click();
+		(document.querySelector('[data-new-colour="rose"]') as HTMLElement).click();
+		const typed = document.querySelector('[data-testid="tag-new"]') as HTMLInputElement;
+		typed.value = 'needs design';
+		typed.dispatchEvent(new Event('input', { bubbles: true }));
+		typed.closest('form')!.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+
+		await vi.waitFor(() => expect(acts.calls[0]?.name).toBe('defineTag'));
+		expect(acts.calls[0].args).toEqual(['agent-dashboard', 'needs design', 'rose']);
+	});
+
+	it('offers nothing to tag until a project is chosen', async () => {
+		const acts = fakeActions();
+		render(Composer, {
+			project: null,
+			projects: [aProject({ id: 'p1', slug: 'agent-dashboard', name: 'Agent Dashboard' })],
+			tags: [aTag({ id: 't1', projectId: 'p1' })],
+			actions: acts.actions
+		});
+
+		expect(
+			document.querySelector('[data-testid="composer-tags"] [data-testid="tag-add"]')
+		).toBeNull();
 	});
 });

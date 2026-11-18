@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { findMessageById, insertTask, readCursorSeq } from '$db';
+import { findMessageById, readCursorSeq } from '$db';
 import { harness, type Harness } from '$domain/testing';
 import { isDomainError } from './errors';
 import {
@@ -16,10 +16,15 @@ import {
 	deleteMessage,
 	deliveriesFor,
 	markMessagesDelivered,
+	editMessage,
 	postMessage,
-	readMessages
+	readMessages,
+	answeredMessage,
+	authorName,
+	QUOTED_MAX_LENGTH
 } from './messages';
 import { createProject } from './projects';
+import { createRequest } from './requests';
 import { postUpdate } from './updates';
 
 let h: Harness;
@@ -87,14 +92,6 @@ describe('posting a message', () => {
 		expect(message).toMatchObject({ updateId: update.id, projectId, taskId: null });
 	});
 
-	it('scopes one to a task, and derives the project from it', () => {
-		const task = insertTask(h.db, { projectId, title: 'ship', body: 'the thing' });
-
-		const message = fromOwner('start with the tests', { taskId: task.id });
-
-		expect(message).toMatchObject({ taskId: task.id, projectId });
-	});
-
 	it('lets an agent reply, as agent:<agent_id>', () => {
 		const message = postMessage(h, {
 			author: { kind: 'agent', agentId },
@@ -112,7 +109,12 @@ describe('posting a message', () => {
 		expect(h.events.at(-1)!.payload).toEqual({
 			messageId: message.id,
 			projectId,
-			author: HUMAN_AUTHOR
+			author: HUMAN_AUTHOR,
+			// Which thread it is in, so a client re-reads only that one.
+			updateId: null,
+			replyTo: null,
+			requestId: null,
+			taskId: null
 		});
 	});
 
@@ -122,7 +124,6 @@ describe('posting a message', () => {
 			'invalid_argument'
 		);
 		expect(refusalCode(() => fromOwner('hi', { updateId: 'nope' }))).toBe('not_found');
-		expect(refusalCode(() => fromOwner('hi', { taskId: 'nope' }))).toBe('not_found');
 		expect(refusalCode(() => fromOwner('hi', { project: 'nope' }))).toBe('not_found');
 	});
 
@@ -130,15 +131,6 @@ describe('posting a message', () => {
 		expect(
 			refusalCode(() => postMessage(h, { author: { kind: 'agent', agentId: 'ghost' }, body: 'hi' }))
 		).toBe('not_found');
-	});
-
-	it('refuses to hang one message off both an update and a task', () => {
-		const update = postUpdate(h, { project: slug, agentId, body: 'done' });
-		const task = insertTask(h.db, { projectId, title: 'ship', body: 'it' });
-
-		expect(refusalCode(() => fromOwner('hi', { updateId: update.id, taskId: task.id }))).toBe(
-			'invalid_argument'
-		);
 	});
 
 	it('refuses an update that belongs to a different project than the one named', () => {
@@ -318,6 +310,46 @@ describe('a thread, as the owner’s browser reads it', () => {
 			'm6',
 			'm7'
 		]);
+	});
+
+	/**
+	 * The owner: "it's like the entire card has disappeared."
+	 *
+	 * A post from weeks ago that somebody answered this morning is older than the
+	 * cap, so the cut kept the replies and dropped the post they hang off — and a
+	 * reply with no post is drawn nowhere.
+	 */
+	it('brings back a post the cut dropped, when its replies survived', () => {
+		const post = fromOwner('the question nobody forgot', { project: slug });
+		for (let n = 1; n <= 5; n += 1) fromOwner(`filler ${n}`, { project: slug });
+		const answer = postMessage(h, {
+			author: { kind: 'agent', agentId },
+			replyTo: post.id,
+			body: 'answered at last'
+		});
+
+		const read = listThread(h, { project: slug, limit: 3 });
+
+		// The window itself is still the newest three; the post is put back in
+		// front of them because something in it points at it.
+		expect(read.map((message) => message.id)).toContain(post.id);
+		expect(read.map((message) => message.id)).toContain(answer.id);
+		// Oldest first, as the rest of the page is.
+		expect(read[0].id).toBe(post.id);
+	});
+
+	it('does not resurrect a deleted post, which takes its thread with it', () => {
+		const post = fromOwner('going away', { project: slug });
+		postMessage(h, {
+			author: { kind: 'agent', agentId },
+			replyTo: post.id,
+			body: 'still here'
+		});
+		deleteMessage(h, { messageId: post.id, by: { kind: 'human' } });
+
+		expect(listThread(h, { project: slug, limit: 2 }).map((message) => message.id)).not.toContain(
+			post.id
+		);
 	});
 });
 
@@ -531,6 +563,114 @@ describe('which unread messages a notification carries', () => {
  * about what a delete takes with it: the replies under a post, an agent's unread
  * count, and a thread three tabs are looking at.
  */
+/**
+ * Correcting what you already said (migration 033).
+ *
+ * The owner: "let an agent edit any of their messages, questions or comments."
+ * A thread where every mistake is followed by "sorry, ignore that" is one
+ * nobody can skim, and the owner is left working out which line is true.
+ */
+describe('editing a message', () => {
+	it('replaces the words and says that it did', () => {
+		const said = postMessage(h, {
+			author: { kind: 'agent', agentId },
+			project: slug,
+			body: 'the file is src/wrong.ts'
+		});
+
+		const edited = editMessage(h, {
+			messageId: said.id,
+			by: { kind: 'agent', agentId },
+			body: 'the file is src/right.ts'
+		});
+
+		expect(edited).toMatchObject({ id: said.id, body: 'the file is src/right.ts' });
+		expect(edited.editedAt).toBeGreaterThanOrEqual(said.createdAt);
+		expect(findMessageById(h.db, said.id)?.body).toBe('the file is src/right.ts');
+	});
+
+	it('leaves everything else where it was: the thread, the time, the label', () => {
+		const update = postUpdate(h, { project: slug, agentId, body: 'shipped' });
+		const asked = fromOwner('which suite?', { updateId: update.id });
+		const said = postMessage(h, {
+			author: { kind: 'agent', agentId },
+			answers: asked.id,
+			body: 'unit'
+		});
+
+		const edited = editMessage(h, {
+			messageId: said.id,
+			by: { kind: 'agent', agentId },
+			body: 'unit and browser'
+		});
+
+		// A corrected typo must not move the line to another card, or to the
+		// bottom of the thread.
+		expect(edited).toMatchObject({
+			updateId: update.id,
+			answers: asked.id,
+			createdAt: said.createdAt,
+			seq: said.seq
+		});
+	});
+
+	it('announces it as an edit, never as a new message', () => {
+		const said = postMessage(h, { author: { kind: 'agent', agentId }, project: slug, body: 'one' });
+		const before = h.eventNames().length;
+
+		editMessage(h, { messageId: said.id, by: { kind: 'agent', agentId }, body: 'two' });
+
+		// A second `message.created` would push it at agents again and buzz the
+		// owner's phone about something they have already read.
+		expect(h.eventNames().slice(before)).toEqual(['message.updated']);
+		expect(h.events.at(-1)!.payload).toMatchObject({ messageId: said.id, projectId });
+	});
+
+	it('refuses somebody else`s words', () => {
+		const theirs = fromOwner('mine', { project: slug });
+
+		expect(
+			refusalCode(() =>
+				editMessage(h, { messageId: theirs.id, by: { kind: 'agent', agentId }, body: 'not yours' })
+			)
+		).toBe('invalid_argument');
+		expect(findMessageById(h.db, theirs.id)?.body).toBe('mine');
+	});
+
+	it('refuses to rewrite a line that was unsent', () => {
+		const said = postMessage(h, {
+			author: { kind: 'agent', agentId },
+			project: slug,
+			body: 'oops'
+		});
+		deleteMessage(h, { messageId: said.id, by: { kind: 'agent', agentId } });
+
+		expect(
+			refusalCode(() =>
+				editMessage(h, { messageId: said.id, by: { kind: 'agent', agentId }, body: 'better' })
+			)
+		).toBe('not_found');
+	});
+
+	it('refuses an empty body, as posting one does', () => {
+		const said = postMessage(h, { author: { kind: 'agent', agentId }, project: slug, body: 'one' });
+
+		expect(
+			refusalCode(() =>
+				editMessage(h, { messageId: said.id, by: { kind: 'agent', agentId }, body: '   ' })
+			)
+		).toBe('invalid_argument');
+	});
+
+	it('lets the owner correct their own line too', () => {
+		const theirs = fromOwner('teh build is green', { project: slug });
+
+		expect(
+			editMessage(h, { messageId: theirs.id, by: { kind: 'human' }, body: 'the build is green' })
+		).toMatchObject({ body: 'the build is green' });
+	});
+});
+
 describe('deleting a message', () => {
 	it('lets the owner delete their own post', () => {
 		const post = fromOwner('a probe I no longer need', { project: slug });
@@ -588,7 +728,15 @@ describe('deleting a message', () => {
 		expect(events).toEqual([
 			expect.objectContaining({
 				type: 'message.deleted',
-				payload: { messageId: post.id, projectId, replies: 1 }
+				payload: {
+					messageId: post.id,
+					projectId,
+					replies: 1,
+					updateId: null,
+					replyTo: null,
+					requestId: null,
+					taskId: null
+				}
 			})
 		]);
 	});
@@ -655,7 +803,15 @@ describe('marking a message delivered', () => {
 		expect(events).toEqual([
 			expect.objectContaining({
 				type: 'message.delivered',
-				payload: { messageId: post.id, agentId, projectId }
+				payload: {
+					messageId: post.id,
+					agentId,
+					projectId,
+					updateId: null,
+					replyTo: null,
+					requestId: null,
+					taskId: null
+				}
 			})
 		]);
 	});
@@ -751,6 +907,188 @@ describe('marking a message delivered', () => {
 		// An older bridge has no durable identity, so the database cannot answer
 		// for it and it must not be handed somebody else's answer either.
 		expect([...alreadyDelivered(h, agentId, null, [post.id])]).toEqual([]);
+	});
+});
+
+/**
+ * The line an answer was aimed at.
+ *
+ * The owner: "agents need more context from a reply, when I reply to a message,
+ * they can not see what I was replying to." An id alone would not have fixed it
+ * — `get_messages` hands back the unread set, so the answered line is almost
+ * always one the agent has already read and will never be given again.
+ */
+describe('what a message was answering', () => {
+	it('is the line the owner clicked reply on, quoted', () => {
+		const update = postUpdate(h, { project: slug, agentId, body: 'shipped' });
+		const asked = postMessage(h, {
+			author: { kind: 'agent', agentId },
+			updateId: update.id,
+			body: 'shall I deploy?'
+		});
+		const answer = postMessage(h, { author: { kind: 'human' }, answers: asked.id, body: 'yes' });
+
+		expect(answeredMessage(h, answer)).toEqual({
+			id: asked.id,
+			author: `${AGENT_AUTHOR_PREFIX}${agentId}`,
+			body: 'shall I deploy?',
+			truncated: false
+		});
+	});
+
+	it('falls back to the post a reply hangs from, when it answers no one line', () => {
+		const post = fromOwner('two things here', { project: slug });
+		const reply = postMessage(h, {
+			author: { kind: 'agent', agentId },
+			replyTo: post.id,
+			body: 'about the first'
+		});
+
+		expect(answeredMessage(h, reply)).toMatchObject({ id: post.id, body: 'two things here' });
+	});
+
+	it('prefers the comment over the post, because it is the more precise of the two', () => {
+		const post = fromOwner('two things here', { project: slug });
+		const first = postMessage(h, {
+			author: { kind: 'agent', agentId },
+			replyTo: post.id,
+			body: 'about the first'
+		});
+		const answer = postMessage(h, {
+			author: { kind: 'human' },
+			answers: first.id,
+			body: 'that one'
+		});
+
+		// `answers` and `replyTo` are both set on this message (migration 020).
+		expect(answer.replyTo).toBe(post.id);
+		expect(answeredMessage(h, answer)?.id).toBe(first.id);
+	});
+
+	it('is nothing for a message that answers nothing', () => {
+		expect(answeredMessage(h, fromOwner('a post of its own', { project: slug }))).toBe(null);
+	});
+
+	it('is nothing once the answered line is deleted, rather than a quote of it', () => {
+		const said = postMessage(h, {
+			author: { kind: 'agent', agentId },
+			project: slug,
+			body: 'ignore that, wrong project'
+		});
+		const answer = postMessage(h, { author: { kind: 'human' }, answers: said.id, body: 'ok' });
+		deleteMessage(h, { messageId: said.id, by: { kind: 'agent', agentId } });
+
+		expect(answeredMessage(h, answer)).toBe(null);
+	});
+
+	it('trims a long line, and says that it did', () => {
+		const long = 'x'.repeat(QUOTED_MAX_LENGTH + 50);
+		const said = postMessage(h, { author: { kind: 'agent', agentId }, project: slug, body: long });
+		const answer = postMessage(h, { author: { kind: 'human' }, answers: said.id, body: 'ok' });
+
+		const quoted = answeredMessage(h, answer)!;
+		expect(quoted.truncated).toBe(true);
+		expect(quoted.body).toBe(`${'x'.repeat(QUOTED_MAX_LENGTH)}…`);
+	});
+});
+
+/**
+ * Talking a question over before answering it (migration 032).
+ *
+ * The owner: "allow me to reply to form questions, so I can discuss with the
+ * agent before giving the answer." Until now the buttons were the only thing
+ * you could say back, so "why do you want to do that?" meant answering
+ * something in order to be able to ask.
+ */
+describe('a question`s own discussion', () => {
+	function question(over: Record<string, unknown> = {}) {
+		return createRequest(h, {
+			agentId,
+			kind: 'form',
+			question: 'send this?',
+			options: ['Send', 'Cancel'],
+			project: slug,
+			...over
+		}).request;
+	}
+
+	it('files a reply under the question, in the question`s project', () => {
+		const asked = question();
+
+		const said = postMessage(h, {
+			author: { kind: 'human' },
+			requestId: asked.id,
+			body: 'why that wording?'
+		});
+
+		expect(said).toMatchObject({
+			requestId: asked.id,
+			projectId,
+			updateId: null,
+			taskId: null,
+			replyTo: null
+		});
+		expect(listThread(h, { requestId: asked.id }).map((m) => m.id)).toEqual([said.id]);
+	});
+
+	it('keeps the discussion out of the feed, so it is not a post of its own', () => {
+		const asked = question();
+		postMessage(h, { author: { kind: 'human' }, requestId: asked.id, body: 'why?' });
+
+		// The feed's posts are messages anchored to nothing; this one is anchored
+		// to the question, and belongs under it.
+		expect(listThread(h, { project: slug }).filter((m) => m.requestId === null)).toEqual([]);
+	});
+
+	it('lets the agent answer in the same discussion, naming the line it answers', () => {
+		const asked = question();
+		const owner = postMessage(h, {
+			author: { kind: 'human' },
+			requestId: asked.id,
+			body: 'why that wording?'
+		});
+
+		const back = postMessage(h, {
+			author: { kind: 'agent', agentId },
+			answers: owner.id,
+			body: 'because the ticket says so'
+		});
+
+		// The question supplied the thread: an agent answering need not name it
+		// twice, exactly as answering a comment on a card does not.
+		expect(back).toMatchObject({ requestId: asked.id, answers: owner.id });
+	});
+
+	it('refuses a question that does not exist', () => {
+		expect(
+			refusalCode(() =>
+				postMessage(h, { author: { kind: 'human' }, requestId: 'nope', body: 'hello?' })
+			)
+		).toBe('not_found');
+	});
+
+	it('refuses a line that claims to be on a card as well', () => {
+		const asked = question();
+		const update = postUpdate(h, { project: slug, agentId, body: 'shipped' });
+
+		expect(
+			refusalCode(() =>
+				postMessage(h, {
+					author: { kind: 'human' },
+					requestId: asked.id,
+					updateId: update.id,
+					body: 'both?'
+				})
+			)
+		).toBe('invalid_argument');
+	});
+
+	it('does not put the discussion in some other question`s thread', () => {
+		const first = question();
+		const second = question({ question: 'and this?' });
+		postMessage(h, { author: { kind: 'human' }, requestId: first.id, body: 'about the first' });
+
+		expect(listThread(h, { requestId: second.id })).toEqual([]);
 	});
 });
 
@@ -917,24 +1255,6 @@ describe('answering the owner inside a card’s thread', () => {
 		expect(listThread(h, { updateId: update.id }).map((m) => m.id)).toEqual([asked.id, answer.id]);
 	});
 
-	it('does the same in a task’s thread', () => {
-		const task = insertTask(h.db, { projectId, title: 'look at it' });
-		const asked = postMessage(h, {
-			author: { kind: 'human' },
-			taskId: task.id,
-			body: 'how far have you got?'
-		});
-
-		const answer = postMessage(h, {
-			author: { kind: 'agent', agentId },
-			replyTo: asked.id,
-			body: 'halfway'
-		});
-
-		expect(answer.taskId).toBe(task.id);
-		expect(listThread(h, { taskId: task.id }).map((m) => m.id)).toEqual([asked.id, answer.id]);
-	});
-
 	it('still flattens under one of the owner’s own feed posts', () => {
 		const post = fromOwner('a post in the feed', { project: slug });
 		const first = postMessage(h, {
@@ -1012,5 +1332,50 @@ describe('an agent’s inbox is the projects it works in', () => {
 		expect(readMessages(h, { agentId, project: mine.slug }).messages.map((m) => m.body)).toEqual([
 			'for you'
 		]);
+	});
+});
+
+describe('two agents talking through card replies', () => {
+	let other: string;
+	let updateId: string;
+
+	beforeEach(() => {
+		other = h.agent('home-server');
+		updateId = postUpdate(h, { project: slug, agentId, body: 'done' }).id;
+	});
+
+	function fromAgent(id: string, body: string, scope: Record<string, string> = { updateId }) {
+		return postMessage(h, { author: { kind: 'agent', agentId: id }, body, ...scope });
+	}
+
+	it('names the agent that wrote a message, and nobody for the owner', () => {
+		expect(authorName(h, authorText({ kind: 'agent', agentId: other }))).toBe('home-server');
+		expect(authorName(h, HUMAN_AUTHOR)).toBeNull();
+	});
+
+	it('lets one agent read what another said on its card', () => {
+		fromAgent(other, 'which branch?');
+
+		const page = readMessages(h, { agentId });
+
+		expect(page.messages.map((message) => message.body)).toEqual(['which branch?']);
+	});
+});
+
+describe('saying which thread a message is in', () => {
+	it('names the post a reply hangs off, on every event about the reply', () => {
+		const post = fromOwner('what about this', { project: slug });
+		h.events.length = 0;
+
+		const reply = postMessage(h, {
+			author: { kind: 'agent', agentId },
+			body: 'on it',
+			replyTo: post.id
+		});
+
+		expect(h.events.at(-1)).toMatchObject({
+			type: 'message.created',
+			payload: { messageId: reply.id, replyTo: post.id, updateId: null }
+		});
 	});
 });

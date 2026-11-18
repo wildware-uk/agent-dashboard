@@ -10,7 +10,14 @@ import { probeVideo } from './ffmpeg';
 import { ingest } from './ingest';
 import { mediaDir, originalFile } from './paths';
 import { openVariant } from './serve';
-import { bodyOf, exifImageBytes, hasExifBlock, sampleVideoBytes, tempSettings } from './testing';
+import {
+	bodyOf,
+	exifImageBytes,
+	hasExifBlock,
+	sampleAudioBytes,
+	sampleVideoBytes,
+	tempSettings
+} from './testing';
 import { createUpload } from './upload';
 
 let db: Db;
@@ -121,7 +128,9 @@ describe('images', () => {
 		expect(first.status).toBe('ready');
 		expect(second).toMatchObject({ status: 'skipped' });
 		expect(third).toMatchObject({ status: 'skipped' });
-		expect(seen).toEqual([{ mediaId: id, updateId: null, kind: 'image' }]);
+		expect(seen).toEqual([
+			{ mediaId: id, updateId: null, messageId: null, requestId: null, kind: 'image' }
+		]);
 	});
 
 	it('reprocesses a ready row when told to, without a second media.ready', async () => {
@@ -190,7 +199,9 @@ describe('video', () => {
 
 		await processMedia(settings, { db, id, bus });
 
-		expect(seen).toEqual([{ mediaId: id, updateId: null, kind: 'video' }]);
+		expect(seen).toEqual([
+			{ mediaId: id, updateId: null, messageId: null, requestId: null, kind: 'video' }
+		]);
 	});
 });
 
@@ -262,5 +273,99 @@ describe('rows it will not touch', () => {
 		expect(outcome).toMatchObject({ status: 'skipped' });
 		expect(findMediaById(db, created.mediaId)!.status).toBe('pending');
 		expect(existsSync(mediaDir(settings, created.mediaId))).toBe(false);
+	});
+});
+
+/**
+ * A file has nothing to derive (migration 026).
+ *
+ * It still goes through this pass, because `ready` is the status the rest of the
+ * product reads — the card switches on it, the sweeper counts from it — and the
+ * only way a row gets one is here. What it must not do is try: there is no
+ * thumbnail for a zip, and `sharp` would say so as a `failed` row.
+ */
+describe('sound (migration 038)', () => {
+	it('measures how long it is and becomes ready, with nothing derived', async () => {
+		const bytes = await sampleAudioBytes({ seconds: 2, container: 'mp3' });
+		const id = await uploaded(bytes, 'audio/mpeg', 'voice-note.mp3');
+		const heard = readyEvents();
+
+		const outcome = await processMedia(settings, { db, id, bus });
+
+		expect(outcome).toMatchObject({ status: 'ready', variants: [] });
+		// A tone of two seconds, measured rather than assumed — mp3 framing makes
+		// it a shade long, so this is a range rather than an equality.
+		expect(outcome.status === 'ready' && outcome.durationMs).toBeGreaterThan(1_800);
+		expect(outcome.status === 'ready' && outcome.durationMs).toBeLessThan(2_400);
+		// No waveform picture, no transcode: the browser plays what was uploaded.
+		expect(listDerivatives(db, id)).toEqual([]);
+		expect(heard).toEqual([
+			{ mediaId: id, updateId: null, messageId: null, requestId: null, kind: 'audio' }
+		]);
+	});
+
+	it('serves the sound inline as itself, so a player can point at it', async () => {
+		const bytes = await sampleAudioBytes({ container: 'm4a' });
+		// An .m4a sniffs as audio/x-m4a; declaring the canonical type must work.
+		const id = await uploaded(bytes, 'audio/mp4', 'memo.m4a');
+		await processMedia(settings, { db, id, bus });
+
+		const file = await openVariant(settings, { db, id, variant: 'original' });
+
+		expect(file.mime).toBe('audio/mp4');
+		expect(file.disposition).toBe('inline');
+	});
+
+	it('takes each container the allowlist names', async () => {
+		for (const [container, mime] of [
+			['ogg', 'audio/ogg'],
+			['wav', 'audio/wav']
+		] as const) {
+			const id = await uploaded(await sampleAudioBytes({ container }), mime, `tone.${container}`);
+
+			expect(
+				(await processMedia(settings, { db, id, bus })).status,
+				`${container} should derive`
+			).toBe('ready');
+			expect(findMediaById(db, id)?.kind).toBe('audio');
+		}
+	});
+});
+
+describe('deriving a file', () => {
+	const log = new TextEncoder().encode('line one\nline two\n');
+
+	it('becomes ready immediately, with no derivatives and no failure', async () => {
+		const id = await uploaded(log, 'text/plain', 'build.log');
+		const heard: unknown[] = [];
+		bus.subscribe((event) => {
+			if (event.type === 'media.ready') heard.push(event.payload);
+		});
+
+		const outcome = await processMedia(settings, { db, id, bus });
+
+		expect(outcome).toMatchObject({ status: 'ready', variants: ['original'] });
+		expect(findMediaById(db, id)?.status).toBe('ready');
+		expect(listDerivatives(db, id)).toEqual([]);
+		expect(heard).toEqual([
+			{ mediaId: id, updateId: null, messageId: null, requestId: null, kind: 'file' }
+		]);
+	});
+
+	it('is still servable as itself once ready', async () => {
+		const id = await uploaded(log, 'text/plain', 'build.log');
+		await processMedia(settings, { db, id, bus });
+
+		const file = await openVariant(settings, { db, id, variant: 'original' });
+
+		expect(file.mime).toBe('application/octet-stream');
+		expect(file.filename).toBe('build.log');
+	});
+
+	it('is skipped the second time, so `media.ready` fires exactly once', async () => {
+		const id = await uploaded(log, 'text/plain', 'build.log');
+		await processMedia(settings, { db, id, bus });
+
+		expect(await processMedia(settings, { db, id, bus })).toMatchObject({ status: 'skipped' });
 	});
 });

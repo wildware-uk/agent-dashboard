@@ -58,6 +58,11 @@ describe('the policy the whole slice hangs off', () => {
 	it('closes a session long after it stopped counting as present', () => {
 		// Presence is a 90s question; closing a session is a 10 minute one, so a
 		// quiet agent is shown as offline long before its session is taken away.
+		// `THINKING_MAX_AGE_MS` in `src/web/acks.ts` is deliberately this same
+		// number: an "is thinking…" that outlived the window the server closes a
+		// silent session after is an animation the platform has already disagreed
+		// with. `$web` may not import from here (design §2), so the two are kept
+		// equal by an assertion on each side rather than by a shared constant.
 		expect(SESSION_IDLE_MS).toBe(10 * 60_000);
 		expect(SESSION_IDLE_MS).toBeGreaterThan(PRESENCE_WINDOW_MS);
 	});

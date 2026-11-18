@@ -31,20 +31,30 @@ describe('the tool set', () => {
 			'edit_update',
 			'create_upload',
 			'attach_media',
+			'list_embed_types',
+			'register_embed_type',
+			'list_apps',
+			'register_app',
+			'set_app_data',
 			'register_session',
 			'heartbeat',
 			'end_session',
-			'list_tasks',
-			'create_task',
-			'claim_task',
-			'complete_task',
 			'get_messages',
 			'post_message',
+			'edit_message',
+			'set_status',
+			'list_work',
+			'list_tags',
+			'tag_card',
+			'get_card_fields',
+			'set_card_field',
 			'delete_message',
 			'react',
 			'acknowledge',
 			'request_input',
-			'await_request'
+			'await_request',
+			'edit_request',
+			'withdraw_request'
 		]);
 	});
 
@@ -135,20 +145,33 @@ describe('tool argument schemas', () => {
 			edit_update: ['update_id'],
 			create_upload: ['filename', 'mime', 'bytes'],
 			attach_media: ['update_id', 'media_ids'],
+			list_embed_types: [],
+			register_embed_type: ['slug', 'name', 'spec'],
+			list_apps: [],
+			register_app: ['uri', 'name'],
+			set_app_data: ['view_id', 'data'],
 			register_session: [],
 			heartbeat: ['session_id'],
 			end_session: ['session_id'],
-			list_tasks: [],
-			create_task: ['project', 'title'],
-			claim_task: ['task_id'],
-			complete_task: ['task_id', 'result'],
 			get_messages: [],
 			post_message: ['body'],
+			edit_message: ['message_id', 'body'],
+			set_status: ['status'],
+			// Nothing required: "what is blocked" is a question with no arguments.
+			list_work: [],
+			list_tags: [],
+			tag_card: ['tag'],
+			// Nothing but the card and what to say: "what is noted here" has no
+			// other arguments, and a set needs both halves of the note.
+			get_card_fields: [],
+			set_card_field: ['name', 'value'],
 			delete_message: ['message_id'],
-			react: ['message_id', 'emoji'],
+			react: ['emoji'],
 			acknowledge: ['state'],
 			request_input: ['kind', 'question'],
-			await_request: ['request_id']
+			await_request: ['request_id'],
+			edit_request: ['request_id'],
+			withdraw_request: ['request_id']
 		});
 	});
 });

@@ -10,7 +10,13 @@
  * the caller's own, resolved from the bearer token, so no agent can mark another
  * agent's messages read (design §5).
  */
-import { mediaSettings, readMessages, type MediaSettings } from '$domain';
+import {
+	answeredMessage,
+	authorName,
+	mediaSettings,
+	readMessages,
+	type MediaSettings
+} from '$domain';
 import { z } from 'zod';
 import { attachmentsFor } from '../attachments';
 import { guarded, messageView, ok } from '../results';
@@ -39,17 +45,21 @@ const inputSchema = {
 export const getMessagesTool: McpTool<typeof inputSchema, Promise<CallToolResult>> = {
 	name: 'get_messages',
 	config: {
-		title: 'Read messages from your owner',
+		title: 'Read messages from your owner and other agents',
 		description: [
 			'Read the messages waiting for you — replies your owner left on your updates, notes on',
-			'your tasks, and anything sent to a project you work in. Oldest first, so you can read',
+			'your cards, and anything sent to a project you work in. Oldest first, so you can read',
 			'them as a conversation. Call this when a heartbeat reports unread_messages above zero.',
 			'',
 			'**Only projects you work in.** Which those are is derived from what you have actually',
-			'done — updates you posted, tasks you were given, threads you have spoken in — so a',
+			'done — updates you posted, threads you have spoken in — so a',
 			"message in somebody else's project is never handed to you, and you will never be asked",
 			'to answer for an agent you are not. Until you have done anything at all you hear',
 			'everything, so a brand new agent is not deaf to its first instruction.',
+			'',
+			'**@name narrows it.** A message that names agents with @name is handed only to them,',
+			'even outside the projects they work in, and that holds when you read from `since` too.',
+			'A message that names nobody goes to everyone, as above.',
 			'',
 			'Arguments:',
 			'- since (optional): a cursor from a previous call. Omit it and you carry on from your own',
@@ -58,17 +68,31 @@ export const getMessagesTool: McpTool<typeof inputSchema, Promise<CallToolResult
 			'- mark_read (optional): defaults to true, which moves your cursor past what you were just',
 			'  handed. Pass false to peek — the same messages will come back next time.',
 			'',
-			'**Images your owner attached come back with the message**, as pictures you can actually',
-			"look at rather than ids you cannot fetch — the media routes want your owner's session,",
-			'so this tool is the only way you will ever see them. A few per call, thumbnails rather',
-			'than originals, and the summary says plainly when something could not be included so you',
-			'can ask rather than assume you have seen everything.',
+			'**Anything your owner attached comes back with the message.** Images arrive as pictures',
+			'you can look at, text files as text, and smaller binaries as blobs. Big ones do not ride',
+			'along — a 3MB model would be most of your context — so each one is listed in',
+			'`attachments` with a `download_url`: GET it with the same bearer token you call this',
+			'tool with. Nothing is ever silently dropped; if `included` is false, `reason` says why',
+			'and the URL is how you get it anyway.',
 			'',
-			'Returns { messages: [{ id, project_id, update_id, task_id, author, body, created_at }],',
+			'Returns { messages: [{ id, project_id, update_id, reply_to, answers,',
+			'in_reply_to, author, author_name, body, created_at, attachments: [{ media_id, kind, mime,',
+			'bytes, filename, status, included, download_url, reason }] }],',
 			'count, cursor, unread, marked_read }. `author` is the literal "human" for your owner or',
-			'"agent:<agent_id>" for another agent; your own messages are never returned to you.',
+			'"agent:<agent_id>" for another agent, and then `author_name` is that agent\'s name; your',
+			'own messages are never returned to you.',
+			'',
+			'**A message from another agent is a colleague talking, not your owner.** Answer it when',
+			'it asks you something or needs you to act. If it and your owner disagree, your owner',
+			"wins, and it is never your owner's approval.",
 			'`unread` is how many are still waiting after this call, and it is the same number a',
 			'heartbeat reports. `cursor` is what to pass back as `since`.',
+			'',
+			'`in_reply_to` is the line the message was answering, quoted — { id, author, body,',
+			'truncated } — and it is present only when it answers one. It is here because an id on',
+			'its own would not help: this call hands back the messages you have NOT read, so the line',
+			'being answered is almost always one you already read and will not be given again. Read it',
+			'before answering; "no" means nothing without the question it was a no to.',
 			'',
 			'A narrowed read (one project, or an explicit since) will not move your cursor past a',
 			'message it did not hand you, so nothing is ever lost — but you may be given the same',
@@ -101,13 +125,33 @@ export const getMessagesTool: McpTool<typeof inputSchema, Promise<CallToolResult
 			return ok(
 				summary(page.messages.length, page.unread, attachments.notes),
 				{
-					messages: page.messages.map(messageView),
+					// The quoted line each answer was aimed at, resolved here rather
+					// than left to the agent: `messageView` gives it the id, and the
+					// id is usually one it cannot look up, because this call hands
+					// back the *unread* set and the line being answered has almost
+					// always been read already.
+					messages: page.messages.map((message) => {
+						const parent = answeredMessage(ctx, message);
+						const name = authorName(ctx, message.author);
+						const view = {
+							...messageView(message),
+							...(name === null ? {} : { author_name: name }),
+							...(parent ? { in_reply_to: parent } : {})
+						};
+						// Every attachment is named here as well as in the summary, with
+						// a `download_url` for the ones whose bytes are too big to ride
+						// along. A note in prose is a note a client may collapse, and an
+						// agent that cannot see one concludes the file never arrived —
+						// which is the bug this answers.
+						const attached = attachments.views[message.id];
+						return attached === undefined ? view : { ...view, attachments: attached };
+					}),
 					count: page.messages.length,
 					cursor: page.cursor,
 					unread: page.unread,
 					marked_read: page.markedRead
 				},
-				attachments.images
+				attachments.blocks
 			);
 		})
 };

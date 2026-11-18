@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { insertApproval, type Db } from '$db';
+import { findMediaById, insertApproval, insertMedia, type Db } from '$db';
 import { EventBus } from '$events';
 import { context, type DomainContext } from './context';
 import { createProject } from './projects';
@@ -12,6 +12,8 @@ import {
 	answerRequest,
 	awaitRequest,
 	cancelRequest,
+	editRequest,
+	withdrawRequest,
 	countPendingRequests,
 	createRequest,
 	expireRequests,
@@ -339,6 +341,219 @@ describe('the owner dismissing a prompt', () => {
 
 		expect(() => cancelRequest(h, asked.id)).toThrow(expect.objectContaining({ code: 'conflict' }));
 		expect(() => answerRequest(h, { requestId: asked.id, value: true })).toThrow(
+			expect.objectContaining({ code: 'conflict' })
+		);
+	});
+});
+
+/**
+ * An agent taking its own question back (migration 031).
+ *
+ * The owner: "let an agent dismiss its own question (eg its no longer
+ * relevant)." A question on their banner is a claim that an agent is blocked on
+ * it, and one that has gone stale costs them a decision that no longer exists.
+ *
+ * Deliberately a different ending from the owner dismissing it. `cancelled` is
+ * the owner declining to answer, and the agent is told so in those words;
+ * blaming them for a question the agent itself withdrew would be a lie about the
+ * one person who did nothing.
+ */
+describe('an agent withdrawing its own question', () => {
+	it('ends the request as withdrawn, not as dismissed', () => {
+		const asked = ask();
+
+		withdrawRequest(h, { requestId: asked.id, agentId });
+
+		expect(findRequest(h, asked.id)?.state).toBe('withdrawn');
+	});
+
+	it('takes it off what is waiting on the owner', () => {
+		const asked = ask();
+		expect(listPendingRequests(h).map((request) => request.id)).toContain(asked.id);
+
+		withdrawRequest(h, { requestId: asked.id, agentId });
+
+		expect(listPendingRequests(h).map((request) => request.id)).not.toContain(asked.id);
+	});
+
+	it('unblocks a parked waiter, so a second session is not left holding it', async () => {
+		const asked = ask();
+		const wait = awaitRequest(h, { requestId: asked.id, agentId });
+		await vi.advanceTimersByTimeAsync(0);
+
+		withdrawRequest(h, { requestId: asked.id, agentId });
+
+		await expect(wait).resolves.toMatchObject({ state: 'withdrawn' });
+	});
+
+	it('refuses another agent`s question', () => {
+		// An id copied from anywhere must not let one agent silence another's.
+		const asked = ask();
+		const intruder = h.agent('intruder');
+
+		expect(() => withdrawRequest(h, { requestId: asked.id, agentId: intruder })).toThrow(
+			expect.objectContaining({ code: 'invalid_argument' })
+		);
+		expect(findRequest(h, asked.id)?.state).toBe('pending');
+	});
+
+	it('refuses one that has already ended, whichever way it ended', () => {
+		const answered = ask();
+		answerRequest(h, { requestId: answered.id, value: true });
+		expect(() => withdrawRequest(h, { requestId: answered.id, agentId })).toThrow(
+			expect.objectContaining({ code: 'conflict' })
+		);
+
+		const dismissed = ask();
+		cancelRequest(h, dismissed.id);
+		expect(() => withdrawRequest(h, { requestId: dismissed.id, agentId })).toThrow(
+			expect.objectContaining({ code: 'conflict' })
+		);
+
+		const withdrawn = ask();
+		withdrawRequest(h, { requestId: withdrawn.id, agentId });
+		expect(() => withdrawRequest(h, { requestId: withdrawn.id, agentId })).toThrow(
+			expect.objectContaining({ code: 'conflict' })
+		);
+	});
+
+	it('loses to an answer that arrived first, and says so', () => {
+		// The race worth naming: the owner answers while the agent is withdrawing.
+		// Their answer stands, and the agent is told to go and read it.
+		const asked = ask();
+		answerRequest(h, { requestId: asked.id, value: false });
+
+		expect(() => withdrawRequest(h, { requestId: asked.id, agentId })).toThrow(
+			expect.objectContaining({ code: 'conflict' })
+		);
+		expect(findRequest(h, asked.id)?.state).toBe('answered');
+	});
+
+	it('refuses an id that names nothing', () => {
+		expect(() => withdrawRequest(h, { requestId: '01M0000000000000000000000', agentId })).toThrow(
+			expect.objectContaining({ code: 'not_found' })
+		);
+	});
+});
+
+/**
+ * The asking agent rewriting its own question (migration 033).
+ *
+ * The owner: "let an agent edit any of their messages, questions or comments."
+ * The case that asks for it is a draft: a mistake spotted in a form's text while
+ * the owner is still reading it.
+ */
+describe('an agent correcting its own question', () => {
+	it('replaces the question and marks it edited', () => {
+		const asked = ask({ question: 'ship it?' });
+
+		const edited = editRequest(h, { requestId: asked.id, agentId, question: 'ship it to prod?' });
+
+		expect(edited).toMatchObject({ id: asked.id, question: 'ship it to prod?', state: 'pending' });
+		expect(edited.editedAt).toBe(FIXED_NOW);
+		expect(findRequest(h, asked.id)?.question).toBe('ship it to prod?');
+	});
+
+	it('replaces a form`s draft, which is what this is mostly for', () => {
+		const asked = ask({
+			kind: 'form',
+			question: 'send this?',
+			options: ['Send', 'Cancel'],
+			label: 'Message',
+			default: 'Hi Sam, the deploy is done'
+		});
+
+		const edited = editRequest(h, {
+			requestId: asked.id,
+			agentId,
+			default: 'Hi Sam, the deploy is done — logs are clean'
+		});
+
+		expect(edited.config).toMatchObject({
+			default: 'Hi Sam, the deploy is done — logs are clean',
+			// The field keeps its name: an edit of the draft must not quietly take
+			// the rest of the control away with it.
+			label: 'Message'
+		});
+	});
+
+	it('clears the draft when asked to, without touching the rest of the control', () => {
+		const asked = ask({
+			kind: 'text',
+			question: 'commit message?',
+			default: 'fix: it',
+			label: undefined
+		});
+
+		expect(editRequest(h, { requestId: asked.id, agentId, default: null }).config?.default).toBe(
+			undefined
+		);
+	});
+
+	it('replaces the options, and refuses ones this kind does not have', () => {
+		const buttons = ask({
+			kind: 'buttons',
+			question: 'the build failed',
+			options: ['retry', 'skip']
+		});
+
+		expect(
+			editRequest(h, { requestId: buttons.id, agentId, options: ['retry', 'skip', 'abort'] })
+				.options
+		).toEqual(['retry', 'skip', 'abort']);
+
+		const confirm = ask({ question: 'push?' });
+		expect(() => editRequest(h, { requestId: confirm.id, agentId, options: ['a'] })).toThrow(
+			expect.objectContaining({ code: 'invalid_argument' })
+		);
+	});
+
+	it('refuses new options that leave the default pointing at nothing', () => {
+		const asked = ask({
+			kind: 'choice',
+			question: 'which branch?',
+			options: ['main', 'next'],
+			default: 'next'
+		});
+
+		// The control would pre-select something that is no longer on the list.
+		expect(() =>
+			editRequest(h, { requestId: asked.id, agentId, options: ['main', 'trunk'] })
+		).toThrow(expect.objectContaining({ code: 'invalid_argument' }));
+	});
+
+	it('announces it without settling anything, so no waiter unblocks', () => {
+		const asked = ask({ question: 'ship it?' });
+		const before = h.eventNames().length;
+
+		editRequest(h, { requestId: asked.id, agentId, detail: 'the canary held' });
+
+		expect(h.eventNames().slice(before)).toEqual(['request.updated']);
+		expect(findRequest(h, asked.id)?.state).toBe('pending');
+	});
+
+	it('refuses another agent`s question', () => {
+		const asked = ask({ question: 'ship it?' });
+		const stranger = h.agent('scout');
+
+		expect(() =>
+			editRequest(h, { requestId: asked.id, agentId: stranger, question: 'no' })
+		).toThrow(expect.objectContaining({ code: 'invalid_argument' }));
+	});
+
+	it('refuses an edit that changes nothing', () => {
+		const asked = ask({ question: 'ship it?' });
+
+		expect(() => editRequest(h, { requestId: asked.id, agentId })).toThrow(
+			expect.objectContaining({ code: 'invalid_argument' })
+		);
+	});
+
+	it('refuses once the question has ended, because the answer was given to the old one', () => {
+		const asked = ask({ question: 'ship it?' });
+		answerRequest(h, { requestId: asked.id, value: true });
+
+		expect(() => editRequest(h, { requestId: asked.id, agentId, question: 'now?' })).toThrow(
 			expect.objectContaining({ code: 'conflict' })
 		);
 	});
@@ -693,5 +908,91 @@ describe('a question asked in a thread', () => {
 		const { request } = createRequest(h, { agentId, kind: 'confirm', question: 'Ship it?' });
 
 		expect(request.messageId).toBeNull();
+	});
+});
+
+/**
+ * Picture questions: an agent puts an image on an option, so the owner picks
+ * the picture itself. The owner: "let an agent attach images to the buttons on
+ * a form, so you can select an image directly."
+ */
+describe('options with pictures', () => {
+	const image = (over: Partial<Parameters<typeof insertMedia>[1]> = {}) =>
+		insertMedia(h.db, {
+			agentId,
+			kind: 'image',
+			mime: 'image/png',
+			bytes: 10,
+			sha256: `sha-${Math.random()}`,
+			status: 'ready',
+			...over
+		}).id;
+
+	it('stores which picture goes with which option, and attaches them to the question', () => {
+		const red = image();
+		const blue = image();
+
+		const request = ask({
+			kind: 'choice',
+			options: ['Red', 'Blue', 'Neither'],
+			optionMedia: { Red: red, Blue: blue }
+		});
+
+		expect(request.config?.optionMedia).toEqual({ Red: red, Blue: blue });
+		expect(findMediaById(h.db, red)?.requestId).toBe(request.id);
+		expect(findMediaById(h.db, blue)?.requestId).toBe(request.id);
+	});
+
+	it('works for buttons and multi_choice too', () => {
+		expect(
+			ask({ kind: 'buttons', options: ['A', 'B'], optionMedia: { A: image() } }).config?.optionMedia
+		).toBeDefined();
+		expect(
+			ask({ kind: 'multi_choice', options: ['A', 'B'], optionMedia: { B: image() } }).config
+				?.optionMedia
+		).toBeDefined();
+	});
+
+	it('refuses a picture for an option that was not offered', () => {
+		expect(() =>
+			ask({ kind: 'choice', options: ['Red'], optionMedia: { Green: image() } })
+		).toThrow(/Green is not one of the options/);
+	});
+
+	it('refuses something that is not a picture', () => {
+		const pdf = image({ kind: 'file', mime: 'application/pdf' });
+		expect(() => ask({ kind: 'choice', options: ['Red'], optionMedia: { Red: pdf } })).toThrow(
+			/must be an image/
+		);
+	});
+
+	it('refuses pictures on a kind with nothing to pick', () => {
+		expect(() => ask({ kind: 'confirm', optionMedia: { yes: image() } })).toThrow(
+			/buttons, choice or multi_choice/
+		);
+		expect(() => ask({ kind: 'form', options: ['Send'], optionMedia: { Send: image() } })).toThrow(
+			/buttons, choice or multi_choice/
+		);
+	});
+
+	it('refuses the same picture on two options', () => {
+		const one = image();
+		expect(() =>
+			ask({ kind: 'choice', options: ['A', 'B'], optionMedia: { A: one, B: one } })
+		).toThrow(/once/);
+	});
+
+	it('forgets the picture of an option that an edit removes', () => {
+		const red = image();
+		const blue = image();
+		const request = ask({
+			kind: 'choice',
+			options: ['Red', 'Blue'],
+			optionMedia: { Red: red, Blue: blue }
+		});
+
+		const edited = editRequest(h, { requestId: request.id, agentId, options: ['Red', 'Green'] });
+
+		expect(edited.config?.optionMedia).toEqual({ Red: red });
 	});
 });

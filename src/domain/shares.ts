@@ -48,6 +48,7 @@ import {
 } from '$db';
 import type { DomainContext } from './context';
 import { invalid, notFound } from './errors';
+import { listUpdateEmbeds, type EmbedView } from './embeds';
 import { listUpdateMedia, type MediaAttachment } from './media';
 
 /**
@@ -201,6 +202,15 @@ export type SharedCard = {
 	/** The project's display name. Never its slug or id — those address things. */
 	projectName: string | null;
 	media: MediaAttachment[];
+	/**
+	 * The embeds on the card (migration 027).
+	 *
+	 * Public with the rest of it: an embed is part of what the card said, and a
+	 * shared card that dropped the Slack message it was about would be a
+	 * different card. The look travels with each one, so the public page renders
+	 * it without reaching for a registry it has no session to read.
+	 */
+	embeds: EmbedView[];
 };
 
 export type ReadShareInput = {
@@ -240,7 +250,8 @@ export function readShare(ctx: DomainContext, input: ReadShareInput): SharedCard
 		// for no reason a reader could use.
 		agentName: agent?.name ?? 'An agent',
 		projectName: project?.name ?? null,
-		media: listUpdateMedia(ctx, [update.id])[update.id] ?? []
+		media: listUpdateMedia(ctx, [update.id])[update.id] ?? [],
+		embeds: listUpdateEmbeds(ctx, [update.id])[update.id] ?? []
 	};
 }
 

@@ -15,14 +15,23 @@
  *   row, and the sweeper collects it if the agent never follows through.
  * - The token row carries the cap and a one-entry mime allowlist, so ingest
  *   enforces the grant it was actually given rather than re-deriving it.
- * - The filename is validated and then **thrown away**. It is not a column
- *   (design §3) and it is not a path: the extension comes from the sniffed type
- *   (`./paths.ts`). Validating it anyway means an agent that sends rubbish hears
- *   about it instead of wondering why its label vanished.
+ * - The filename is validated, and then kept only for a `file` (migration 026):
+ *   a download called `01M1P….bin` names nothing to the person clicking it, and
+ *   an agent handed three files with no names cannot say which it is reading. It
+ *   is still **never a path** — the extension comes from the type (`./paths.ts`)
+ *   — and for an image or a video it is still thrown away, because the picture
+ *   is its own label.
  */
-import { findAgentById, insertMedia, insertUploadToken, type Db, type Media } from '$db';
+import {
+	findAgentById,
+	insertMedia,
+	insertUploadToken,
+	type Db,
+	type Media,
+	type MediaKind
+} from '$db';
 import { mediaInvalid, mediaNotFound, tooLarge, unsupportedType } from './errors';
-import { isAllowedMime, kindForMime, normaliseMime } from './mime';
+import { canonicalMime, kindForMime } from './mime';
 import type { MediaSettings } from './settings';
 import { UPLOAD_TOKEN_TTL_MS, signUploadToken, uploadUrl } from './tokens';
 
@@ -33,7 +42,12 @@ export type CreateUploadInput = {
 	db: Db;
 	/** The agent, resolved from its bearer token by the adapter — never an argument. */
 	agentId: string;
-	/** What the agent calls the file. A label only: it is stored nowhere. */
+	/**
+	 * What the caller calls the file.
+	 *
+	 * Stored for a `file` and shown beside its download; discarded for an image
+	 * or a video (migration 026). Never a path either way.
+	 */
 	filename: string;
 	/** The type the agent claims. Checked against the bytes at ingest. */
 	mime: string;
@@ -58,7 +72,8 @@ export type CreatedUpload = {
 	token: string;
 };
 
-function checkFilename(filename: string): void {
+/** @returns the name with its surrounding blanks gone, which is what is stored. */
+function checkFilename(filename: string): string {
 	const trimmed = filename.trim();
 	if (trimmed === '') throw mediaInvalid('filename is required');
 	if (trimmed.length > FILENAME_MAX_LENGTH) {
@@ -70,13 +85,49 @@ function checkFilename(filename: string): void {
 		const code = character.codePointAt(0) ?? 0;
 		if (code < 0x20 || code === 0x7f) throw mediaInvalid('filename contains control characters');
 	}
+
+	return trimmed;
 }
+
+/**
+ * The cap for one kind of upload.
+ *
+ * Three numbers rather than two because a `file` is never rendered: the reason
+ * to keep it small is this deployment's disk, not a browser's patience
+ * (`$config`'s `MAX_FILE_BYTES`).
+ */
+function limitFor(kind: MediaKind, settings: MediaSettings): number {
+	if (kind === 'image') return settings.maxImageBytes;
+	if (kind === 'video') return settings.maxVideoBytes;
+	// Audio shares the file cap (migration 038) rather than getting a knob of its
+	// own: an hour of speech is tens of megabytes, well inside it, and a fourth
+	// limit would be a fourth thing to keep in step with `BODY_SIZE_LIMIT`.
+	return settings.maxFileBytes;
+}
+
+/** "an image", "a video", "an audio", "a file" — the article follows the noun. */
+function article(kind: MediaKind): string {
+	return kind === 'image' || kind === 'audio' ? 'an' : 'a';
+}
+
+/**
+ * What a caller is told when its declared type is not even a mime.
+ *
+ * Note what it does *not* say: there is no list of accepted types any more,
+ * because a `file` may be anything well formed (migration 026). The one type
+ * that is still refused outright is a string that is not a `type/subtype`.
+ */
+const MIME_HELP =
+	'must look like "type/subtype", e.g. "image/png", "application/pdf" or ' +
+	'"text/plain". Images and video are rendered on the card and are checked ' +
+	'against their magic bytes; anything else is stored as a file the owner ' +
+	'downloads.';
 
 /**
  * Reserve a media id and mint the token that fills it.
  *
- * @throws {@link MediaError} `unsupported_type` for anything off the allowlist
- *   (SVG included, always), `too_large` past the configured cap,
+ * @throws {@link MediaError} `unsupported_type` for a declared type that is not
+ *   a mime at all, `too_large` past the configured cap for its kind,
  *   `invalid_argument` for a size or filename that makes no sense, and
  *   `not_found` if the agent does not exist.
  */
@@ -104,8 +155,8 @@ export type OwnerMediaInput = {
  * the cap is returned rather than assumed, because a browser's `Content-Length`
  * is a claim and the stream is where it is actually enforced.
  *
- * @throws {@link MediaError} `unsupported_type` for a type off the allowlist
- *   (SVG always), `too_large` for a declared size past the cap.
+ * @throws {@link MediaError} `unsupported_type` for a declared type that is not
+ *   a mime at all, `too_large` for a declared size past the cap for its kind.
  */
 export function createOwnerMedia(
 	settings: MediaSettings,
@@ -113,22 +164,16 @@ export function createOwnerMedia(
 ): { media: Media; maxBytes: number; allowed: string[] } {
 	const now = input.now ?? Date.now();
 
-	checkFilename(input.filename);
+	const filename = checkFilename(input.filename);
 
-	const mime = normaliseMime(input.mime);
+	const mime = canonicalMime(input.mime);
 	const kind = kindForMime(mime);
-	if (!isAllowedMime(mime) || !kind) {
-		throw unsupportedType(
-			`${JSON.stringify(mime)} is not an accepted type. Allowed: image/png, image/jpeg, ` +
-				`image/webp, image/gif, video/mp4, video/webm, video/quicktime. SVG is never accepted.`
-		);
-	}
+	if (!kind) throw unsupportedType(`${JSON.stringify(mime)} ${MIME_HELP}`);
 
-	const limit = kind === 'image' ? settings.maxImageBytes : settings.maxVideoBytes;
+	const limit = limitFor(kind, settings);
 	if (input.bytes != null && input.bytes > limit) {
-		const article = kind === 'image' ? 'an' : 'a';
 		throw tooLarge(
-			`${article} ${kind} may be at most ${limit} bytes; this one declares ${input.bytes}`
+			`${article(kind)} ${kind} may be at most ${limit} bytes; this one declares ${input.bytes}`
 		);
 	}
 
@@ -141,6 +186,8 @@ export function createOwnerMedia(
 		bytes: 0,
 		// No bytes yet. `./serve.ts` reads this as "nothing to serve".
 		sha256: '',
+		// Kept for a download, discarded for a picture (migration 026).
+		filename: kind === 'file' ? filename : null,
 		status: 'pending',
 		createdAt: now
 	});
@@ -151,27 +198,20 @@ export function createOwnerMedia(
 export function createUpload(settings: MediaSettings, input: CreateUploadInput): CreatedUpload {
 	const now = input.now ?? Date.now();
 
-	checkFilename(input.filename);
+	const filename = checkFilename(input.filename);
 
-	const mime = normaliseMime(input.mime);
+	const mime = canonicalMime(input.mime);
 	const kind = kindForMime(mime);
-	if (!isAllowedMime(mime) || !kind) {
-		throw unsupportedType(
-			`${JSON.stringify(mime)} is not an accepted type. Allowed: image/png, image/jpeg, ` +
-				`image/webp, image/gif, video/mp4, video/webm, video/quicktime. SVG is never accepted.`
-		);
-	}
+	if (!kind) throw unsupportedType(`${JSON.stringify(mime)} ${MIME_HELP}`);
 
 	if (!Number.isInteger(input.bytes) || input.bytes < 1) {
 		throw mediaInvalid('bytes must be the whole number of bytes the file has, and at least 1');
 	}
 
-	const limit = kind === 'image' ? settings.maxImageBytes : settings.maxVideoBytes;
+	const limit = limitFor(kind, settings);
 	if (input.bytes > limit) {
-		// "an image" / "a video": the article has to follow the noun.
-		const article = kind === 'image' ? 'an' : 'a';
 		throw tooLarge(
-			`${article} ${kind} may be at most ${limit} bytes; this one declares ${input.bytes}`
+			`${article(kind)} ${kind} may be at most ${limit} bytes; this one declares ${input.bytes}`
 		);
 	}
 
@@ -194,6 +234,8 @@ export function createUpload(settings: MediaSettings, input: CreateUploadInput):
 			bytes: input.bytes,
 			// No bytes yet. `./serve.ts` reads this as "nothing to serve".
 			sha256: '',
+			// Kept for a download, discarded for a picture (migration 026).
+			filename: kind === 'file' ? filename : null,
 			status: 'pending',
 			createdAt: now
 		});

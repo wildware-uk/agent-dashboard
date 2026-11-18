@@ -21,11 +21,10 @@ type Row = {
 	updated_at: number;
 	theme: string | null;
 	board: string | null;
-	owner_seen_at: number | null;
 };
 
 const COLUMNS = `seq, id, slug, name, description, status, pinned, created_at, updated_at,
-	theme, board, owner_seen_at`;
+	theme, board`;
 
 function toProject(row: Row): Project {
 	return {
@@ -39,8 +38,7 @@ function toProject(row: Row): Project {
 		createdAt: row.created_at,
 		updatedAt: row.updated_at,
 		theme: jsonOf<ProjectTheme>(row.theme),
-		board: jsonOf<ProjectBoard>(row.board),
-		ownerSeenAt: row.owner_seen_at
+		board: jsonOf<ProjectBoard>(row.board)
 	};
 }
 
@@ -159,48 +157,4 @@ export function updateProject(db: Db, id: string, patch: ProjectPatch): Project 
 		.get(params);
 
 	return row && toProject(row);
-}
-
-/**
- * Stamp when the owner last opened a project.
- *
- * Deliberately not part of `updateProject`: every other project patch is a
- * change to what the project *is* and bumps `updated_at`, and reading a page is
- * neither. A project would otherwise sort as freshly edited because somebody
- * glanced at it.
- */
-export function markProjectSeen(db: Db, id: string, at: number): Project | undefined {
-	const row = db
-		.prepare<[number, string], Row>(
-			`UPDATE projects SET owner_seen_at = ? WHERE id = ? RETURNING ${COLUMNS}`
-		)
-		.get(at, id);
-
-	return row && toProject(row);
-}
-
-/**
- * Updates per project that landed after the owner last looked, newest state of
- * the sidebar badge.
- *
- * One grouped query rather than a count per project: the sidebar asks for all of
- * them at once, on every snapshot, and a query per row would be a fan-out that
- * grows with the number of projects on screen.
- *
- * Deleted updates are excluded — a badge that counted a card the owner can never
- * open would never clear.
- */
-export function countUnseenUpdates(db: Db): Record<string, number> {
-	const rows = db
-		.prepare<[], { project_id: string; count: number }>(
-			`SELECT u.project_id AS project_id, COUNT(*) AS count
-			   FROM updates u
-			   JOIN projects p ON p.id = u.project_id
-			  WHERE u.deleted_at IS NULL
-			    AND u.created_at > COALESCE(p.owner_seen_at, 0)
-			  GROUP BY u.project_id`
-		)
-		.all();
-
-	return Object.fromEntries(rows.map((row) => [row.project_id, row.count]));
 }

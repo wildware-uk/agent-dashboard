@@ -14,7 +14,15 @@
  * argument that is accepted and then ignored is worse documentation than an
  * argument that is not there yet.
  */
-import { BODY_MAX_LENGTH, MEDIA_PER_UPDATE_MAX, TITLE_MAX_LENGTH, postUpdate } from '$domain';
+import {
+	BODY_MAX_LENGTH,
+	APPS_PER_POST_MAX,
+	appsOn,
+	EMBEDS_PER_POST_MAX,
+	MEDIA_PER_UPDATE_MAX,
+	TITLE_MAX_LENGTH,
+	postUpdate
+} from '$domain';
 import { z } from 'zod';
 import { guard, ok, updateView } from '../results';
 import type { McpTool } from './types';
@@ -66,20 +74,50 @@ const inputSchema = {
 		.max(MEDIA_PER_UPDATE_MAX)
 		.optional()
 		.describe(
-			`Images or video to show on the card: ids from create_upload whose bytes you have ` +
+			`Files to put on the card: ids from create_upload whose bytes you have ` +
 				`already PUT, at most ${MEDIA_PER_UPDATE_MAX}. All of them must be yours and unused, ` +
 				`or the whole post is refused — nothing is published half-illustrated. If an upload ` +
 				`finishes after you post, use attach_media instead.`
 		),
-	task_id: z
-		.string()
+	embeds: z
+		.array(
+			z.object({
+				type: z.string().describe("The look's slug, from list_embed_types."),
+				data: z
+					.record(z.string(), z.unknown())
+					.describe('The values it shows, e.g. { "username": "sam", "text": "it is green" }.'),
+				source_url: z
+					.string()
+					.optional()
+					.describe('Where you copied it from, if anywhere. http or https.')
+			})
+		)
+		.max(EMBEDS_PER_POST_MAX)
 		.optional()
 		.describe(
-			'The task this is progress on, from list_tasks or claim_task. Filing an update against ' +
-				'a task is how a long-running piece of work gets a history your owner can read: the ' +
-				'task page shows every update on it, newest first, with the latest as its current ' +
-				'status. Use it for every post about work you claimed. The task must be in the same ' +
-				'project you are posting to.'
+			`Things to show in a registered look — a Slack message, a GitHub comment, a Jira ` +
+				`ticket — instead of pasting them as flat text. At most ${EMBEDS_PER_POST_MAX}. Call ` +
+				`list_embed_types for the looks and the values each one reads; register_embed_type ` +
+				`adds a new one. An unknown look fails the whole post rather than dropping the embed.`
+		),
+	apps: z
+		.array(
+			z.object({
+				app: z.string().describe("The app's ui:// URI, from list_apps or register_app."),
+				data: z
+					.record(z.string(), z.unknown())
+					.optional()
+					.describe('What to hand it, e.g. { "open": 3, "files": ["fees.ts"] }.'),
+				title: z.string().optional().describe('A line above the frame.')
+			})
+		)
+		.max(APPS_PER_POST_MAX)
+		.optional()
+		.describe(
+			`Interactive UI to put on the card — a board your owner can tick through, a chart ` +
+				`of the run you are in the middle of. At most ${APPS_PER_POST_MAX}. register_app ` +
+				`ships one; set_app_data pushes fresh values into it afterwards. An unknown app fails ` +
+				`the whole card rather than dropping the frame.`
 		),
 	session_id: z
 		.string()
@@ -111,10 +149,17 @@ export const postUpdateTool: McpTool<typeof inputSchema> = {
 			'- priority (optional): "low", "medium" (default) or "high" — whether it can wait. Your',
 			'  owner filters notifications on it per device, so "high" is what reaches a phone.',
 			`- media_ids (optional): up to ${MEDIA_PER_UPDATE_MAX} ids from create_upload whose bytes`,
-			'  you have already uploaded. They appear as images or video on the card.',
-			'- task_id (optional): the task this is progress on. Your owner reads a task page that',
-			'  shows every update filed against it, so a claimed task with no updates looks stalled',
-			'  even while you are working. Post against it as you go.',
+			'  you have already uploaded. Images and video render on the card; anything else is',
+			'  listed as a download.',
+			'- embeds (optional): things to show in a registered look — a Slack message, a GitHub',
+			'  comment, a Jira ticket — rather than pasted as flat text. Each is { type, data,',
+			'  source_url? }; list_embed_types says which looks exist and which values each reads.',
+			'- apps (optional): interactive UI, rendered in a sandboxed frame on the card. Each is',
+			'  { app: "ui://…", data?, title? }; register_app ships one and list_apps says what',
+			'  exists. set_app_data pushes fresh values into one already posted.',
+			'',
+			'If the card is a piece of work, mark it with set_status — "in_progress" while you are',
+			'on it, "done" when it is finished. That is what the task board used to be.',
 			'- session_id (optional): the id register_session returned, if you have one. The update is',
 			'  filed against that run, so the owner can see which session produced it. It must be one',
 			'  of your own sessions.',
@@ -146,14 +191,32 @@ export const postUpdateTool: McpTool<typeof inputSchema> = {
 				title: args.title,
 				level: args.level,
 				priority: args.priority,
-				taskId: args.task_id,
 				sessionId: args.session_id,
-				mediaIds: args.media_ids
+				mediaIds: args.media_ids,
+				apps: args.apps?.map((app) => ({
+					app: app.app,
+					data: app.data,
+					title: app.title
+				})),
+				embeds: args.embeds?.map((embed) => ({
+					type: embed.type,
+					data: embed.data,
+					sourceUrl: embed.source_url
+				}))
 			});
+
+			// The showings' ids, so an agent can push fresh values into one with
+			// set_app_data without having to go looking for what it just posted.
+			const apps = args.apps?.length ? appsOn(ctx, { kind: 'update', id: update.id }) : [];
 
 			return ok(
 				`Posted a ${update.level} update to project ${args.project} as agent "${agent.name}".`,
-				{ update: updateView(update) }
+				{
+					update: updateView(update),
+					...(apps.length > 0
+						? { apps: apps.map((app) => ({ view_id: app.id, uri: app.uri, title: app.title })) }
+						: {})
+				}
 			);
 		})
 };

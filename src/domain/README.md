@@ -41,17 +41,21 @@ const { updates, nextCursor } = listUpdates(ctx, { project: 'agent-dashboard', l
 
 ## What is here
 
-| File          | Holds                                                                                 |
-| ------------- | ------------------------------------------------------------------------------------- |
-| `context.ts`  | `DomainContext` and `context()`: the db, the bus and the clock every rule works from. |
-| `errors.ts`   | `DomainError` and its three codes.                                                    |
-| `slug.ts`     | Slug generation, validation and normalisation.                                        |
-| `text.ts`     | The required/optional string checks the rules share.                                  |
-| `projects.ts` | `createProject`, `listProjects`, `updateProject`, `findProject`, `resolveProject`.    |
-| `updates.ts`  | `postUpdate`, `listUpdates`, `deleteUpdate`.                                          |
-| `sessions.ts` | `registerSession`, `heartbeat`, `endSession`, `listLiveAgents`, the sweeper.          |
-| `messages.ts` | `postMessage`, `readMessages`, `listThread`, `countUnreadMessages`.                   |
-| `tasks.ts`    | `createTask`, `listTasks`, `claimTask`, `completeTask`, `cancelTask`, `assignTask`.   |
+| File               | Holds                                                                                 |
+| ------------------ | ------------------------------------------------------------------------------------- |
+| `context.ts`       | `DomainContext` and `context()`: the db, the bus and the clock every rule works from. |
+| `errors.ts`        | `DomainError` and its three codes.                                                    |
+| `slug.ts`          | Slug generation, validation and normalisation.                                        |
+| `text.ts`          | The required/optional string checks the rules share.                                  |
+| `projects.ts`      | `createProject`, `listProjects`, `updateProject`, `findProject`, `resolveProject`.    |
+| `updates.ts`       | `postUpdate`, `listUpdates`, `deleteUpdate`.                                          |
+| `sessions.ts`      | `registerSession`, `heartbeat`, `endSession`, `listLiveAgents`, the sweeper.          |
+| `messages.ts`      | `postMessage`, `readMessages`, `listThread`, `countUnreadMessages`.                   |
+| `tasks.ts`         | `createTask`, `listTasks`, `claimTask`, `completeTask`, `cancelTask`, `assignTask`.   |
+| `devices.ts`       | The owner's phones: mint, authenticate, revoke a device key; store its push tokens.   |
+| `summary.ts`       | `ownerSummary` and `liveActivityState`: the one read the iOS app's surfaces share.    |
+| `apns.ts`          | Apple push: the HTTP/2 transport, the ES256 provider token, and the alert sender.     |
+| `live-activity.ts` | Keeps the iOS Live Activity current: coalesced, sent only on change.                  |
 
 Decisions worth knowing before changing them:
 

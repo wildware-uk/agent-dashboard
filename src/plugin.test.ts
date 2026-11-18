@@ -169,12 +169,25 @@ describe('monitors', () => {
 		}
 	});
 
-	it('starts on the skill rather than always, so it cannot double up with the channel', () => {
-		// Both running means every reply arrives twice, and being interrupted
-		// twice for one thing is worse than being interrupted late.
+	it('starts with the session, because the old trigger never fired', () => {
+		// It was `on-skill-invoke:watching-the-dashboard`, which meant the monitor
+		// only ran if something dispatched that skill — and in practice nothing
+		// did, so a session without a channel heard nothing until its next
+		// heartbeat. `always` is what a fallback has to be.
 		const [monitor] = monitors;
-		expect(monitor.when).toBe('on-skill-invoke:watching-the-dashboard');
+		expect(monitor.when).toBe('always');
 		expect(skillDirs).toContain('watching-the-dashboard');
+	});
+
+	it('keeps the two bridges from doubling up, without needing anybody to choose', () => {
+		// Both running means every reply arrives twice. The channel stamps a claim
+		// and the monitor stands by while it is fresh, so this is arranged between
+		// the two processes rather than by whoever configured the session.
+		expect(exists('src/channel/claim.ts')).toBe(true);
+		const readme = read('plugins/agent-dashboard/README.md');
+		expect(readme).toContain('channel.alive');
+		// And there is a way to turn it off for good, which the manifest offers.
+		expect(manifest.userConfig).toHaveProperty('monitor');
 	});
 
 	it('reads no plugin option, because a monitor is given none', () => {
@@ -255,10 +268,16 @@ describe('the tool vocabulary in skills and commands', () => {
 		'agent_token',
 		'answered_at',
 		'assign_to_me',
+		// A field on a message, naming the agent that wrote it.
+		'author_name',
 		'dashboard_url',
 		'heartbeat_interval_s',
 		'interval_s',
+		// A work state, not a tool (migration 035).
+		'in_progress',
 		'invalid_argument',
+		// A field on a work row, not a tool (migration 037).
+		'status_at',
 		'logo_media_id',
 		'logo_replaces_name',
 		'mark_read',
@@ -272,6 +291,12 @@ describe('the tool vocabulary in skills and commands', () => {
 		'poll_after_ms',
 		'request_id',
 		'session_id',
+		// Arguments of an app's own bridge, not tools this server offers
+		// (migration 041): `view_id` names one showing, and `set_field` is one of
+		// the four names a frame may call through the host.
+		'view_id',
+		'set_field',
+		'source_url',
 		'task_id',
 		'timeout_s',
 		'unread_messages',

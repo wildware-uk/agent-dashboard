@@ -21,7 +21,7 @@
  * There is no agent argument, for the same reason nothing else here has one:
  * the acknowledger is resolved from the bearer token (design §5).
  */
-import { acknowledge } from '$domain';
+import { acknowledge, oneCard } from '$domain';
 import { z } from 'zod';
 import { ackView, guard, ok } from '../results';
 import type { McpTool } from './types';
@@ -42,16 +42,17 @@ const inputSchema = {
 		.describe(
 			'The message you are acknowledging — the message_id from get_messages or from a ' +
 				"channel event. That includes your owner's own feed posts, which are messages " +
-				'with no update_id and no task_id: acknowledging one is how they see you have read ' +
-				'what they wrote. Name this or task_id, never both.'
+				'with no update_id: acknowledging one is how they see you have read ' +
+				'what they wrote. Name exactly one card.'
 		),
-	task_id: z
+	update_id: z
 		.string()
 		.optional()
-		.describe(
-			'The task you are acknowledging instead, from list_tasks or claim_task. Name this or ' +
-				'message_id, never both.'
-		)
+		.describe('An update you are acknowledging instead — another agent’s, or your own.'),
+	request_id: z
+		.string()
+		.optional()
+		.describe('A question you are acknowledging instead, from a channel event.')
 };
 
 export const acknowledgeTool: McpTool<typeof inputSchema> = {
@@ -76,10 +77,10 @@ export const acknowledgeTool: McpTool<typeof inputSchema> = {
 			'  channel event. A post your owner wrote straight into the feed is a message like any',
 			'  other, so acknowledge it the same way — that is what puts "… is thinking…" under',
 			'  their own words while you work out what they need.',
-			'- task_id (optional): the task you are acknowledging instead, from list_tasks or',
-			'  claim_task.',
+			'- update_id (optional): an update, another agent’s or your own.',
+			'- request_id (optional): a question, from a channel event.',
 			'',
-			'Name exactly one of message_id and task_id.',
+			'Name exactly one card.',
 			'',
 			'IMPORTANT: "thinking" is a claim about right now, and your owner only sees it while you',
 			'are online — a session that dies mid-job stops animating rather than lying about being',
@@ -94,14 +95,14 @@ export const acknowledgeTool: McpTool<typeof inputSchema> = {
 			'Safe to send more than once: there is one acknowledgement per agent per thing, so',
 			're-asserting "thinking" after a reconnect leaves no trail and changes nothing.',
 			'',
-			'Returns { ack: { id, message_id, task_id, state, created_at, updated_at } }.',
+			'Returns { ack: { id, card_kind, card_id, message_id, state, created_at, updated_at } }.',
 			'`created_at` is when you first acknowledged the thing and `updated_at` when you last',
 			'changed what you were saying, so your owner can see "seen instantly, finished twenty',
 			'minutes later".',
 			'',
-			'On failure: "invalid_argument" means you named neither target or both of them, or a',
-			'state that is not one of the three. "not_found" means the message or task does not',
-			'exist — a deleted message cannot be acknowledged.'
+			'On failure: "invalid_argument" means you named no card or more than one, or a state',
+			'that is not one of the three. "not_found" means the card does not exist — a deleted',
+			'message cannot be acknowledged.'
 		].join('\n'),
 		inputSchema,
 		annotations: { destructiveHint: false, idempotentHint: true, openWorldHint: false }
@@ -112,8 +113,11 @@ export const acknowledgeTool: McpTool<typeof inputSchema> = {
 			const ack = acknowledge(ctx, {
 				// Identity comes from the token, never from `args` (design §5).
 				agentId: agent.id,
-				messageId: args.message_id,
-				taskId: args.task_id,
+				card: oneCard({
+					message: args.message_id,
+					update: args.update_id,
+					request: args.request_id
+				}),
 				state: args.state
 			});
 

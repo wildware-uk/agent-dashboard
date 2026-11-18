@@ -1,15 +1,16 @@
 import { describe, expect, it } from 'vitest';
 import {
 	answerRequest,
-	broadcastTask,
 	react,
 	cancelRequest,
 	createRequest,
-	createTask,
+	withdrawRequest,
 	deliveriesFor,
 	postMessage,
 	postUpdate,
 	createProject,
+	editUpdate,
+	setStatus,
 	readMessages
 } from '$domain';
 import { mcpHarness, type McpHarness } from '../../mcp/testing';
@@ -158,17 +159,18 @@ describe('what it pushes', () => {
 		expect(counts(frames[2]!)).toEqual([0, 0, 0]);
 	});
 
-	it('pushes a task the moment it is created for this agent', async () => {
+	it('pushes open work the moment a card is marked as it (migration 035)', async () => {
 		const mcp = mcpHarness();
 		const { project } = createProject(mcp.h, { name: 'Dashboard' });
+		const update = postUpdate(mcp.h, {
+			project: project.slug,
+			agentId: mcp.deps.agent.id,
+			body: 'ship the channel'
+		});
 		const stream = connect(mcp);
 		await stream.take(3);
 
-		createTask(mcp.h, {
-			project: project.slug,
-			title: 'ship the channel',
-			agentId: mcp.deps.agent.id
-		});
+		setStatus(mcp.h, { card: { kind: 'update', id: update.id }, status: 'todo' });
 
 		const frames = await stream.take(4);
 		stream.abort.abort();
@@ -213,21 +215,17 @@ describe('what it pushes', () => {
 		const stream = connect(mcp);
 		await stream.take(3);
 
-		// Another agent's task is not this agent's work, so nothing is pushed —
-		// a bearer token is not a licence to watch the deployment.
-		const other = mcp.mint('other-agent');
-		createTask(mcp.h, {
+		// An edit moves no count, so nothing is pushed — a frame saying the state
+		// is what it already was is a refetch for nothing.
+		const update = postUpdate(mcp.h, {
 			project: project.slug,
-			title: 'not yours',
-			agentId: other.agentId
+			agentId: mcp.deps.agent.id,
+			body: 'shipped'
 		});
-		// This one is, and it is the frame that proves the stream was live all
+		editUpdate(mcp.h, { updateId: update.id, agentId: mcp.deps.agent.id, body: 'shipped it' });
+		// This one does, and it is the frame that proves the stream was live all
 		// along rather than merely quiet.
-		createTask(mcp.h, {
-			project: project.slug,
-			title: 'yours',
-			agentId: mcp.deps.agent.id
-		});
+		setStatus(mcp.h, { card: { kind: 'update', id: update.id }, status: 'todo' });
 
 		const frames = await stream.take(4);
 		stream.abort.abort();
@@ -405,22 +403,35 @@ describe('letting go', () => {
 	});
 });
 
-describe('work broadcast to a project', () => {
-	it('wakes an agent that works the project, without the task being assigned to it', async () => {
+/**
+ * Work in the projects a session is for (migration 035).
+ *
+ * The board is gone: a card marked as work is the work, so what a session is
+ * told about is scoped exactly as its unread messages are — a session working
+ * one project must not be woken by another's.
+ */
+describe('work in a project', () => {
+	it('wakes an agent that works the project, whoever marked the card', async () => {
 		const mcp = mcpHarness();
 		const { project } = createProject(mcp.h, { name: 'Dashboard' });
 		// A history in this project, so it is one the agent works in.
 		postUpdate(mcp.h, { project: project.slug, agentId: mcp.deps.agent.id, body: 'here' });
-		const task = createTask(mcp.h, { project: project.slug, title: 'anybody?' });
+		const post = postMessage(mcp.h, {
+			project: project.slug,
+			author: { kind: 'human' },
+			body: 'anybody?'
+		});
 		const stream = connect(mcp);
 		await stream.take(3);
 
-		broadcastTask(mcp.h, task.id);
+		setStatus(mcp.h, { card: { kind: 'message', id: post.id }, status: 'todo' });
 
-		const frames = await stream.take(4);
+		const frames = await stream.take(5);
 		stream.abort.abort();
 
-		expect(counts(frames[3]!)).toEqual([0, 1, 0]);
+		// The owner's post is unread as well as open, which is the ordinary case
+		// for work they asked for.
+		expect(counts(frames.filter((frame) => frame.event === 'work').at(-1)!)).toEqual([1, 1, 0]);
 	});
 
 	it('stays quiet for a session that named other projects', async () => {
@@ -428,24 +439,28 @@ describe('work broadcast to a project', () => {
 		const { project } = createProject(mcp.h, { name: 'Dashboard' });
 		const { project: elsewhere } = createProject(mcp.h, { name: 'Elsewhere' });
 		postUpdate(mcp.h, { project: project.slug, agentId: mcp.deps.agent.id, body: 'here' });
-		const task = createTask(mcp.h, { project: project.slug, title: 'anybody?' });
-		// Subscribed to the *other* project: a broadcast here is not this session's.
+		const update = postUpdate(mcp.h, {
+			project: project.slug,
+			agentId: mcp.deps.agent.id,
+			body: 'anybody?'
+		});
+		// Subscribed to the *other* project: work here is not this session's.
 		const stream = connect(mcp, mcp.token, `?project=${elsewhere.slug}`);
 		await stream.take(3);
 
-		broadcastTask(mcp.h, task.id);
-		// A task assigned by name still lands, whatever the session said it is for.
-		createTask(mcp.h, {
-			project: project.slug,
-			title: 'yours by name',
-			agentId: mcp.deps.agent.id
+		setStatus(mcp.h, { card: { kind: 'update', id: update.id }, status: 'todo' });
+		postMessage(mcp.h, {
+			project: elsewhere.slug,
+			author: { kind: 'human' },
+			body: 'this one is yours'
 		});
 
 		const frames = await stream.take(4);
 		stream.abort.abort();
 
-		expect(frames).toHaveLength(4);
-		expect(counts(frames[3]!)).toEqual([0, 1, 0]);
+		// The message in the subscribed project moved a count; the work in the
+		// other project moved nothing.
+		expect(counts(frames[3]!)).toEqual([1, 0, 0]);
 	});
 });
 
@@ -480,22 +495,26 @@ describe('subscribing to everything', () => {
 		expect(bodies).toEqual(['over here']);
 	});
 
-	it('carries broadcast work from a project this agent has never touched', async () => {
+	it('carries work from a project this agent has never touched', async () => {
 		const mcp = mcpHarness();
 		const { project: mine } = createProject(mcp.h, { name: 'Mine' });
 		const { project: theirs } = createProject(mcp.h, { name: 'Theirs' });
 		postUpdate(mcp.h, { project: mine.slug, agentId: mcp.deps.agent.id, body: 'here' });
-		const task = createTask(mcp.h, { project: theirs.slug, title: 'anybody?' });
+		const post = postMessage(mcp.h, {
+			project: theirs.slug,
+			author: { kind: 'human' },
+			body: 'anybody?'
+		});
 
 		const stream = connect(mcp, mcp.token, '?project=*');
 		await stream.take(3);
 
-		broadcastTask(mcp.h, task.id);
+		setStatus(mcp.h, { card: { kind: 'message', id: post.id }, status: 'todo' });
 
-		const frames = await stream.take(4);
+		const frames = await stream.take(5);
 		stream.abort.abort();
 
-		expect(counts(frames[3]!)).toEqual([0, 1, 0]);
+		expect(counts(frames.filter((frame) => frame.event === 'work').at(-1)!)[1]).toBe(1);
 	});
 
 	it('refuses the wildcard beside a slug, because the caller cannot have meant both', async () => {
@@ -651,6 +670,96 @@ describe('saying each message once', () => {
  * an agent that asked a question and carried on working learned the answer only
  * when it next thought to look at a number.
  */
+/**
+ * A reply that carries what it was a reply to.
+ *
+ * The owner: "agents need more context from a reply, when I reply to a message,
+ * they can not see what I was replying to." The live frame is where it matters
+ * most — an agent notified of a bare "yes" has no way back to the question,
+ * because `get_messages` only ever hands back what is still unread.
+ */
+describe('a reply, and the line it answers', () => {
+	it('carries the ids and the words of the line it answers', async () => {
+		const mcp = mcpHarness();
+		const { project } = createProject(mcp.h, { name: 'Dashboard' });
+		const update = postUpdate(mcp.h, {
+			project: project.slug,
+			agentId: mcp.deps.agent.id,
+			body: 'shipped'
+		});
+		const asked = postMessage(mcp.h, {
+			author: { kind: 'agent', agentId: mcp.deps.agent.id },
+			updateId: update.id,
+			body: 'shall I deploy?'
+		});
+
+		const stream = connect(mcp, mcp.token, `?project=${project.slug}`);
+		await stream.take(3);
+		postMessage(mcp.h, { author: { kind: 'human' }, answers: asked.id, body: 'yes' });
+		const frames = await stream.take(5);
+		stream.abort.abort();
+
+		const [message] = (frames.find((frame) => frame.event === 'message')?.data?.messages ??
+			[]) as Record<string, unknown>[];
+		expect(message).toMatchObject({
+			body: 'yes',
+			answers: asked.id,
+			// `reply_to` names a post the owner wrote into the feed; this thread
+			// hangs off an update, so it is the update_id that places it.
+			update_id: update.id,
+			reply_to: null,
+			in_reply_to: { id: asked.id, body: 'shall I deploy?', truncated: false }
+		});
+	});
+
+	/**
+	 * A line on a question the agent is parked on (migration 032).
+	 *
+	 * The owner replies instead of pressing a button, and the agent is inside
+	 * `await_request`. Without the id it cannot answer where they are reading.
+	 */
+	it('names the question when the owner is talking one over', async () => {
+		const mcp = mcpHarness();
+		const { project } = createProject(mcp.h, { name: 'Dashboard' });
+		const { request } = createRequest(mcp.h, {
+			agentId: mcp.deps.agent.id,
+			kind: 'confirm',
+			question: 'push to main?',
+			project: project.slug
+		});
+
+		const stream = connect(mcp, mcp.token, `?project=${project.slug}`);
+		await stream.take(3);
+		postMessage(mcp.h, { author: { kind: 'human' }, requestId: request.id, body: 'why main?' });
+		const frames = await stream.take(5);
+		stream.abort.abort();
+
+		const [message] = (frames.find((frame) => frame.event === 'message')?.data?.messages ??
+			[]) as Record<string, unknown>[];
+		expect(message).toMatchObject({ body: 'why main?', request_id: request.id });
+	});
+
+	it('says so plainly when a message answers nothing', async () => {
+		const mcp = mcpHarness();
+		const { project } = createProject(mcp.h, { name: 'Dashboard' });
+		const stream = connect(mcp, mcp.token, `?project=${project.slug}`);
+		await stream.take(3);
+
+		postMessage(mcp.h, { project: project.slug, author: { kind: 'human' }, body: 'a new post' });
+		const frames = await stream.take(5);
+		stream.abort.abort();
+
+		const [message] = (frames.find((frame) => frame.event === 'message')?.data?.messages ??
+			[]) as Record<string, unknown>[];
+		expect(message).toMatchObject({
+			answers: null,
+			reply_to: null,
+			in_reply_to: null,
+			request_id: null
+		});
+	});
+});
+
 describe('what the owner answered', () => {
 	it('pushes the answer itself, not just a count that moved', async () => {
 		const mcp = mcpHarness();
@@ -720,11 +829,12 @@ describe('what the owner answered', () => {
 		// Nothing is expected from that, so something that *is* this agent's work
 		// follows it: waiting for that frame proves the stream was live and that
 		// the answer went past it unannounced, rather than merely being slow.
-		createTask(mcp.h, {
+		const mine = postUpdate(mcp.h, {
 			project: project.slug,
-			title: 'yours',
-			agentId: mcp.deps.agent.id
+			agentId: mcp.deps.agent.id,
+			body: 'yours'
 		});
+		setStatus(mcp.h, { card: { kind: 'update', id: mine.id }, status: 'todo' });
 		const frames = await stream.take(4);
 		stream.abort.abort();
 
@@ -817,7 +927,7 @@ describe('a reaction the owner left', () => {
 		const stream = connect(mcp, mcp.token, `?project=${project.slug}`);
 		await stream.take(3);
 
-		react(mcp.h, { messageId: said.id, actor: { kind: 'human' }, emoji: '✅' });
+		react(mcp.h, { card: { kind: 'message', id: said.id }, actor: { kind: 'human' }, emoji: '✅' });
 		const frames = await stream.take(4);
 		stream.abort.abort();
 
@@ -839,12 +949,22 @@ describe('a reaction the owner left', () => {
 			project: project.slug,
 			body: 'ready to merge'
 		});
-		react(mcp.h, { messageId: said.id, actor: { kind: 'human' }, emoji: '👍', on: true });
+		react(mcp.h, {
+			card: { kind: 'message', id: said.id },
+			actor: { kind: 'human' },
+			emoji: '👍',
+			on: true
+		});
 
 		const stream = connect(mcp, mcp.token, `?project=${project.slug}`);
 		await stream.take(3);
 
-		react(mcp.h, { messageId: said.id, actor: { kind: 'human' }, emoji: '👍', on: false });
+		react(mcp.h, {
+			card: { kind: 'message', id: said.id },
+			actor: { kind: 'human' },
+			emoji: '👍',
+			on: false
+		});
 		const frames = await stream.take(4);
 		stream.abort.abort();
 
@@ -881,7 +1001,11 @@ describe('a reaction the owner left', () => {
 		const stream = connect(mcp, mcp.token, `?project=${project.slug}`);
 		await stream.take(4);
 
-		react(mcp.h, { messageId: asked.id, actor: { kind: 'human' }, emoji: '✅' });
+		react(mcp.h, {
+			card: { kind: 'message', id: asked.id },
+			actor: { kind: 'human' },
+			emoji: '✅'
+		});
 		const frames = await stream.take(5);
 		stream.abort.abort();
 
@@ -908,7 +1032,11 @@ describe('a reaction the owner left', () => {
 		const stream = connect(mcp, mcp.token, `?project=${project.slug}`);
 		await stream.take(4);
 
-		react(mcp.h, { messageId: theirs.id, actor: { kind: 'human' }, emoji: '🎉' });
+		react(mcp.h, {
+			card: { kind: 'message', id: theirs.id },
+			actor: { kind: 'human' },
+			emoji: '🎉'
+		});
 		const frames = await stream.take(5);
 		stream.abort.abort();
 
@@ -941,10 +1069,14 @@ describe('a reaction the owner left', () => {
 		const stream = connect(mcp, mcp.token, `?project=${project.slug}`);
 		await stream.take(4);
 
-		react(mcp.h, { messageId: theirs.id, actor: { kind: 'human' }, emoji: '👀' });
+		react(mcp.h, {
+			card: { kind: 'message', id: theirs.id },
+			actor: { kind: 'human' },
+			emoji: '👀'
+		});
 		// And one that is this agent's, so the wait ends on a frame rather than on
 		// a timeout — proving the stream was live and the first went unannounced.
-		react(mcp.h, { messageId: mine.id, actor: { kind: 'human' }, emoji: '🎉' });
+		react(mcp.h, { card: { kind: 'message', id: mine.id }, actor: { kind: 'human' }, emoji: '🎉' });
 
 		const frames = await stream.take(5);
 		stream.abort.abort();
@@ -973,16 +1105,20 @@ describe('a reaction the owner left', () => {
 		await stream.take(3);
 
 		// On somebody else's message: none of this agent's business.
-		react(mcp.h, { messageId: theirs.id, actor: { kind: 'human' }, emoji: '👀' });
+		react(mcp.h, {
+			card: { kind: 'message', id: theirs.id },
+			actor: { kind: 'human' },
+			emoji: '👀'
+		});
 		// By an agent rather than the owner: not feedback, and not news.
 		react(mcp.h, {
-			messageId: mine.id,
+			card: { kind: 'message', id: mine.id },
 			actor: { kind: 'agent', agentId: other.agentId },
 			emoji: '👀'
 		});
 		// And one that *is*, so the wait ends on a frame that proves the stream
 		// was live rather than merely quiet.
-		react(mcp.h, { messageId: mine.id, actor: { kind: 'human' }, emoji: '🎉' });
+		react(mcp.h, { card: { kind: 'message', id: mine.id }, actor: { kind: 'human' }, emoji: '🎉' });
 
 		// Five, not four: the other agent's message is unread for this one too, so
 		// the connection opens with a message frame of its own.
@@ -992,5 +1128,264 @@ describe('a reaction the owner left', () => {
 		const reactions = frames.filter((frame) => frame.event === 'reaction');
 		expect(reactions).toHaveLength(1);
 		expect(reactions[0]?.data).toMatchObject({ message_id: mine.id, emoji: '🎉' });
+	});
+});
+
+/**
+ * One token, many sessions — the third count (the owner's report).
+ *
+ * Their words: "Messages from the cmux project are going to every agent!!!" And
+ * they were right. Sessions share a bearer token, so they are one *agent*, and
+ * two of the three counts on this stream were already narrowed to what each
+ * session subscribed to. `pending_approvals` was not — so a question raised in
+ * one project lit up every other session of that token, in every project, and
+ * each bridge announced it.
+ *
+ * The same hole was in the two frames that gate on agent identity alone: an
+ * answer to that question, and an emoji on a message in it, reached sessions
+ * that had never subscribed to the project either one was in.
+ */
+describe('a request raised in another session`s project', () => {
+	it('does not raise this session`s pending count', async () => {
+		const mcp = mcpHarness();
+		const { project: mine } = createProject(mcp.h, { name: 'Mine' });
+		const { project: elsewhere } = createProject(mcp.h, { name: 'Elsewhere' });
+
+		const stream = connect(mcp, mcp.token, `?project=${mine.slug}`);
+		await stream.take(3);
+
+		// The same agent — the same token — asks a question over there.
+		createRequest(mcp.h, {
+			agentId: mcp.deps.agent.id,
+			project: elsewhere.slug,
+			kind: 'confirm',
+			question: 'about something else entirely'
+		});
+		// Then something that *is* this session's, so there is a frame to wait for.
+		// Absence is asserted against a later arrival rather than against a clock.
+		postMessage(mcp.h, { project: mine.slug, author: { kind: 'human' }, body: 'mine' });
+
+		const frames = await stream.take(5);
+		stream.abort.abort();
+
+		// One unread from the message, and nought pending: the question over there
+		// never touched this session's counts.
+		expect(counts(workFrames(frames).at(-1)!)).toEqual([1, 0, 0]);
+	});
+
+	it('still raises it for a session that did subscribe there', async () => {
+		const mcp = mcpHarness();
+		const { project: elsewhere } = createProject(mcp.h, { name: 'Elsewhere' });
+
+		const stream = connect(mcp, mcp.token, `?project=${elsewhere.slug}`);
+		await stream.take(3);
+
+		createRequest(mcp.h, {
+			agentId: mcp.deps.agent.id,
+			project: elsewhere.slug,
+			kind: 'confirm',
+			question: 'about this project'
+		});
+
+		const frames = await stream.take(4);
+		stream.abort.abort();
+
+		expect(counts(workFrames(frames).at(-1)!)).toEqual([0, 0, 1]);
+	});
+
+	it('counts a request filed under no project at all, whatever the subscription', async () => {
+		// It belongs to the agent rather than to any project, so no subscription
+		// could exclude it and no session would be wrong to hear it.
+		const mcp = mcpHarness();
+		const { project: mine } = createProject(mcp.h, { name: 'Mine' });
+
+		const stream = connect(mcp, mcp.token, `?project=${mine.slug}`);
+		await stream.take(3);
+
+		createRequest(mcp.h, {
+			agentId: mcp.deps.agent.id,
+			kind: 'confirm',
+			question: 'nothing to do with a project'
+		});
+
+		const frames = await stream.take(4);
+		stream.abort.abort();
+
+		expect(counts(workFrames(frames).at(-1)!)).toEqual([0, 0, 1]);
+	});
+
+	it('does not send the answer to a session that never subscribed there', async () => {
+		const mcp = mcpHarness();
+		const { project: mine } = createProject(mcp.h, { name: 'Mine' });
+		const { project: elsewhere } = createProject(mcp.h, { name: 'Elsewhere' });
+
+		const { request } = createRequest(mcp.h, {
+			agentId: mcp.deps.agent.id,
+			project: elsewhere.slug,
+			kind: 'confirm',
+			question: 'over there'
+		});
+
+		const stream = connect(mcp, mcp.token, `?project=${mine.slug}`);
+		await stream.take(3);
+
+		answerRequest(mcp.h, { requestId: request.id, value: true });
+		// Again, a frame of this session's to wait for, so the absence above is
+		// asserted against something that did arrive.
+		postMessage(mcp.h, { project: mine.slug, author: { kind: 'human' }, body: 'mine' });
+
+		const frames = await stream.take(5);
+		stream.abort.abort();
+
+		expect(frames.some((frame) => frame.event === 'answer')).toBe(false);
+		expect(frames.some((frame) => frame.event === 'message')).toBe(true);
+	});
+});
+
+/**
+ * A withdrawal is not news for anybody (migration 031).
+ *
+ * The agent that withdrew a question just did it, so there is nothing to tell it
+ * — and a bridge only learns new vocabulary when its session restarts. One that
+ * had not would read `withdrawn` as the nearest thing it knows and announce
+ * "your owner dismissed your request", which blames the one person who did
+ * nothing. Suppressing the frame at the server is what protects every bridge,
+ * old and new.
+ */
+describe('an agent withdrawing its own question', () => {
+	it('sends no answer frame, however the bridge would have read it', async () => {
+		const mcp = mcpHarness();
+		const { project } = createProject(mcp.h, { name: 'Mine' });
+
+		const { request } = createRequest(mcp.h, {
+			agentId: mcp.deps.agent.id,
+			project: project.slug,
+			kind: 'confirm',
+			question: 'no longer relevant'
+		});
+
+		const stream = connect(mcp, mcp.token, `?project=${project.slug}`);
+		await stream.take(3);
+
+		withdrawRequest(mcp.h, { requestId: request.id, agentId: mcp.deps.agent.id });
+		// Something that is news, so the absence above is asserted against an
+		// arrival rather than against a clock. The withdrawal writes a work frame of
+		// its own — the count falling — so the message is the sixth, not the fifth.
+		postMessage(mcp.h, { project: project.slug, author: { kind: 'human' }, body: 'mine' });
+
+		const frames = await stream.take(6);
+		stream.abort.abort();
+
+		expect(frames.some((frame) => frame.event === 'answer')).toBe(false);
+		expect(frames.some((frame) => frame.event === 'message')).toBe(true);
+	});
+
+	it('still drops the pending count, so the agent stops being told it is blocked', async () => {
+		const mcp = mcpHarness();
+		const { project } = createProject(mcp.h, { name: 'Mine' });
+
+		const { request } = createRequest(mcp.h, {
+			agentId: mcp.deps.agent.id,
+			project: project.slug,
+			kind: 'confirm',
+			question: 'no longer relevant'
+		});
+
+		const stream = connect(mcp, mcp.token, `?project=${project.slug}`);
+		const opening = await stream.take(3);
+		expect(counts(workFrames(opening).at(-1)!)).toEqual([0, 0, 1]);
+
+		withdrawRequest(mcp.h, { requestId: request.id, agentId: mcp.deps.agent.id });
+
+		const frames = await stream.take(4);
+		stream.abort.abort();
+
+		expect(counts(workFrames(frames).at(-1)!)).toEqual([0, 0, 0]);
+	});
+});
+
+describe('another agent talking on this agent`s card', () => {
+	it('pushes its reply with its name, so the agent knows who is talking', async () => {
+		const mcp = mcpHarness();
+		const { project } = createProject(mcp.h, { name: 'Dashboard' });
+		const update = postUpdate(mcp.h, {
+			project: project.slug,
+			agentId: mcp.deps.agent.id,
+			body: 'done'
+		});
+		const other = mcp.mint('home-server');
+		const stream = connect(mcp);
+		await stream.take(3);
+
+		postMessage(mcp.h, {
+			author: { kind: 'agent', agentId: other.agentId },
+			updateId: update.id,
+			body: 'which branch?'
+		});
+
+		const frames = await stream.take(5);
+		stream.abort.abort();
+
+		const [first] = (frames.find((frame) => frame.event === 'message')?.data?.messages ??
+			[]) as Record<string, unknown>[];
+		expect(first).toMatchObject({
+			body: 'which branch?',
+			author: `agent:${other.agentId}`,
+			author_name: 'home-server'
+		});
+	});
+
+	it('says no name for the owner', async () => {
+		const mcp = mcpHarness();
+		const { project } = createProject(mcp.h, { name: 'Dashboard' });
+		const stream = connect(mcp);
+		await stream.take(3);
+
+		postMessage(mcp.h, { project: project.slug, author: { kind: 'human' }, body: 'hi' });
+
+		const frames = await stream.take(5);
+		stream.abort.abort();
+
+		const [first] = (frames.find((frame) => frame.event === 'message')?.data?.messages ??
+			[]) as Record<string, unknown>[];
+		expect(first?.author_name).toBeNull();
+	});
+});
+
+describe('a message that names an agent with @name', () => {
+	it('reaches that agent even in a project its session never subscribed to', async () => {
+		const mcp = mcpHarness({ name: 'scout' });
+		const rover = mcp.mint('rover');
+		const { project: dash } = createProject(mcp.h, { name: 'Dashboard' });
+		const { project: other } = createProject(mcp.h, { name: 'Other' });
+		postUpdate(mcp.h, { project: dash.slug, agentId: rover.agentId, body: 'working here' });
+
+		const named = connect(mcp, mcp.token, `?project=${other.slug}`);
+		const bystander = connect(mcp, rover.token, `?project=${dash.slug}`);
+		await named.take(3);
+		await bystander.take(3);
+
+		postMessage(mcp.h, {
+			project: dash.slug,
+			author: { kind: 'human' },
+			body: '@scout a question for you'
+		});
+		// Said to everyone, so the bystander has something to read: if the line
+		// above had reached it, it would arrive first.
+		postMessage(mcp.h, { project: dash.slug, author: { kind: 'human' }, body: 'everyone' });
+
+		const frames = await named.take(5);
+		named.abort.abort();
+		const heard = await bystander.take(5);
+		bystander.abort.abort();
+
+		expect(counts(workFrames(frames).at(-1)!)).toEqual([1, 0, 0]);
+		expect(bodiesOf(frames.find((frame) => frame.event === 'message'))).toEqual([
+			'@scout a question for you'
+		]);
+		expect(counts(workFrames(heard).at(-1)!)).toEqual([1, 0, 0]);
+		expect(heard.filter((frame) => frame.event === 'message').flatMap(bodiesOf)).toEqual([
+			'everyone'
+		]);
 	});
 });

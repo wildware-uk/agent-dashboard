@@ -86,8 +86,8 @@ describe('createUpload', () => {
 		expect(ctx.eventNames()).toEqual([]);
 	});
 
-	it('reports a type off the allowlist as an argument the agent can fix', () => {
-		expect(refusal(() => createUpload(ctx, { ...args(), mime: 'image/svg+xml' }, settings))).toBe(
+	it('reports a type that is not a type as an argument the agent can fix', () => {
+		expect(refusal(() => createUpload(ctx, { ...args(), mime: 'image/*' }, settings))).toBe(
 			'invalid_argument'
 		);
 		expect(refusal(() => createUpload(ctx, { ...args(), bytes: 0 }, settings))).toBe(

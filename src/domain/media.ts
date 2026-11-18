@@ -30,6 +30,7 @@ import {
 	findUpdateById,
 	isId,
 	listMediaForMessage,
+	listMediaForRequest,
 	listMediaForUpdate,
 	type Media,
 	type MediaKind,
@@ -55,11 +56,12 @@ import { context, type DomainContext } from './context';
 import { conflict, invalid, notFound, type DomainError } from './errors';
 
 /**
- * Re-exported so `$mcp` can name the allowlist and the filename limit in a tool
- * description without importing `$media`, which the module table forbids
- * (design §2). The values still have exactly one definition.
+ * Re-exported so `$mcp` can name the renderable allowlist, the filename limit
+ * and the download type in a tool description without importing `$media`, which
+ * the module table forbids (design §2). The values still have exactly one
+ * definition.
  */
-export { ALLOWED_MIMES, FILENAME_MAX_LENGTH, UPLOAD_TOKEN_TTL_MS } from '$media';
+export { ALLOWED_MIMES, DOWNLOAD_MIME, FILENAME_MAX_LENGTH, UPLOAD_TOKEN_TTL_MS } from '$media';
 
 /**
  * Most media one update may carry.
@@ -109,7 +111,12 @@ function translating<T>(body: () => T): T {
 export type CreateUploadInput = {
 	/** The uploading agent, resolved from its bearer token. */
 	agentId: string;
-	/** What the agent calls the file. A label: it is stored nowhere. */
+	/**
+	 * What the agent calls the file.
+	 *
+	 * Kept for a `file` and shown beside its download; discarded for an image or
+	 * a video (migration 026). Never a path either way.
+	 */
 	filename: string;
 	/** The type the agent claims. Verified against the bytes at ingest. */
 	mime: string;
@@ -123,9 +130,9 @@ export type UploadGrant = CreatedUpload;
 /**
  * Reserve a media id and mint the single-use URL its bytes go to.
  *
- * @throws {@link DomainError} `invalid_argument` for a type off the allowlist
- *   (SVG always), a size that is not a positive integer, or one past the
- *   configured cap; `not_found` for an unknown agent.
+ * @throws {@link DomainError} `invalid_argument` for a declared type that is not
+ *   a mime at all, a size that is not a positive integer, or one past the
+ *   configured cap for its kind; `not_found` for an unknown agent.
  */
 export function createUpload(
 	ctx: DomainContext,
@@ -153,7 +160,7 @@ export type OwnerUploadInput = {
 };
 
 /**
- * Take an image the owner uploaded, in one request.
+ * Take a file the owner uploaded, in one request.
  *
  * No token, and that is the whole difference from {@link createUpload}: an agent
  * is remote and MCP cannot carry bytes, so it gets a single-use URL to PUT to.
@@ -161,13 +168,13 @@ export type OwnerUploadInput = {
  * session cookie, so a token would authorise what is already authorised — and
  * `upload_tokens.agent_id` has nobody to fill it in.
  *
- * Everything after that is the same pipeline: the same allowlist, the same
- * per-kind cap, the same sniffing, the same place on disk. A second pipeline
- * would be a second answer to "is this really a PNG", and one of them would be
- * wrong.
+ * Everything after that is the same pipeline: the same rules per kind, the same
+ * cap, the same sniffing for a picture, the same place on disk. A second
+ * pipeline would be a second answer to "is this really a PNG", and one of them
+ * would be wrong.
  *
- * @throws {@link DomainError} `invalid_argument` for a type off the allowlist,
- *   a body that never arrived, or bytes past the cap.
+ * @throws {@link DomainError} `invalid_argument` for a declared type that is not
+ *   a mime, a body that never arrived, or bytes past the cap for its kind.
  */
 export async function uploadOwnerMedia(
 	ctx: DomainContext,
@@ -374,14 +381,47 @@ export function assertAttachableToMessage(
 		const media = findMediaById(ctx.db, id);
 		if (!media) throw notFound(`no such media: ${id}`);
 		if (media.author !== input.author) throw invalid(`media ${id} was uploaded by somebody else`);
-		if (media.updateId !== null) throw invalid(`media ${id} is already on an update`);
-		if (media.messageId !== null) throw invalid(`media ${id} is already on another message`);
+		if (attachedTo(media) !== null) {
+			throw invalid(`media ${id} is already on ${attachedTo(media)}`);
+		}
 		if (media.sha256 === '') {
 			throw invalid(`media ${id} has no bytes yet: upload the file first`);
 		}
 	}
 
 	return mediaIds;
+}
+
+/**
+ * Which card a media row is already on, or `null` when it is free.
+ *
+ * One reading of "spoken for" rather than one per card type: with four anchors
+ * (migration 030) a check written per column is a check somebody will extend
+ * three times out of four.
+ */
+function attachedTo(media: Media): string | null {
+	if (media.updateId !== null) return 'an update';
+	if (media.messageId !== null) return 'another message';
+	if (media.requestId !== null) return 'an approval';
+	return null;
+}
+
+/**
+ * Is this media on something an agent can already read?
+ *
+ * The question an agent download has to answer (migration 026): `get_messages`
+ * hands over the words and the small attachments of any message in a project the
+ * agent works, so bytes that are *on* a message, a card or a question are
+ * already the agent's to see. An upload that is attached to nothing is somebody
+ * mid-post, and is nobody's to fetch.
+ *
+ * Deliberately not a per-project check: an agent that can call `get_messages`
+ * can read the message this hangs off, so a second, different rule here would be
+ * a rule that disagrees with the one actually protecting the words.
+ */
+export function mediaIsAttached(ctx: DomainContext, mediaId: string): boolean {
+	const media = findMediaById(ctx.db, mediaId);
+	return media !== undefined && attachedTo(media) !== null;
 }
 
 /**
@@ -435,6 +475,11 @@ export function listMessageMedia(ctx: DomainContext, messageId: string): MediaAt
 	return listMediaForMessage(ctx.db, messageId).map((row) => attachment(ctx, row));
 }
 
+/** And on one question (migration 030): "does this look right" needs the thing. */
+export function listRequestMedia(ctx: DomainContext, requestId: string): MediaAttachment[] {
+	return listMediaForRequest(ctx.db, requestId).map((row) => attachment(ctx, row));
+}
+
 export function assertAttachable(
 	ctx: DomainContext,
 	input: { mediaIds: readonly string[]; agentId: string }
@@ -479,13 +524,30 @@ export type MediaAttachment = {
 	updateId: string | null;
 	/** The message this is on, for an image in a reply or one of the owner's posts. */
 	messageId: string | null;
+	/** The approval or the task it is on, when it is on one (migration 030). */
+	requestId: string | null;
+	taskId: string | null;
 	kind: MediaKind;
 	mime: string;
 	status: MediaStatus;
+	/**
+	 * How big it is. Zero for a reservation whose bytes never arrived.
+	 *
+	 * On the wire because a download tile has to say how big the thing is before
+	 * somebody commits to fetching it (migration 026).
+	 */
+	bytes: number;
 	/** Measured by the pipeline; `null` until it has run. */
 	width: number | null;
 	height: number | null;
 	durationMs: number | null;
+	/**
+	 * What the uploader called it, for a `file` (migration 026).
+	 *
+	 * `null` for an image or a video, where the picture is its own label. It is
+	 * the only thing a download tile has to show, so it travels with the row.
+	 */
+	filename: string | null;
 	/** Which variants exist. Empty for a row with no bytes, and for a failure. */
 	variants: Variant[];
 };
@@ -496,12 +558,16 @@ function attachment(ctx: DomainContext, row: Media): MediaAttachment {
 		id: row.id,
 		updateId: row.updateId,
 		messageId: row.messageId,
+		requestId: row.requestId,
+		taskId: row.taskId,
 		kind: row.kind,
 		mime: row.mime,
 		status: row.status,
+		bytes: row.bytes,
 		width: row.width,
 		height: row.height,
 		durationMs: row.durationMs,
+		filename: row.filename,
 		variants: derivativesFor({ db: ctx.db, id: row.id }).map((available) => available.variant)
 	};
 }

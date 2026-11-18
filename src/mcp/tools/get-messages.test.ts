@@ -41,6 +41,24 @@ beforeEach(() => {
 });
 
 describe('get_messages', () => {
+	it('names the agent that wrote a message, and leaves the owner unnamed', async () => {
+		const other = mcp.mint('home-server');
+		postMessage(mcp.h, {
+			author: { kind: 'agent', agentId: other.agentId },
+			project: slug,
+			body: 'which branch?'
+		});
+		fromOwner('main');
+
+		const messages = (await get()).structuredContent!.messages as Record<string, unknown>[];
+
+		expect(messages[0]).toMatchObject({
+			author: `agent:${other.agentId}`,
+			author_name: 'home-server'
+		});
+		expect(messages[1]).not.toHaveProperty('author_name');
+	});
+
 	it('returns only the messages after the calling agent’s cursor', async () => {
 		fromOwner('first');
 		fromOwner('second');

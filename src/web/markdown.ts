@@ -63,8 +63,45 @@ md.renderer.rules.table_close = () => '</table></div>';
  */
 export function renderMarkdown(body: string): string {
 	if (body.trim() === '') return '';
-	return md.render(body);
+
+	const already = rendered.get(body);
+	if (already !== undefined) {
+		// Re-inserted so the most recently used entry is last, which is what makes
+		// the eviction below evict the oldest rather than an arbitrary one.
+		rendered.delete(body);
+		rendered.set(body, already);
+		return already;
+	}
+
+	const html = md.render(body);
+	rendered.set(body, html);
+	if (rendered.size > RENDER_CACHE_MAX) {
+		const oldest = rendered.keys().next().value;
+		if (oldest !== undefined) rendered.delete(oldest);
+	}
+	return html;
 }
+
+/**
+ * Bodies already rendered, newest used last (design §4).
+ *
+ * Not an optimisation looking for a problem: the dashboard's consistency rule is
+ * that any event makes the page refetch its snapshot and reconcile by id, so
+ * every card in the feed gets a fresh row object several times a minute while
+ * agents are working. The markdown has not changed — the row is the same
+ * sentence — but a `$derived(renderMarkdown(body))` cannot know that, so a feed
+ * of eighty cards re-parsed eighty bodies, with their fenced code and tables,
+ * every single time anything happened anywhere in the project. On a long feed
+ * that is most of the cost of an event.
+ *
+ * Keyed by the body itself, so a correction renders and a card that merely
+ * arrived again does not. Capped, because a session that pages deep into a
+ * timeline would otherwise hold every body it ever saw.
+ */
+const rendered = new Map<string, string>();
+
+/** Bodies to keep. Comfortably more than a page of feed, and bounded. */
+export const RENDER_CACHE_MAX = 300;
 
 /**
  * How much of a body a link preview carries.

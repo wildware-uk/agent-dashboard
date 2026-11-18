@@ -17,13 +17,11 @@
 	 */
 	import { onMount, type Snippet } from 'svelte';
 	import { resolve } from '$app/paths';
-	import Board from './Board.svelte';
 	import Composer from './Composer.svelte';
 	import NotificationBell from './NotificationBell.svelte';
 	import NotifyToggle from './NotifyToggle.svelte';
 	import RightRail from './RightRail.svelte';
 	import Sidebar from './Sidebar.svelte';
-	import TasksPanel from './Tasks.svelte';
 	import Theme from './Theme.svelte';
 	import TimelineView from './Timeline.svelte';
 	import { ownerActions, type OwnerActions } from './actions';
@@ -32,7 +30,6 @@
 	import { Notifications } from './notifications.svelte';
 	import { Requests } from './requests.svelte';
 	import { claimsMove, readSwipe } from './swipe';
-	import { Tasks } from './tasks.svelte';
 	import { Threads } from './threads.svelte';
 	import { Timeline } from './timeline.svelte';
 	import { mediaUrl } from './media';
@@ -95,14 +92,6 @@
 		 * both regions read it.
 		 */
 		presence = new Presence(),
-		/**
-		 * The task list (design §5, §7).
-		 *
-		 * One store, rendered twice: in the rail on a desktop, and in the drawer
-		 * that makes the rail reachable on a phone. It refcounts its holders so the
-		 * drawer closing does not unsubscribe the rail's copy.
-		 */
-		tasks = new Tasks({ project }),
 		/**
 		 * The page's message threads (design §7).
 		 *
@@ -171,7 +160,6 @@
 		presence?: Presence;
 		notifications?: Notifications;
 		focus?: string | null;
-		tasks?: Tasks;
 		threads?: Threads;
 		requests?: Requests;
 		push?: Push;
@@ -222,7 +210,9 @@
 			// The images on those messages (migration 016), for the same reason the
 			// acks are here: a picture that appeared a beat after the words reads as
 			// having just been added to them.
-			media: snapshot.messageMedia
+			media: snapshot.messageMedia,
+			// And the embeds (migration 027), for the same reason again.
+			embeds: snapshot.messageEmbeds
 		});
 
 	let drawer = $state(false);
@@ -301,6 +291,33 @@
 
 	/** The right rail as a drawer, which is how a phone reaches it (design §7). */
 	let rail = $state(false);
+
+	/**
+	 * Only the feed scrolls (design §7).
+	 *
+	 * The owner: "can scroll down the entire page on garden game project, not just
+	 * the feed, causes some weird bugs like scrolling down to black or doing it
+	 * by accident on mobile."
+	 *
+	 * The layout was already a viewport-tall grid with its own scrollers, which
+	 * is why a desktop browser never showed a page scrollbar — but `100dvh` is a
+	 * *dynamic* unit, and on a phone the bar that grows and shrinks means the
+	 * document can end up a little taller than what is on screen. A flick then
+	 * drags the whole app up and leaves a strip of nothing under it, which is the
+	 * black the owner is seeing.
+	 *
+	 * So the document is pinned while the dashboard is mounted: `html` and `body`
+	 * take the real viewport, the body is fixed to it, and overscroll chaining is
+	 * switched off. Applied here rather than in the stylesheet because the login
+	 * page and a shared card are ordinary documents that *should* scroll — this
+	 * is the dashboard's rule, not the site's, and it is taken off again when the
+	 * shell goes away.
+	 */
+	onMount(() => {
+		const root = document.documentElement;
+		root.classList.add('app-locked');
+		return () => root.classList.remove('app-locked');
+	});
 
 	onMount(() => {
 		// After the first render, never during it: the server has no `localStorage`,
@@ -395,22 +412,6 @@
 	);
 
 	/** Whether this page is one project's feed rather than the whole timeline. */
-	/**
-	 * Task id to title, for the chip a card grows when it is progress on one.
-	 *
-	 * Read off the task store the rail already holds rather than fetched: the
-	 * titles are on the page, and a card asking for one would be a lookup per card
-	 * for a line of text.
-	 */
-	const taskTitles = $derived(Object.fromEntries(tasks.items.map((task) => [task.id, task.title])));
-
-	/** Outstanding work, for the count beside the sidebar's Tasks link. */
-	const openTasks = $derived(
-		tasks.items.filter((task) => task.state === 'todo' || task.state === 'claimed').length
-	);
-
-	/** The project's own lanes, or `null` for the default three. */
-	const boardColumns = $derived(activeProject?.board ?? null);
 
 	const scoped = $derived(project !== null);
 
@@ -485,38 +486,6 @@
 	 * online, and everything that depends on it reads the same answer.
 	 */
 	const onlineIds = $derived(presence.online.map((agent) => agent.agentId));
-
-	/**
-	 * The "new since you last looked" counts, minus the project being looked at.
-	 *
-	 * The server's figure is counted from `owner_seen_at`, which is stamped when
-	 * the page opens and again as cards arrive — but there is a beat between a
-	 * card landing and that stamp, and a badge that blinked on the row the owner
-	 * is currently reading is the one place the count is certainly wrong. So the
-	 * open project is subtracted here rather than raced for on the server.
-	 */
-	const unseenCounts = $derived.by(() => {
-		const counts = { ...feed.unseen };
-		if (activeProject) delete counts[activeProject.id];
-		return counts;
-	});
-
-	/**
-	 * Stamp the open project as seen — on arrival, and again whenever a new card
-	 * lands while the owner is sitting on it.
-	 *
-	 * Keyed on the newest card rather than run on an interval, so a quiet project
-	 * costs one request per visit. Failures are swallowed: the badge is a
-	 * convenience, and a stamp that did not land clears on the next visit rather
-	 * than costing the owner anything they have to redo.
-	 */
-	$effect(() => {
-		const slug = activeProject?.slug;
-		// Read so the effect re-runs when the feed's top card changes.
-		void feed.items[0]?.id;
-		if (!slug) return;
-		void actions.markProjectSeen(slug).catch(() => {});
-	});
 </script>
 
 <svelte:window
@@ -541,7 +510,8 @@
 	check standing between an API response and a style attribute (`./theme.ts`).
 -->
 <div
-	class="grid h-dvh grid-rows-[auto_1fr] bg-surface text-content"
+	data-app-shell
+	class="app-shell grid h-dvh grid-rows-[auto_1fr] bg-surface text-content"
 	style={themeStyle(activeProject?.theme)}
 	data-themed={activeProject?.theme ? 'true' : undefined}
 >
@@ -662,8 +632,6 @@
 				activeSlug={project}
 				{requestCounts}
 				totalRequests={requests.items.length}
-				{unseenCounts}
-				{openTasks}
 				{projectImages}
 				{actions}
 			/>
@@ -704,29 +672,6 @@
 				>
 					Feed
 				</button>
-				<button
-					type="button"
-					role="tab"
-					id="tab-board"
-					data-testid="tab-board"
-					aria-selected={tab === 'board'}
-					aria-controls="panel-board"
-					onclick={() => show('board')}
-					class="-mb-px flex items-center gap-1.5 border-b-2 px-2 py-2 text-sm transition-colors {tab ===
-					'board'
-						? 'border-accent font-medium text-content'
-						: 'border-transparent text-content-muted hover:text-content'}"
-				>
-					Board
-					{#if openTasks > 0}
-						<span
-							data-testid="tab-board-count"
-							class="rounded-full bg-surface-raised px-1.5 text-xs text-content-muted tabular-nums"
-						>
-							{openTasks}
-						</span>
-					{/if}
-				</button>
 			</div>
 
 			{#if tab === 'feed'}
@@ -754,13 +699,12 @@
 						the cards, or it would read as belonging to the chrome rather than
 						to the feed.
 					-->
-					<div class="mx-auto w-full max-w-3xl px-3 pt-4 sm:px-4">
-						<Composer {project} projects={feed.projects} {actions} />
+					<div class="feed-column px-3 pt-4 sm:px-4 native-app:hidden">
+						<Composer {project} projects={feed.projects} tags={feed.tags} {actions} />
 					</div>
 
 					<TimelineView
 						{feed}
-						{taskTitles}
 						requests={feedRequests}
 						{projectNames}
 						agentNames={posters}
@@ -772,43 +716,12 @@
 						{threadRequests}
 					/>
 				</div>
-			{:else}
-				<div
-					role="tabpanel"
-					id="panel-board"
-					aria-labelledby="tab-board"
-					class="flex min-h-0 min-w-0 flex-col px-3 py-4 sm:px-4"
-				>
-					<Board
-						tasks={tasks.items}
-						board={boardColumns}
-						agentNames={posters}
-						selected={feed.task}
-						onselect={(taskId) => {
-							void feed.filterByTask(taskId);
-							// Back to the feed, because filtering it is what the click did and
-							// a filter applied to a view nobody is looking at is a click that
-							// appeared to do nothing.
-							show('feed');
-						}}
-					/>
-				</div>
 			{/if}
 		</main>
 
 		<aside class="hidden min-h-0 overflow-y-auto border-l border-border-subtle xl:block">
 			<RightRail {presence} {actions} />
-			<div class="border-t border-border-subtle p-3">
-				<TasksPanel
-					{tasks}
-					{project}
-					projects={feed.projects}
-					agentNames={posters}
-					{onlineIds}
-					{actions}
-					{threads}
-				/>
-			</div>
+			<div class="border-t border-border-subtle p-3"></div>
 		</aside>
 	</div>
 </div>
@@ -833,17 +746,7 @@
 			class="update-enter absolute inset-y-0 right-0 w-80 max-w-[90vw] overflow-y-auto border-l border-border-subtle bg-surface"
 		>
 			<RightRail {presence} {actions} />
-			<div class="border-t border-border-subtle p-3">
-				<TasksPanel
-					{tasks}
-					{project}
-					projects={feed.projects}
-					agentNames={posters}
-					{onlineIds}
-					{actions}
-					{threads}
-				/>
-			</div>
+			<div class="border-t border-border-subtle p-3"></div>
 		</div>
 	</div>
 {/if}
@@ -871,8 +774,6 @@
 				activeSlug={project}
 				{requestCounts}
 				totalRequests={requests.items.length}
-				{unseenCounts}
-				{openTasks}
 				{projectImages}
 				onnavigate={() => (drawer = false)}
 				{actions}

@@ -22,14 +22,18 @@
 	 */
 	import { tick } from 'svelte';
 	import Lightbox from './Lightbox.svelte';
+	import MediaFiles from './MediaFiles.svelte';
+	import MediaSounds from './MediaSounds.svelte';
 	import MediaTile from './MediaTile.svelte';
-	import { gridColumns, isViewable } from './media';
+	import { gridColumns, isViewable, splitMedia } from './media';
 	import type { MediaView } from './types';
 
 	let { items = [] }: { items?: MediaView[] } = $props();
 
-	const columns = $derived(gridColumns(items.length));
-	const viewable = $derived(items.filter(isViewable));
+	const split = $derived(splitMedia(items));
+	const tiles = $derived(split.tiles);
+	const columns = $derived(gridColumns(tiles.length));
+	const viewable = $derived(tiles.filter(isViewable));
 
 	let root = $state<HTMLElement | null>(null);
 	/** Which of `viewable` the lightbox is showing, or `null` when it is closed. */
@@ -65,16 +69,24 @@
 </script>
 
 {#if items.length > 0}
-	<div
-		bind:this={root}
-		data-media-grid
-		data-media-count={items.length}
-		class="grid gap-1.5"
-		style="grid-template-columns: repeat({columns}, minmax(0, 1fr))"
-	>
-		{#each items as item, index (item.id)}
-			<MediaTile {item} {index} total={items.length} onopen={show} />
-		{/each}
+	<div class="flex flex-col gap-1.5">
+		{#if tiles.length > 0}
+			<div
+				bind:this={root}
+				data-media-grid
+				data-media-count={tiles.length}
+				class="grid gap-1.5"
+				style="grid-template-columns: repeat({columns}, minmax(0, 1fr))"
+			>
+				{#each tiles as item, index (item.id)}
+					<MediaTile {item} {index} total={tiles.length} onopen={show} />
+				{/each}
+			</div>
+		{/if}
+
+		<!-- Sound sits between the pictures and the downloads (migration 038). -->
+		<MediaSounds items={split.sounds} />
+		<MediaFiles items={split.files} />
 	</div>
 
 	{#if open !== null && viewable.length > 0}

@@ -7,14 +7,15 @@ const SESSION_SECRET = 's'.repeat(32);
 const ADMIN_PASSWORD_HASH = '$argon2id$v=19$m=65536,t=3,p=4$c2FsdA$aGFzaA';
 const config = () => ({ sessionSecret: SESSION_SECRET, adminPasswordHash: ADMIN_PASSWORD_HASH });
 
-type EventOverrides = { path?: string; routeId?: string | null; cookie?: string };
+type EventOverrides = { path?: string; routeId?: string | null; cookie?: string; bearer?: string };
 
-function fakeEvent({ path = '/', routeId = '/x', cookie }: EventOverrides = {}) {
+function fakeEvent({ path = '/', routeId = '/x', cookie, bearer }: EventOverrides = {}) {
 	const url = new URL(`http://dashboard.test${path}`);
+	const headers = bearer ? { authorization: `Bearer ${bearer}` } : undefined;
 	return {
 		url,
 		route: { id: routeId },
-		request: new Request(url),
+		request: new Request(url, { headers }),
 		cookies: { get: (name: string) => (name === SESSION_COOKIE ? cookie : undefined) }
 	} as unknown as RequestEvent;
 }
@@ -119,5 +120,42 @@ describe('the route guard hook', () => {
 
 		expect(response.status).toBe(303);
 		expect(resolve).not.toHaveBeenCalled();
+	});
+
+	it('lets one of the owner’s phones through on its device key', async () => {
+		const resolve = resolver();
+
+		const response = await createAuthHandle({ config, device: (token) => token === 'good' })({
+			event: fakeEvent({ path: '/api/summary', bearer: 'good' }),
+			resolve
+		});
+
+		expect(response.status).toBe(200);
+		expect(resolve).toHaveBeenCalledTimes(1);
+	});
+
+	it('refuses a device key that names no device, even beside a valid cookie', async () => {
+		const resolve = resolver();
+
+		const response = await createAuthHandle({ config, device: () => false })({
+			event: fakeEvent({
+				path: '/api/summary',
+				bearer: 'stale',
+				cookie: signSession(SESSION_SECRET)
+			}),
+			resolve
+		});
+
+		expect(response.status).toBe(401);
+		expect(resolve).not.toHaveBeenCalled();
+	});
+
+	it('accepts no device key unless it is given a way to check one', async () => {
+		const response = await createAuthHandle({ config })({
+			event: fakeEvent({ path: '/api/summary', bearer: 'anything' }),
+			resolve: resolver()
+		});
+
+		expect(response.status).toBe(401);
 	});
 });

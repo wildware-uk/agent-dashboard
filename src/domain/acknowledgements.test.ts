@@ -1,9 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { createProject } from './projects';
-import { createTask } from './tasks';
 import { postMessage } from './messages';
+import { postUpdate } from './updates';
 import { isDomainError } from './errors';
 import { harness, FIXED_NOW, type Harness } from './testing';
+import { oneCard } from './cards';
 import { acknowledge, acknowledgementsFor } from './acknowledgements';
 
 /**
@@ -21,8 +22,8 @@ function setup(h: Harness = harness()) {
 		author: { kind: 'human' },
 		body: 'have a look at the migration'
 	});
-	const task = createTask(h, { project: project.slug, title: 'look at it' });
-	return { h, project, agentId, message, task };
+	const update = postUpdate(h, { project: project.slug, agentId, body: 'shipped it' });
+	return { h, project, agentId, message, update };
 }
 
 function codeOf(run: () => unknown): string {
@@ -39,7 +40,11 @@ describe('acknowledge', () => {
 	it('records what the agent said about a message, and tells the browser', () => {
 		const { h, agentId, message } = setup();
 
-		const ack = acknowledge(h, { agentId, messageId: message.id, state: 'thinking' });
+		const ack = acknowledge(h, {
+			agentId,
+			card: { kind: 'message', id: message.id },
+			state: 'thinking'
+		});
 
 		expect(ack).toMatchObject({
 			agentId,
@@ -55,7 +60,7 @@ describe('acknowledge', () => {
 	it('carries the state on the event, so a tab can decide before refetching', () => {
 		const { h, agentId, message } = setup();
 
-		acknowledge(h, { agentId, messageId: message.id, state: 'done' });
+		acknowledge(h, { agentId, card: { kind: 'message', id: message.id }, state: 'done' });
 
 		const event = h.events.find((candidate) => candidate.type === 'ack.updated');
 		expect(event?.payload).toMatchObject({
@@ -68,47 +73,46 @@ describe('acknowledge', () => {
 
 	it('revises the same acknowledgement rather than filing a second one', () => {
 		const { h, agentId, message } = setup();
-		acknowledge(h, { agentId, messageId: message.id, state: 'thinking' });
+		acknowledge(h, { agentId, card: { kind: 'message', id: message.id }, state: 'thinking' });
 
-		acknowledge(h, { agentId, messageId: message.id, state: 'done' });
+		acknowledge(h, { agentId, card: { kind: 'message', id: message.id }, state: 'done' });
 
-		const acks = acknowledgementsFor(h, { messageIds: [message.id] });
+		const acks = acknowledgementsFor(h, { message: [message.id] });
 		expect(acks).toHaveLength(1);
 		expect(acks[0].state).toBe('done');
 	});
 
 	it('is safe to re-assert, so a reconnecting agent leaves no trail', () => {
-		const { h, agentId, task } = setup();
-		acknowledge(h, { agentId, taskId: task.id, state: 'thinking' });
-		acknowledge(h, { agentId, taskId: task.id, state: 'thinking' });
+		const { h, agentId, update } = setup();
+		acknowledge(h, { agentId, card: { kind: 'update', id: update.id }, state: 'thinking' });
+		acknowledge(h, { agentId, card: { kind: 'update', id: update.id }, state: 'thinking' });
 
-		expect(acknowledgementsFor(h, { taskIds: [task.id] })).toHaveLength(1);
+		expect(acknowledgementsFor(h, { update: [update.id] })).toHaveLength(1);
 	});
 
-	it('works the same way on a task', () => {
-		const { h, agentId, task } = setup();
+	it('works the same way on an update', () => {
+		const { h, agentId, update } = setup();
 
-		expect(acknowledge(h, { agentId, taskId: task.id, state: 'done' })).toMatchObject({
-			taskId: task.id,
+		expect(
+			acknowledge(h, { agentId, card: { kind: 'update', id: update.id }, state: 'done' })
+		).toMatchObject({
+			updateId: update.id,
 			messageId: null,
 			state: 'done'
 		});
 	});
 
-	it('refuses a call that names neither a message nor a task', () => {
-		const { h, agentId } = setup();
-
-		expect(codeOf(() => acknowledge(h, { agentId, state: 'done' }))).toBe('invalid_argument');
-	});
-
-	it('refuses a call that names both, rather than picking one', () => {
-		const { h, agentId, message, task } = setup();
-
-		expect(
-			codeOf(() =>
-				acknowledge(h, { agentId, messageId: message.id, taskId: task.id, state: 'done' })
-			)
-		).toBe('invalid_argument');
+	/**
+	 * Exactly-one-of moved with the refactor (migration 034).
+	 *
+	 * A caller now hands over one `card`, so naming two is no longer a shape this
+	 * function can be given. The rule lives where the four named arguments are
+	 * turned into one card — `oneCard` — and it is still the same refusal.
+	 */
+	it('refuses a call that names no card, and one that names two', () => {
+		expect(codeOf(() => oneCard({}))).toBe('invalid_argument');
+		expect(codeOf(() => oneCard({ message: 'm1', update: 'u1' }))).toBe('invalid_argument');
+		expect(oneCard({ update: 'u1' })).toEqual({ kind: 'update', id: 'u1' });
 	});
 
 	it('refuses a state that is not one of the two', () => {
@@ -118,7 +122,7 @@ describe('acknowledge', () => {
 			codeOf(() =>
 				acknowledge(h, {
 					agentId,
-					messageId: message.id,
+					card: { kind: 'message', id: message.id },
 					state: 'maybe' as unknown as 'done'
 				})
 			)
@@ -128,18 +132,20 @@ describe('acknowledge', () => {
 	it('refuses to file against something that is not there', () => {
 		const { h, agentId } = setup();
 
-		expect(codeOf(() => acknowledge(h, { agentId, messageId: 'nope', state: 'done' }))).toBe(
-			'not_found'
-		);
-		expect(codeOf(() => acknowledge(h, { agentId, taskId: 'nope', state: 'done' }))).toBe(
-			'not_found'
-		);
+		expect(
+			codeOf(() =>
+				acknowledge(h, { agentId, card: { kind: 'message', id: 'nope' }, state: 'done' })
+			)
+		).toBe('not_found');
+		expect(
+			codeOf(() => acknowledge(h, { agentId, card: { kind: 'update', id: 'nope' }, state: 'done' }))
+		).toBe('not_found');
 	});
 
 	it('publishes nothing when it refuses', () => {
 		const { h, agentId } = setup();
 
-		codeOf(() => acknowledge(h, { agentId, messageId: 'nope', state: 'done' }));
+		codeOf(() => acknowledge(h, { agentId, card: { kind: 'message', id: 'nope' }, state: 'done' }));
 
 		expect(h.eventNames()).not.toContain('ack.updated');
 	});
@@ -149,15 +155,15 @@ describe('acknowledgementsFor', () => {
 	it('gives each agent its own say on the same message', () => {
 		const { h, agentId, message } = setup();
 		const other = h.agent('other');
-		acknowledge(h, { agentId, messageId: message.id, state: 'thinking' });
-		acknowledge(h, { agentId: other, messageId: message.id, state: 'done' });
+		acknowledge(h, { agentId, card: { kind: 'message', id: message.id }, state: 'thinking' });
+		acknowledge(h, { agentId: other, card: { kind: 'message', id: message.id }, state: 'done' });
 
-		expect(acknowledgementsFor(h, { messageIds: [message.id] })).toHaveLength(2);
+		expect(acknowledgementsFor(h, { message: [message.id] })).toHaveLength(2);
 	});
 
 	it('answers nothing for a scope that named nothing', () => {
 		const { h, agentId, message } = setup();
-		acknowledge(h, { agentId, messageId: message.id, state: 'done' });
+		acknowledge(h, { agentId, card: { kind: 'message', id: message.id }, state: 'done' });
 
 		expect(acknowledgementsFor(h, {})).toEqual([]);
 	});
@@ -172,7 +178,11 @@ describe('saying only that it was read', () => {
 	it('records read as a state of its own', () => {
 		const { h, agentId, message } = setup();
 
-		const ack = acknowledge(h, { agentId, messageId: message.id, state: 'read' });
+		const ack = acknowledge(h, {
+			agentId,
+			card: { kind: 'message', id: message.id },
+			state: 'read'
+		});
 
 		expect(ack.state).toBe('read');
 	});
@@ -180,11 +190,19 @@ describe('saying only that it was read', () => {
 	it('revises the same row, so read then done is one acknowledgement', () => {
 		const { h, agentId, message } = setup();
 
-		const read = acknowledge(h, { agentId, messageId: message.id, state: 'read' });
-		const done = acknowledge(h, { agentId, messageId: message.id, state: 'done' });
+		const read = acknowledge(h, {
+			agentId,
+			card: { kind: 'message', id: message.id },
+			state: 'read'
+		});
+		const done = acknowledge(h, {
+			agentId,
+			card: { kind: 'message', id: message.id },
+			state: 'done'
+		});
 
 		expect(done.id).toBe(read.id);
-		expect(acknowledgementsFor(h, { messageIds: [message.id] })).toHaveLength(1);
+		expect(acknowledgementsFor(h, { message: [message.id] })).toHaveLength(1);
 		expect(done.state).toBe('done');
 	});
 
@@ -195,7 +213,7 @@ describe('saying only that it was read', () => {
 			codeOf(() =>
 				acknowledge(h, {
 					agentId,
-					messageId: message.id,
+					card: { kind: 'message', id: message.id },
 					state: 'busy' as unknown as 'read'
 				})
 			)

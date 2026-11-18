@@ -32,8 +32,11 @@ export const LOGOUT_PATH = '/logout';
  */
 export const TOKEN_AUTHED_PREFIXES = ['/mcp', '/api/upload', '/s', '/api/agent'] as const;
 
+/** Where the native app trades the owner password for a device key. */
+export const DEVICE_SIGN_IN_PATH = '/api/devices/sign-in';
+
 /** Reachable without a session, or the owner could never get one. */
-export const PUBLIC_PREFIXES = [LOGIN_PATH, LOGOUT_PATH] as const;
+export const PUBLIC_PREFIXES = [LOGIN_PATH, LOGOUT_PATH, DEVICE_SIGN_IN_PATH] as const;
 
 /** Whole-segment prefix match: `/mcp` covers `/mcp/messages`, not `/mcpx`. */
 function under(pathname: string, prefix: string): boolean {

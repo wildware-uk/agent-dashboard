@@ -18,6 +18,8 @@
 import { building } from '$app/environment';
 import { assertBodyLimitAllowsUploads, assertClientAddressTrustworthy, loadConfig } from '$config';
 import {
+	startApnsPusher,
+	startLiveActivityPusher,
 	startMediaSweeper,
 	startPresenceSweeper,
 	startNotificationRecorder,
@@ -60,6 +62,12 @@ if (!building) startRequestSweeper();
 // thrown — a notification is a nudge, and the request itself is already stored.
 if (!building) startRequestPusher();
 
+// The same three events again, for the owner's iPhone over Apple push, plus the
+// Live Activity on its lock screen. Both are no-ops until the APNS_* variables
+// are set, and like Web Push they log a refusal rather than throw.
+if (!building) startApnsPusher();
+if (!building) startLiveActivityPusher();
+
 // The same events, written down (migration 021). A push reaches a phone in a
 // pocket, but only if it is awake, permitted and delivered — so what the owner
 // was told about is recorded as well, and the app shows the list whether any
@@ -85,4 +93,20 @@ if (!building) startMediaSweeper();
 // An operator can also drain the backlog by hand; see `src/media/README.md`.
 if (!building) startDerivativeWorker();
 
-export { authHandle as handle } from './http/auth';
+// The dashboard's own HTML is a megabyte of server-rendered markdown and
+// hydration payload, and compresses to a tenth of that; the snapshot endpoints
+// the page refetches after every event do the same. Nothing in front of this
+// process compresses anything, so it is done here. The compressor runs
+// *outside* the guard so a redirect to the login page is compressed too, and it
+// deliberately leaves anything without a `Content-Length` alone — which is what
+// keeps the live feed streaming. See `src/http/compress.ts`.
+import { sequence } from '@sveltejs/kit/hooks';
+import { createAuthHandle } from './http/auth';
+import { compressHandle } from './http/compress';
+import { environmentDevices } from './http/stream';
+
+// The owner's phones send a device key instead of the cookie. The hook may not
+// reach the database itself, so it is handed the check.
+const authHandle = createAuthHandle({ device: (token) => environmentDevices(token) !== null });
+
+export const handle = sequence(compressHandle, authHandle);

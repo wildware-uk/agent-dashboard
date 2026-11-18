@@ -35,21 +35,11 @@
 		 */
 		totalRequests = 0,
 		/**
-		 * Updates per project id that have landed since the owner last opened it.
-		 *
-		 * A different question from {@link requestCounts} and shown in a different
-		 * colour for that reason: amber is "an agent is blocked on you", this is
-		 * "things happened here". Conflating them would make the urgent one stop
-		 * meaning anything.
-		 */
-		unseenCounts = {},
-		/**
 		 * How many tasks are outstanding, for the count beside the Tasks link.
 		 *
 		 * Open ones only — todo and claimed. A total that included everything ever
 		 * finished would be a number that only ever goes up.
 		 */
-		openTasks = 0,
 		/**
 		 * Ready images per project id, for the logo picker in the manage menu.
 		 *
@@ -74,8 +64,6 @@
 		activeSlug?: string | null;
 		requestCounts?: Record<string, number>;
 		totalRequests?: number;
-		unseenCounts?: Record<string, number>;
-		openTasks?: number;
 		projectImages?: Record<string, MediaView[]>;
 		onnavigate?: () => void;
 		actions?: OwnerActions;
@@ -110,27 +98,6 @@
 	</span>
 {/snippet}
 
-<!--
-	The "new since you last looked" count. Sky rather than amber, and it sits
-	*after* the amber one where a row carries both, so the urgent badge keeps the
-	position the eye already learned. Same black ink for the same reason: it has
-	to be legible on the raised row, the flat row and both themes.
-
-	`ml-auto` is on whichever badge comes first, so a row with only this one still
-	pushes it to the right edge.
--->
-{#snippet fresh(count: number, first: boolean)}
-	<span
-		data-testid="unseen-badge"
-		class="{first
-			? 'ml-auto '
-			: ''}shrink-0 rounded-full bg-sky-500 px-1.5 py-0.5 text-[0.65rem] font-semibold text-black tabular-nums"
-	>
-		<span aria-hidden="true">{count}</span>
-		<span class="sr-only">{count} new since you last looked</span>
-	</span>
-{/snippet}
-
 <nav aria-label="Projects" class="flex flex-col gap-4 p-3 text-sm">
 	<a
 		href={resolve('/')}
@@ -147,26 +114,6 @@
 		opposed to what happened — and until this link they lived only in a rail that
 		is `xl:block`, invisible below 1280px and behind a drawer nobody opens.
 	-->
-	<a
-		href={resolve('/tasks')}
-		onclick={onnavigate}
-		data-testid="tasks-link"
-		class="flex items-center gap-2 rounded px-2 py-1.5 font-medium hover:bg-surface-raised"
-	>
-		<svg class="size-3.5 shrink-0" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
-			<path d="M2 3h12v2H2zM2 7h12v2H2zM2 11h8v2H2z" />
-		</svg>
-		<span class="truncate">Tasks</span>
-		{#if openTasks > 0}
-			<span
-				class="ml-auto shrink-0 rounded-full bg-surface-raised px-1.5 py-0.5 text-[0.65rem] font-semibold text-content-muted tabular-nums"
-				data-testid="open-tasks"
-			>
-				<span aria-hidden="true">{openTasks}</span>
-				<span class="sr-only">{openTasks} open</span>
-			</span>
-		{/if}
-	</a>
 
 	<div class="flex flex-col gap-1">
 		<div class="flex items-center justify-between gap-2">
@@ -208,9 +155,6 @@
 							{/if}
 							<span class="truncate">{project.name}</span>
 							{#if requestCounts[project.id]}{@render waiting(requestCounts[project.id])}{/if}
-							{#if unseenCounts[project.id]}
-								{@render fresh(unseenCounts[project.id], !requestCounts[project.id])}
-							{/if}
 						</a>
 						{#if actions}
 							<ProjectActions {project} images={projectImages[project.id] ?? []} {actions} />
@@ -251,9 +195,6 @@
 							>
 								<span class="truncate">{project.name}</span>
 								{#if requestCounts[project.id]}{@render waiting(requestCounts[project.id])}{/if}
-								{#if unseenCounts[project.id]}
-									{@render fresh(unseenCounts[project.id], !requestCounts[project.id])}
-								{/if}
 							</a>
 							<!-- Reachable here too, or an archived project could never come back. -->
 							{#if actions}

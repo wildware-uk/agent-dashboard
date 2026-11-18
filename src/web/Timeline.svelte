@@ -9,19 +9,29 @@
 	 * only thing that moves, and the viewport cannot jump under the reader's
 	 * hands.
 	 */
-	import type { Snippet } from 'svelte';
+	import { untrack, type Snippet } from 'svelte';
+	import { flip } from 'svelte/animate';
+	import { cubicOut } from 'svelte/easing';
+	import { Bumps } from './bumps.svelte';
+	import { FLOW_MS, motionMs } from './motion';
+	import Spinner from './Spinner.svelte';
 	import RequestCard from './RequestCard.svelte';
+	import { Collapsed } from './collapse.svelte';
+	import { FILTERS, Filtering } from './filters.svelte';
+	import { ReadComments } from './unread.svelte';
 	import PostCard from './PostCard.svelte';
 	import UpdateCard from './UpdateCard.svelte';
+	import { lastActivityAt } from './activity';
 	import { groupByDay } from './days';
+	import { scrollToTop, shouldOfferTop } from './scroll';
 	import type { OwnerActions } from './actions';
 	import type { ThreadSource } from './threads.svelte';
 	import type { Timeline } from './timeline.svelte';
-	import { resolve } from '$app/paths';
 	import type {
 		AckView,
 		DeliveryView,
 		ReactionView,
+		EmbedView,
 		MediaView,
 		MessageView,
 		RequestView,
@@ -55,7 +65,6 @@
 		 */
 		agentNames = {},
 		/** Task id to title, for the chip a card grows when it is progress on one. */
-		taskTitles = {},
 		/** Passed through to each card's media region. */
 		media,
 		/** The owner's write calls, passed to every card (design §7). */
@@ -93,30 +102,137 @@
 		 * feed: an agent that has been talking to its owner and then needs a
 		 * decision should be able to ask where the talking happened.
 		 */
-		threadRequests = {}
+		threadRequests = {},
+		/**
+		 * Which cards are folded, and where that is remembered.
+		 *
+		 * Injectable so a component test can hand over a storage of its own rather
+		 * than sharing the browser's (`collapse.svelte.ts`).
+		 */
+		collapsed = undefined,
+		/**
+		 * What the feed is showing (design §7).
+		 *
+		 * Injectable so a component test can hand over a storage of its own rather
+		 * than sharing the browser's (`filters.svelte.ts`).
+		 */
+		filtering = undefined,
+		/**
+		 * Which comments this browser has already seen (design §7).
+		 *
+		 * Injectable for the same reason the other two are: a component test hands
+		 * over a storage of its own (`unread.svelte.ts`).
+		 */
+		read = undefined
 	}: {
 		feed: Timeline;
 		requests?: RequestView[];
 		projectNames?: Record<string, string>;
 		agentNames?: Record<string, string>;
-		taskTitles?: Record<string, string>;
 		media?: Snippet<[UpdateView]>;
 		actions?: OwnerActions;
 		threads?: ThreadSource;
 		onlineIds?: string[];
 		focus?: string | null;
 		threadRequests?: Record<string, RequestView[]>;
+		collapsed?: Collapsed;
+		filtering?: Filtering;
+		read?: ReadComments;
 	} = $props();
+
+	/**
+	 * Everything a notification's id could reasonably land on, best first.
+	 *
+	 * The owner: "sometimes clicking a notification does not take me to the
+	 * card/comment." Four things could swallow it, and they are all this one id's
+	 * problem:
+	 *
+	 * - a filter chip that does not match the card's work state, which would drop
+	 *   the card from the page entirely;
+	 * - the card being folded, which hides the whole thread a reply lives in;
+	 * - the id naming a *question asked inside a thread* (migration 022), which is
+	 *   rendered under the message it was asked on rather than as a card;
+	 * - the id naming a reply, which is nothing at the top level of the feed.
+	 *
+	 * So the id is resolved to a chain — itself, the message a question hangs
+	 * under, and the card carrying either — and the card at the end of it is made
+	 * exempt from the filter and unfolded. A notification is a promise that there
+	 * is something to see; a filter chosen five minutes ago does not get to break
+	 * it, and landing on the right card beats landing nowhere.
+	 */
+	const chain = $derived.by(() => {
+		if (!focus) return [];
+
+		const ids = [focus];
+		// A question asked in a thread: the message it was asked under is where it
+		// is drawn, so that message is the next best thing to scroll to.
+		for (const [messageId, asked] of Object.entries(threadRequests)) {
+			if (asked.some((request) => request.id === focus)) {
+				ids.push(messageId);
+				break;
+			}
+		}
+
+		const card = cardCarrying(ids.at(-1)!) ?? cardCarrying(focus);
+		if (card && !ids.includes(card)) ids.push(card);
+		return ids;
+	});
+
+	/** Which card in the feed carries this id — as itself, or in its thread. */
+	function cardCarrying(id: string): string | null {
+		if (feed.items.some((item) => item.id === id)) return id;
+		const posts = threads?.posts?.() ?? [];
+		if (posts.some((post) => post.id === id)) return id;
+
+		for (const item of feed.items) {
+			if ((threads?.for(item.id) ?? []).some((message) => message.id === id)) return item.id;
+		}
+		for (const post of posts) {
+			if ((threads?.repliesTo?.(post.id) ?? []).some((reply) => reply.id === id)) return post.id;
+		}
+		return null;
+	}
+
+	/** The card at the end of the chain: the one that must be on screen at all. */
+	const focused = $derived(chain.length > 1 ? (chain.at(-1) ?? null) : (chain[0] ?? null));
+
+	/** Does the feed show this card, given the filter and what is being focused? */
+	function shows(card: { id: string; status?: string | null }): boolean {
+		return card.id === focused || filter.keeps(card.status);
+	}
+
+	/** A folded card hides the reply a notification is pointing at. Open it. */
+	$effect(() => {
+		const id = focused;
+		if (id && folded.has(id)) folded.set(id, false);
+	});
+
+	/** Said out loud when the target cannot be found, rather than nothing at all. */
+	let missing = $state(false);
 
 	/** The element a focus id names, whichever kind of thing it is. */
 	function focusTarget(id: string): HTMLElement | null {
 		const selectors = [
 			`[data-update-id="${CSS.escape(id)}"]`,
 			`[data-post="${CSS.escape(id)}"]`,
+			// A question the owner was asked (migration 021). It was missing here,
+			// so a notification about one scrolled nowhere and said nothing —
+			// half of the owner's "sometimes clicking a notification does not take
+			// me to the card".
+			`[data-request-id="${CSS.escape(id)}"]`,
 			`[data-message-id="${CSS.escape(id)}"]`
 		];
 		for (const selector of selectors) {
 			const found = document.querySelector<HTMLElement>(selector);
+			if (found) return found;
+		}
+		return null;
+	}
+
+	/** The first of these ids that is actually on the page. */
+	function firstOnPage(ids: readonly string[]): HTMLElement | null {
+		for (const id of ids) {
+			const found = focusTarget(id);
 			if (found) return found;
 		}
 		return null;
@@ -133,6 +249,7 @@
 	 */
 	$effect(() => {
 		const id = focus;
+		missing = false;
 		if (!id || typeof document === 'undefined') return;
 
 		let attempts = 0;
@@ -142,7 +259,11 @@
 
 		const look = () => {
 			if (done) return;
-			const target = focusTarget(id);
+			// The thing itself, or — once it is clear it is not coming — whatever is
+			// next along the chain. A thread that has not rendered by now is usually
+			// one this page cannot show at all, and the card it belongs to is a far
+			// better answer than nothing.
+			const target = attempts > 10 ? firstOnPage(chain) : focusTarget(id);
 			if (target) {
 				done = true;
 				target.scrollIntoView({ block: 'center', behavior: 'smooth' });
@@ -163,7 +284,16 @@
 				loads += 1;
 				void feed.loadOlder();
 			}
-			if (attempts > 60) return;
+			// Nothing more to reach back for and it still is not here: waiting the
+			// full nine seconds only delays telling the owner the truth.
+			const exhausted = !feed.hasMore && !feed.loading && attempts > 12;
+			if (attempts > 60 || exhausted) {
+				// Out of patience. Say so: a click that silently did nothing reads as
+				// the dashboard being broken, when the honest answer is usually that
+				// the card has been deleted since the notification was written.
+				missing = true;
+				return;
+			}
 			timer = setTimeout(look, 150);
 		};
 
@@ -201,100 +331,105 @@
 
 	let viewport = $state<HTMLElement | null>(null);
 
+	/**
+	 * Which cards the owner has folded away (design §7).
+	 *
+	 * Held here rather than on each card, because a card is replaced by id
+	 * whenever anything is published (design §4): a fold kept on the row would
+	 * spring open every time somebody reacted to something.
+	 */
+	// Captured once on purpose: the store is the owner's reading state for the
+	// life of the page, and a prop that changed identity would lose every fold.
+	// svelte-ignore state_referenced_locally
+	const folded = collapsed ?? new Collapsed();
+	// svelte-ignore state_referenced_locally
+	const filter = filtering ?? new Filtering();
+	// svelte-ignore state_referenced_locally
+	const seen = read ?? new ReadComments();
+
+	/**
+	 * Which cards have just moved (design §7). The owner: "cards flow to the top
+	 * when they are updated." The sliding is the FLIP animation on the rows
+	 * below; this is the mark left behind, for a reader who was looking elsewhere
+	 * and for the jump between two day groups that FLIP cannot follow.
+	 */
+	const bumps = new Bumps();
+
+	/** The comments under one card, whichever kind of card it is. */
+	function commentsOn(kind: 'update' | 'post' | 'request', id: string) {
+		if (kind === 'post') return threads?.repliesTo?.(id) ?? [];
+		if (kind === 'request') return threads?.forRequest?.(id) ?? [];
+		return threads?.for(id) ?? [];
+	}
+
+	/**
+	 * A card this browser has never met starts level, not unread.
+	 *
+	 * Without this, opening the dashboard on a new machine would badge every card
+	 * in the feed with its whole history, and a badge that is on everything says
+	 * nothing. The mark is written the first time a card is seen *in the data* —
+	 * `untrack` because seeding writes the marks this effect would otherwise be
+	 * watching, and the point is to run it once per new card, not to chase itself.
+	 */
+	/** Tell the bump store where every card on the page is up to. */
+	$effect(() => {
+		const rows = [
+			...pinned.map((row) => ({ id: row.id, at: row.createdAt })),
+			...groups.flatMap((group) => group.items.map((row) => ({ id: row.id, at: row.createdAt })))
+		];
+		untrack(() => {
+			for (const row of rows) bumps.note(row.id, row.at);
+		});
+	});
+
+	$effect(() => {
+		const updates = feed.items.map((item) => item.id);
+		const posts = (threads?.posts?.() ?? []).map((post) => post.id);
+		const asked = requests.map((request) => request.id);
+		untrack(() => {
+			for (const id of updates) seen.seed(id, commentsOn('update', id));
+			for (const id of posts) seen.seed(id, commentsOn('post', id));
+			for (const id of asked) seen.seed(id, commentsOn('request', id));
+		});
+	});
+
 	// Captured once. Re-reading the clock on every render would let a card slide
 	// from "Today" to "Yesterday" mid-session, remounting the whole group.
 	const renderedAt = Date.now();
 
 	/**
-	 * Pinned updates sort first (design §7), lifted clear of the day groups
-	 * rather than reordered inside them.
+	 * Pinned cards sort first (design §7), lifted clear of the day groups rather
+	 * than reordered inside them.
 	 *
-	 * Sorting within a day would put a pinned update from three weeks ago at the
-	 * top of *its* day and nowhere near the top of the feed, which is not what
-	 * pinning it meant. So the pinned ones become their own section above
-	 * everything, and the day groups render what is left — every card appears
-	 * exactly once either way.
+	 * Sorting within a day would put a pinned card from three weeks ago at the top
+	 * of *its* day and nowhere near the top of the feed, which is not what pinning
+	 * it meant. So the pinned ones become their own section above everything, and
+	 * the day groups render what is left — every card appears exactly once either
+	 * way.
+	 *
+	 * Any kind of card, since migration 034 (the owner: "let me pin my own
+	 * messages"). Both lists are rows of the same shape, so one section renders
+	 * them through the same snippet the day groups use — the pinned section is
+	 * not a second way to draw a card.
 	 */
-	const pinned = $derived(feed.items.filter((item) => item.pinned));
+	const pinned = $derived.by(() => {
+		const rows: FeedRow[] = [
+			...feed.items
+				.filter((item) => item.pinned && shows(item))
+				.map((update) => ({
+					kind: 'update' as const,
+					id: update.id,
+					createdAt: update.createdAt,
+					update
+				})),
+			...(threads?.posts?.() ?? [])
+				.filter((post) => post.pinned && shows(post))
+				.map((post) => ({ kind: 'post' as const, id: post.id, createdAt: post.createdAt, post }))
+		];
 
-	/**
-	 * How many replied-to cards ride at the top before the rest stay where they
-	 * are.
-	 *
-	 * A cap rather than "every card with a reply", because on a board that has
-	 * been running a while that is most of them, and a section containing most of
-	 * the feed is not a section. Five is what fits above the fold next to the
-	 * pinned ones.
-	 */
-	const REPLIED_LIMIT = 5;
-
-	/**
-	 * Cards with a conversation on them, newest reply first (design §7).
-	 *
-	 * Lifted clear of the day groups for exactly the reason pinned updates are:
-	 * a card whose reply landed a minute ago belongs at the top of the *feed*, and
-	 * reordering it inside its own day would put it at the top of "Tuesday" and
-	 * nowhere near the top of anything the reader is looking at. Its `created_at`
-	 * is untouched, so it keeps its place in the day groups' history the moment it
-	 * stops being one of the most recently replied to.
-	 *
-	 * Pinned cards are excluded rather than appearing twice: they are already at
-	 * the top, which was the point of pinning them.
-	 */
-	const replied = $derived.by(() => {
-		if (!threads) return [];
-
-		const withReplies = feed.items
-			.filter((item) => !item.pinned)
-			.map((item) => {
-				const thread = threads.for(item.id);
-				const newest = thread.at(-1);
-				return {
-					item,
-					// Only conversations that are *the owner's* ride the top
-					// (#feedback: "Recent replies should only show replies to me, not to
-					// other agents"). A card is here because somebody answered them, so
-					// it takes both halves: they spoke in the thread, and the newest
-					// thing in it came back from an agent. One agent leaving a note on
-					// another's card is a comment, and it belongs in its day.
-					at:
-						newest && newest.author !== 'human' && thread.some((m) => m.author === 'human')
-							? newest.createdAt
-							: null
-				};
-			})
-			.filter((candidate): candidate is { item: UpdateView; at: number } => candidate.at !== null)
-			// Read conversations drop back into their day (migration 015). Without
-			// this the section only ever grew, and the cards riding above the
-			// timeline became the ones that had been ignored the longest — the exact
-			// opposite of what lifting them up was for.
-			.filter((candidate) => (candidate.item.repliesSeenAt ?? 0) < candidate.at);
-
-		return withReplies
-			.sort((left, right) => right.at - left.at)
-			.slice(0, REPLIED_LIMIT)
-			.map((candidate) => candidate.item);
+		// Newest first, as every other section is.
+		return rows.sort((left, right) => right.createdAt - left.createdAt);
 	});
-
-	/** Marking a thread read, and what went wrong if it did not take. */
-	let marking = $state(false);
-
-	async function markRead(ids: string[]): Promise<void> {
-		if (!actions || ids.length === 0) return;
-		marking = true;
-		try {
-			// One call per card rather than a bulk endpoint: "mark all" is at most
-			// five of them, and a second endpoint would be a second thing to keep in
-			// step with the first.
-			await Promise.all(ids.map((id) => actions.markRepliesSeen(id)));
-		} catch {
-			// Swallowed on purpose. The card staying put is the whole failure, the
-			// next click retries it, and an error banner over the feed for a
-			// dismissal is louder than the thing it is reporting.
-		} finally {
-			marking = false;
-		}
-	}
 
 	/**
 	 * One row of the timeline: a card an agent posted, or one the owner did.
@@ -304,35 +439,77 @@
 	 * that answers it belong next to each other, and a section of owner posts
 	 * above the feed would be a second timeline to read.
 	 */
+	/**
+	 * `createdAt` on a row is **when the card last had something happen**, not
+	 * when it was posted (`./activity.ts`).
+	 *
+	 * The owner asked for a comment to move a post to the top, and that is what
+	 * this field is: the ordering *and* the day heading both read it, because they
+	 * have to agree. The card itself still shows its own age, which is what makes
+	 * "3d ago" under a Today heading readable rather than wrong — it was posted
+	 * three days ago and answered this morning, and the thread underneath says so.
+	 */
 	type FeedRow =
 		| { kind: 'update'; id: string; createdAt: number; update: UpdateView }
 		| { kind: 'post'; id: string; createdAt: number; post: MessageView };
 
 	const groups = $derived.by(() => {
-		const lifted = new Set(replied.map((item) => item.id));
 		const rows: FeedRow[] = [
 			...feed.items
-				.filter((item) => !item.pinned && !lifted.has(item.id))
+				.filter((item) => !item.pinned && shows(item))
 				.map((update) => ({
 					kind: 'update' as const,
 					id: update.id,
-					createdAt: update.createdAt,
+					createdAt: lastActivityAt(
+						update.createdAt,
+						threads?.for(update.id) ?? [],
+						update.statusAt
+					),
 					update
 				})),
-			...(threads?.posts?.() ?? []).map((post) => ({
-				kind: 'post' as const,
-				id: post.id,
-				createdAt: post.createdAt,
-				post
-			}))
+			...(threads?.posts?.() ?? [])
+				// A pinned post is already at the top, which was the point of pinning
+				// it — the same rule a pinned update keeps.
+				.filter((post) => !post.pinned && shows(post))
+				.map((post) => ({
+					kind: 'post' as const,
+					id: post.id,
+					createdAt: lastActivityAt(
+						post.createdAt,
+						threads?.repliesTo?.(post.id) ?? [],
+						post.statusAt
+					),
+					post
+				}))
 		];
 
-		// Newest first, the way the server orders updates: the two lists arrive
-		// sorted differently — updates newest first, messages oldest first — so the
-		// merge sorts rather than assuming either.
+		// Newest activity first. The two lists arrive sorted differently — updates
+		// newest first, messages oldest first — so the merge sorts rather than
+		// assuming either, and it sorts on activity rather than on age.
 		rows.sort((left, right) => right.createdAt - left.createdAt);
 		return groupByDay(rows, renderedAt);
 	});
+
+	/** How many cards the filter left on the page, across every section. */
+	const shown = $derived(
+		pinned.length + groups.reduce((total, group) => total + group.items.length, 0)
+	);
+
+	/**
+	 * One key of a request's discussion, keyed by message id (migration 032).
+	 *
+	 * The four maps a thread needs are the same shape, and a question's
+	 * discussion needs all of them for the same reasons a card's thread does — so
+	 * this is written once rather than four times over.
+	 */
+	function keyed<T>(requestId: string, pick: (messageId: string) => T[]): Record<string, T[]> {
+		const map: Record<string, T[]> = {};
+		for (const message of threads?.forRequest?.(requestId) ?? []) {
+			const found = pick(message.id);
+			if (found.length > 0) map[message.id] = found;
+		}
+		return map;
+	}
 
 	/** The images on one card's thread, keyed by message id (migration 016). */
 	function mediaForThread(updateId: string): Record<string, MediaView[]> {
@@ -350,6 +527,26 @@
 		for (const reply of threads?.repliesTo?.(postId) ?? []) {
 			const images = threads?.mediaFor?.(reply.id) ?? [];
 			if (images.length > 0) map[reply.id] = images;
+		}
+		return map;
+	}
+
+	/** The embeds on one card's thread, keyed by message id (migration 027). */
+	function embedsForThread(updateId: string): Record<string, EmbedView[]> {
+		const map: Record<string, EmbedView[]> = {};
+		for (const message of threads?.for(updateId) ?? []) {
+			const shown = threads?.embedsFor?.(message.id) ?? [];
+			if (shown.length > 0) map[message.id] = shown;
+		}
+		return map;
+	}
+
+	/** The same, for the replies under one post. */
+	function embedsForPost(postId: string): Record<string, EmbedView[]> {
+		const map: Record<string, EmbedView[]> = {};
+		for (const reply of threads?.repliesTo?.(postId) ?? []) {
+			const shown = threads?.embedsFor?.(reply.id) ?? [];
+			if (shown.length > 0) map[reply.id] = shown;
 		}
 		return map;
 	}
@@ -404,8 +601,25 @@
 		return map;
 	}
 
+	/**
+	 * Whether the reader is far enough down to be offered the way back
+	 * (`./scroll.ts`).
+	 *
+	 * Kept here beside the pill's own state because both are answers to the same
+	 * `scroll` event, and reading the element twice per frame in two places is
+	 * how those two would eventually disagree.
+	 */
+	let farDown = $state(false);
+
 	function onscroll() {
-		if (viewport) feed.hold(viewport.scrollTop > AT_TOP_PX);
+		if (!viewport) return;
+		feed.hold(viewport.scrollTop > AT_TOP_PX);
+		farDown = shouldOfferTop(viewport.scrollTop, viewport.clientHeight);
+	}
+
+	/** The floating button's job, and the pill's second half. */
+	function toTop() {
+		scrollToTop(viewport);
 	}
 
 	/**
@@ -416,9 +630,105 @@
 	 */
 	function showNew() {
 		feed.flush();
-		viewport?.scrollTo({ top: 0, behavior: 'smooth' });
+		toTop();
 	}
 </script>
+
+<!--
+	One row of the feed, wherever it appears (migration 034).
+	
+	Pinned cards and the day groups render the same thing through this, rather
+	than each keeping their own copy of how a card is built: the pinned section
+	used to draw updates only, which is why a pinned post had nowhere to go.
+-->
+{#snippet card(row: FeedRow)}
+	{#if row.kind === 'post'}
+		<!--
+			`actions` as well as `uploader`, and the difference was a bug the owner
+			found: the card was handed somewhere to upload images and nothing to
+			write with, so a post had no reaction control, its replies had none
+			either, and a question asked in its thread could not be answered. On a
+			project whose feed is mostly posts, that reads as "I cannot react to
+			anything here".
+		-->
+		<PostCard
+			tags={feed.tags}
+			cardTags={feed.cardTags}
+			cardFields={feed.cardFields}
+			cardApps={feed.cardApps}
+			bumped={bumps.has(row.post.id)}
+			collapsed={folded.has(row.post.id)}
+			oncollapse={(fold) => folded.set(row.post.id, fold)}
+			post={row.post}
+			replies={threads?.repliesTo?.(row.post.id) ?? []}
+			unread={seen.unread(row.post.id, commentsOn('post', row.post.id))}
+			onseen={() => seen.markRead(row.post.id, commentsOn('post', row.post.id))}
+			{agentNames}
+			acks={acksForPost(row.post.id)}
+			postAcks={threads?.acksFor?.(row.post.id) ?? []}
+			postMedia={threads?.mediaFor?.(row.post.id) ?? []}
+			replyMedia={mediaForPost(row.post.id)}
+			postEmbeds={threads?.embedsFor?.(row.post.id) ?? []}
+			replyEmbeds={embedsForPost(row.post.id)}
+			postDeliveries={threads?.deliveriesFor?.(row.post.id) ?? []}
+			postReactions={threads?.reactionsFor?.(row.post.id) ?? []}
+			replyReactions={reactionsForPost(row.post.id)}
+			replyDeliveries={deliveriesForPost(row.post.id)}
+			{threadRequests}
+			uploader={actions}
+			{actions}
+			{onlineIds}
+			onreply={async (body, mediaIds = [], answers) => {
+				// The images go with it: a reply that quietly dropped the
+				// screenshot it was written about would be worse than one
+				// that failed to send.
+				await actions?.postMessage({
+					replyTo: row.post.id,
+					body,
+					...(mediaIds.length > 0 ? { mediaIds } : {}),
+					...(answers ? { answers } : {})
+				});
+			}}
+			ondelete={actions
+				? async (id) => {
+						await actions.deleteMessage(id);
+					}
+				: undefined}
+			ondeletepost={actions
+				? async () => {
+						await actions.deleteMessage(row.post.id);
+					}
+				: undefined}
+		/>
+	{:else}
+		<UpdateCard
+			tags={feed.tags}
+			cardTags={feed.cardTags}
+			cardFields={feed.cardFields}
+			cardApps={feed.cardApps}
+			bumped={bumps.has(row.update.id)}
+			collapsed={folded.has(row.update.id)}
+			oncollapse={(fold) => folded.set(row.update.id, fold)}
+			update={row.update}
+			agentName={agentNames[row.update.agentId]}
+			isNew={feed.isNew(row.update.id)}
+			{media}
+			{actions}
+			{agentNames}
+			messages={threads?.for(row.update.id)}
+			acks={acksFor(row.update.id)}
+			messageMedia={mediaForThread(row.update.id)}
+			messageEmbeds={embedsForThread(row.update.id)}
+			messageDeliveries={deliveriesForThread(row.update.id)}
+			{threadRequests}
+			messageReactions={reactionsForThread(row.update.id)}
+			reactions={row.update.reactions ?? []}
+			unread={seen.unread(row.update.id, commentsOn('update', row.update.id))}
+			onseen={() => seen.markRead(row.update.id, commentsOn('update', row.update.id))}
+			{onlineIds}
+		/>
+	{/if}
+{/snippet}
 
 <div bind:this={viewport} {onscroll} class="h-full min-h-0 overflow-y-auto" data-timeline>
 	<!--
@@ -430,6 +740,7 @@
 			{#if feed.pendingCount > 0}
 				<button
 					type="button"
+					data-testid="new-updates"
 					onclick={showNew}
 					class="update-enter pointer-events-auto rounded-full bg-accent px-3 py-1.5 text-sm font-medium text-surface shadow-lg"
 				>
@@ -439,36 +750,57 @@
 		</div>
 	</div>
 
-	<div class="mx-auto flex max-w-3xl flex-col gap-6 px-3 py-4 sm:px-4">
-		{#if feed.task}
+	<div class="feed-column flex flex-col gap-6 px-3 py-4 sm:px-4">
+		<!--
+			What the feed is showing (design §7). The owner: "add filtering on
+			dashboards, filter cards by work status, etc."
+
+			A row of chips rather than a select: there are six, the choice is made
+			with one tap, and which one is on is readable without opening anything.
+			It filters the cards on the page — see `filters.svelte.ts` for why that
+			is the line, and what it costs.
+		-->
+		{#if missing}
 			<!--
-				What the feed is showing, and the way out. A filtered feed that did not
-				say so would read as a timeline that had gone quiet.
+				A notification that pointed at something no longer here. Said plainly
+				and once, above the feed, because the alternative is a click that
+				appears to do nothing at all.
 			-->
-			<div
-				class="flex flex-wrap items-center gap-2 rounded-lg border border-accent/40 bg-surface-raised px-3 py-2 text-sm"
-				data-testid="feed-filter"
+			<p
+				role="status"
+				data-testid="focus-missing"
+				class="rounded border border-border-subtle bg-surface-raised px-3 py-2 text-sm text-content-muted"
 			>
-				<span class="text-content-muted">Showing updates on</span>
-				<span class="min-w-0 font-medium text-content">
-					{taskTitles[feed.task] ?? 'one task'}
-				</span>
-				<a
-					href={resolve('/tasks/[id]', { id: feed.task })}
-					class="text-xs text-content-muted underline hover:text-content"
-				>
-					Open task
-				</a>
+				Could not find what that notification pointed at. It may have been deleted.
+			</p>
+		{/if}
+
+		<div
+			role="group"
+			aria-label="Filter the feed"
+			data-testid="feed-filters"
+			class="-mb-2 flex flex-wrap items-center gap-1.5"
+		>
+			{#each FILTERS as option (option.id)}
 				<button
 					type="button"
-					data-testid="clear-filter"
-					onclick={() => void feed.filterByTask(null)}
-					class="ml-auto rounded border border-border-subtle px-2 py-0.5 text-xs text-content-muted hover:text-content"
+					aria-pressed={filter.current === option.id}
+					data-filter={option.id}
+					onclick={() => filter.set(option.id)}
+					class="rounded-full border px-2.5 py-1 text-xs transition-colors {filter.current ===
+					option.id
+						? 'border-accent bg-accent/10 font-medium text-content'
+						: 'border-border-subtle text-content-muted hover:text-content'}"
 				>
-					Show everything
+					{option.label}
 				</button>
-			</div>
-		{/if}
+			{/each}
+			{#if filter.current !== 'all' && shown === 0}
+				<span class="text-xs text-content-muted" data-testid="filter-empty">
+					Nothing on this page matches. Older cards may — scroll down to load more.
+				</span>
+			{/if}
+		</div>
 
 		{#if requests.length > 0 && actions}
 			<!--
@@ -495,77 +827,26 @@
 					<RequestCard
 						{request}
 						{actions}
+						tags={feed.tags}
+						cardTags={feed.cardTags}
+						cardFields={feed.cardFields}
+						cardApps={feed.cardApps}
+						collapsed={folded.has(request.id)}
+						oncollapse={(fold) => folded.set(request.id, fold)}
 						agentName={agentNames[request.agentId]}
 						projectName={request.projectId ? (projectNames[request.projectId] ?? null) : null}
+						messages={threads?.forRequest?.(request.id) ?? []}
+						unread={seen.unread(request.id, commentsOn('request', request.id))}
+						onseen={() => seen.markRead(request.id, commentsOn('request', request.id))}
+						{agentNames}
+						{onlineIds}
+						acks={keyed(request.id, (id) => threads?.acksFor?.(id) ?? [])}
+						messageMedia={keyed(request.id, (id) => threads?.mediaFor?.(id) ?? [])}
+						messageEmbeds={keyed(request.id, (id) => threads?.embedsFor?.(id) ?? [])}
+						messageDeliveries={keyed(request.id, (id) => threads?.deliveriesFor?.(id) ?? [])}
+						messageReactions={keyed(request.id, (id) => threads?.reactionsFor?.(id) ?? [])}
+						reactions={request.reactions ?? []}
 					/>
-				{/each}
-			</section>
-		{/if}
-
-		{#if replied.length > 0}
-			<!--
-				Conversations, above the day groups and below anything pinned: a reply
-				is the newest thing that happened to a card, and the card it happened
-				to is what the reader wants next to it.
-			-->
-			<section
-				class="flex flex-col gap-3"
-				aria-labelledby="day-replied"
-				data-testid="replied-section"
-			>
-				<h2
-					id="day-replied"
-					class="sticky top-0 z-1 -mx-1 flex items-center gap-2 bg-surface/90 px-1 py-1 text-xs font-semibold tracking-wide text-content-muted uppercase backdrop-blur"
-				>
-					Recent replies
-					{#if actions}
-						<button
-							type="button"
-							disabled={marking}
-							data-testid="mark-all-replies-read"
-							onclick={() => markRead(replied.map((item) => item.id))}
-							class="ml-auto rounded px-1.5 py-0.5 text-xs font-medium normal-case hover:bg-surface-raised hover:text-content disabled:opacity-50"
-						>
-							Mark all read
-						</button>
-					{/if}
-				</h2>
-				{#each replied as update (update.id)}
-					<div class="flex min-w-0 flex-col gap-1">
-						<UpdateCard
-							{update}
-							agentName={agentNames[update.agentId]}
-							taskTitle={update.taskId ? taskTitles[update.taskId] : undefined}
-							isNew={feed.isNew(update.id)}
-							{media}
-							{actions}
-							{agentNames}
-							messages={threads?.for(update.id)}
-							acks={acksFor(update.id)}
-							messageMedia={mediaForThread(update.id)}
-							messageDeliveries={deliveriesForThread(update.id)}
-							{threadRequests}
-							messageReactions={reactionsForThread(update.id)}
-							{onlineIds}
-						/>
-						{#if actions}
-							<!--
-								Under the card rather than on it: the card is the same component
-								wherever it appears, and a button that only exists in one
-								section belongs to the section.
-							-->
-							<button
-								type="button"
-								disabled={marking}
-								data-testid="mark-replies-read"
-								aria-label="Mark the conversation on {update.title ?? 'this update'} as read"
-								onclick={() => markRead([update.id])}
-								class="self-end rounded px-1.5 py-0.5 text-xs text-content-muted hover:bg-surface-raised hover:text-content disabled:opacity-50"
-							>
-								Done with this
-							</button>
-						{/if}
-					</div>
 				{/each}
 			</section>
 		{/if}
@@ -578,28 +859,15 @@
 				>
 					Pinned
 				</h2>
-				{#each pinned as update (update.id)}
-					<UpdateCard
-						{update}
-						agentName={agentNames[update.agentId]}
-						taskTitle={update.taskId ? taskTitles[update.taskId] : undefined}
-						isNew={feed.isNew(update.id)}
-						{media}
-						{actions}
-						{agentNames}
-						messages={threads?.for(update.id)}
-						acks={acksFor(update.id)}
-						messageMedia={mediaForThread(update.id)}
-						messageDeliveries={deliveriesForThread(update.id)}
-						{threadRequests}
-						messageReactions={reactionsForThread(update.id)}
-						{onlineIds}
-					/>
+				{#each pinned as row (row.id)}
+					<div animate:flip={{ duration: motionMs(FLOW_MS), easing: cubicOut }}>
+						{@render card(row)}
+					</div>
 				{/each}
 			</section>
 		{/if}
 
-		{#if groups.length === 0 && pinned.length === 0 && requests.length === 0 && replied.length === 0}
+		{#if groups.length === 0 && pinned.length === 0 && requests.length === 0}
 			<p class="px-1 py-8 text-content-muted">
 				Nothing here yet. Agents connect over MCP at <code
 					class="rounded bg-surface-raised px-1.5 py-0.5 text-sm">/mcp</code
@@ -614,72 +882,17 @@
 					>
 						{group.label}
 					</h2>
+					<!--
+						Cards slide to their new place rather than jumping (design §7). The
+						owner: "cards flow to the top when they are updated." FLIP measures
+						where a row was and where it landed, so a card lifted by a reply
+						travels there; the wrapper exists because the animation needs an
+						element of its own to move, and the card itself is a snippet.
+					-->
 					{#each group.items as row (row.id)}
-						{#if row.kind === 'post'}
-							<!--
-								`actions` as well as `uploader`, and the difference was a bug the
-								owner found: the card was handed somewhere to upload images and
-								nothing to write with, so a post had no reaction control, its
-								replies had none either, and a question asked in its thread could
-								not be answered. On a project whose feed is mostly posts, that
-								reads as "I cannot react to anything here".
-							-->
-							<PostCard
-								post={row.post}
-								replies={threads?.repliesTo?.(row.post.id) ?? []}
-								{agentNames}
-								acks={acksForPost(row.post.id)}
-								postAcks={threads?.acksFor?.(row.post.id) ?? []}
-								postMedia={threads?.mediaFor?.(row.post.id) ?? []}
-								replyMedia={mediaForPost(row.post.id)}
-								postDeliveries={threads?.deliveriesFor?.(row.post.id) ?? []}
-								postReactions={threads?.reactionsFor?.(row.post.id) ?? []}
-								replyReactions={reactionsForPost(row.post.id)}
-								replyDeliveries={deliveriesForPost(row.post.id)}
-								{threadRequests}
-								uploader={actions}
-								{actions}
-								{onlineIds}
-								onreply={async (body, mediaIds = [], answers) => {
-									// The images go with it: a reply that quietly dropped the
-									// screenshot it was written about would be worse than one
-									// that failed to send.
-									await actions?.postMessage({
-										replyTo: row.post.id,
-										body,
-										...(mediaIds.length > 0 ? { mediaIds } : {}),
-										...(answers ? { answers } : {})
-									});
-								}}
-								ondelete={actions
-									? async (id) => {
-											await actions.deleteMessage(id);
-										}
-									: undefined}
-								ondeletepost={actions
-									? async () => {
-											await actions.deleteMessage(row.post.id);
-										}
-									: undefined}
-							/>
-						{:else}
-							<UpdateCard
-								update={row.update}
-								agentName={agentNames[row.update.agentId]}
-								taskTitle={row.update.taskId ? taskTitles[row.update.taskId] : undefined}
-								isNew={feed.isNew(row.update.id)}
-								{media}
-								{actions}
-								{agentNames}
-								messages={threads?.for(row.update.id)}
-								acks={acksFor(row.update.id)}
-								messageMedia={mediaForThread(row.update.id)}
-								messageDeliveries={deliveriesForThread(row.update.id)}
-								{threadRequests}
-								messageReactions={reactionsForThread(row.update.id)}
-								{onlineIds}
-							/>
-						{/if}
+						<div animate:flip={{ duration: motionMs(FLOW_MS), easing: cubicOut }}>
+							{@render card(row)}
+						</div>
 					{/each}
 				</section>
 			{/each}
@@ -689,11 +902,49 @@
 					type="button"
 					onclick={() => feed.loadOlder()}
 					disabled={feed.loading}
-					class="mx-auto rounded border border-border-subtle px-3 py-1.5 text-sm text-content-muted hover:text-content disabled:opacity-50"
+					class="mx-auto flex items-center gap-2 rounded border border-border-subtle px-3 py-1.5 text-sm text-content-muted hover:text-content disabled:opacity-50"
 				>
-					{feed.loading ? 'Loading…' : 'Load older updates'}
+					{#if feed.loading}<Spinner size="0.8rem" />{/if}
+					{feed.loading ? 'Loading' : 'Load older updates'}
 				</button>
 			{/if}
 		{/if}
+	</div>
+
+	<!--
+		The way back to the top (design §7).
+
+		A zero-height sticky layer at the bottom, exactly as the "new updates" pill
+		is one at the top: the button can come and go without ever adding or
+		removing layout, so a feed does not shift under somebody's thumb the moment
+		they have scrolled far enough to earn it.
+
+		Inside the scroller rather than fixed to the window, so on a wide screen it
+		sits over the *feed* and not over the rail beside it — and so it is the same
+		element on a phone, where there is no rail to avoid.
+
+		**Last in the scroller, not first.** A `bottom` sticky is only ever pulled
+		*up* out of the content below the fold; it is never pushed down past where
+		it naturally sits. Put at the top, as the pill above it is, it simply
+		scrolls away with the first screenful — which is exactly what it did.
+	-->
+	<div class="pointer-events-none sticky bottom-0 z-10 h-0">
+		<div class="feed-column relative px-3 sm:px-4">
+			{#if farDown}
+				<button
+					type="button"
+					onclick={toTop}
+					data-testid="to-top"
+					aria-label="Scroll back to the top of the feed"
+					class="update-enter pointer-events-auto absolute right-3 bottom-4 flex size-10 items-center justify-center rounded-full border border-border-subtle bg-surface-raised text-content-muted shadow-lg hover:text-content focus:outline-2 focus:outline-offset-2 focus:outline-accent sm:right-4"
+				>
+					<svg class="size-4" viewBox="0 0 16 16" fill="currentColor" aria-hidden="true">
+						<path
+							d="M8 2.75a.75.75 0 0 1 .53.22l4.5 4.5a.75.75 0 1 1-1.06 1.06L8.75 5.31v7.94a.75.75 0 0 1-1.5 0V5.31L4.03 8.53a.75.75 0 0 1-1.06-1.06l4.5-4.5A.75.75 0 0 1 8 2.75"
+						/>
+					</svg>
+				</button>
+			{/if}
+		</div>
 	</div>
 </div>

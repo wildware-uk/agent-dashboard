@@ -1,8 +1,8 @@
 {
 	"name": "agent-dashboard",
 	"displayName": "Agent Dashboard",
-	"version": "0.1.0",
-	"description": "Report to a human owner while you work: post updates, take tasks off a board, and stop to ask a question — over MCP, with a channel that wakes you when they answer.",
+	"version": "0.2.0",
+	"description": "Report to a human owner while you work: post updates, mark what you are doing, and stop to ask a question — over MCP, with a monitor that wakes you when they answer.",
 	"author": {
 		"name": "Wildware",
 		"url": "https://github.com/wildware-uk"
@@ -24,6 +24,12 @@
 			"description": "A bearer token from `agent-dashboard mint-token <name>`. It is the whole identity: everything posted with it is attributed to that agent, so mint one per machine and revoke it when the machine goes away.",
 			"sensitive": true,
 			"required": true
+		},
+		"monitor": {
+			"type": "string",
+			"title": "Background monitor",
+			"description": "`auto` (default) runs a background monitor for the whole session, so replies reach you without waiting for a heartbeat. It stands aside on its own while the agent-dashboard-channel is delivering, so nothing arrives twice. `off` turns it off entirely.",
+			"required": false
 		},
 		"projects": {
 			"type": "string",

@@ -36,7 +36,6 @@ describe('the $db surface', () => {
 			media: 'insertMedia',
 			derivatives: 'insertDerivative',
 			upload_tokens: 'insertUploadToken',
-			tasks: 'insertTask',
 			messages: 'insertMessage',
 			read_cursors: 'advanceReadCursor',
 			approvals: 'insertApproval',
@@ -45,10 +44,28 @@ describe('the $db surface', () => {
 			acknowledgements: 'upsertAcknowledgement',
 			message_deliveries: 'recordDelivery',
 			notifications: 'insertNotification',
-			reactions: 'addReaction'
+			reactions: 'addReaction',
+			embed_types: 'upsertEmbedType',
+			embeds: 'insertEmbed',
+			// Migration 039: a project's own words, and one of them on a card.
+			tags: 'insertTag',
+			card_tags: 'addCardTag',
+			// Migration 040: what an agent knows about a card.
+			card_fields: 'upsertCardField',
+			// Migration 041: an app, and one showing of it on a card.
+			apps: 'upsertApp',
+			app_views: 'insertAppView',
+			// Migration 043: the owner's phones.
+			owner_devices: 'insertOwnerDevice',
+			// Migration 044: who a message names.
+			message_mentions: 'setMessageMentions'
 		};
 
 		for (const table of TABLES) {
+			// `tasks` is the exception, and it is deliberate: migration 035 moved
+			// every task into the feed and left the rows behind as history, so the
+			// table exists with nothing in the product reading it.
+			if (table === 'tasks') continue;
 			expect(exported, `${table} needs a repository`).toContain(repositoryFor[table]);
 		}
 	});

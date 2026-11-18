@@ -7,7 +7,8 @@ import {
 	CONFIG_VARS,
 	loadConfig,
 	parseBodySizeLimit,
-	pushConfig
+	pushConfig,
+	apnsConfig
 } from './config';
 
 /** The minimum an operator must set; everything else has a default. */
@@ -73,10 +74,15 @@ describe('loadConfig', () => {
 			'PUBLIC_BASE_URL',
 			'MAX_IMAGE_BYTES',
 			'MAX_VIDEO_BYTES',
+			'MAX_FILE_BYTES',
 			'HOLD_S',
 			'VAPID_PUBLIC_KEY',
 			'VAPID_PRIVATE_KEY',
-			'VAPID_SUBJECT'
+			'VAPID_SUBJECT',
+			'APNS_KEY_ID',
+			'APNS_TEAM_ID',
+			'APNS_KEY_PATH',
+			'APNS_BUNDLE_ID'
 		]);
 	});
 });
@@ -221,5 +227,32 @@ describe('push notifications', () => {
 		expect(() => loadConfig({ ...required, ...keys, VAPID_SUBJECT: 'owner@example.com' })).toThrow(
 			/mailto:/
 		);
+	});
+});
+
+describe('apple push', () => {
+	const apns = {
+		APNS_KEY_ID: 'KEY123',
+		APNS_TEAM_ID: 'TEAM456',
+		APNS_KEY_PATH: '/keys/apns.p8',
+		APNS_BUNDLE_ID: 'dev.wildware.agents'
+	};
+
+	it('is off when nothing is set', () => {
+		expect(apnsConfig(loadConfig(required))).toBeNull();
+	});
+
+	it('is on when all four are set', () => {
+		expect(apnsConfig(loadConfig({ ...required, ...apns }))).toEqual({
+			keyId: 'KEY123',
+			teamId: 'TEAM456',
+			keyPath: '/keys/apns.p8',
+			bundleId: 'dev.wildware.agents'
+		});
+	});
+
+	it('refuses to start when only some are set', () => {
+		expect(() => loadConfig({ ...required, APNS_KEY_ID: 'KEY123' })).toThrow(/together/);
+		expect(() => loadConfig({ ...required, ...apns, APNS_BUNDLE_ID: '' })).toThrow(/together/);
 	});
 });

@@ -30,11 +30,15 @@ afterEach(() => {
 });
 
 /** Reserve, upload, and hand back the media id — the state serving starts from. */
-async function uploaded(bytes = pngBytes(), mime = 'image/png'): Promise<string> {
+async function uploaded(
+	bytes = pngBytes(),
+	mime = 'image/png',
+	filename = 'shot.png'
+): Promise<string> {
 	const created = createUpload(settings, {
 		db,
 		agentId,
-		filename: 'shot.png',
+		filename,
 		mime,
 		bytes: bytes.length,
 		now: NOW
@@ -213,5 +217,49 @@ describe('serving a derivative', () => {
 			'original',
 			'thumb-640'
 		]);
+	});
+});
+
+/**
+ * Serving a file (migration 026).
+ *
+ * The three assertions here are the whole security argument for "any file may be
+ * uploaded": whatever it claims to be, it leaves as `application/octet-stream`,
+ * it leaves as an attachment, and it has exactly one address. An uploaded
+ * `.html` is therefore a download and never a page on this origin.
+ */
+describe('a file', () => {
+	const html = new TextEncoder().encode('<script>alert(1)</script>');
+
+	it('is served as a download whatever it claims to be', async () => {
+		const id = await uploaded(html, 'text/html', 'evil.html');
+
+		const file = await openVariant(settings, { db, id, variant: 'original' });
+
+		expect(file.mime).toBe('application/octet-stream');
+		expect(file.disposition).toBe('attachment');
+		expect(file.filename).toBe('evil.html');
+		expect(await read(file.open())).toEqual(html);
+	});
+
+	it('has one address: there is nothing to render, so nothing was derived', async () => {
+		const id = await uploaded(html, 'text/html', 'evil.html');
+
+		expect(derivativesFor({ db, id }).map((entry) => entry.variant)).toEqual(['original']);
+		for (const variant of ['thumb-640', 'thumb-1600', 'poster', 'video'] as const) {
+			expect(await refusal(() => openVariant(settings, { db, id, variant })), variant).toBe(
+				'not_found'
+			);
+		}
+	});
+
+	it('leaves an image alone: it is still served inline, as itself', async () => {
+		const id = await uploaded();
+
+		const file = await openVariant(settings, { db, id, variant: 'original' });
+
+		expect(file.mime).toBe('image/png');
+		expect(file.disposition).toBe('inline');
+		expect(file.filename).toBeNull();
 	});
 });

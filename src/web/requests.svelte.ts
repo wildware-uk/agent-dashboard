@@ -38,7 +38,15 @@ import {
 } from './stream';
 
 /** The events that change the queue. */
-const WATCHED = ['request.created', 'request.answered', 'resync'] as const;
+const WATCHED = [
+	'request.created',
+	// The asking agent rewrote its own question (migration 033). Nothing is
+	// settled and nothing is announced — the prompt on screen is refetched, so a
+	// corrected draft reaches the owner without a reload.
+	'request.updated',
+	'request.answered',
+	'resync'
+] as const;
 
 /** How much the store knows about its connection. */
 export type RequestsStatus = 'idle' | 'live' | 'offline';

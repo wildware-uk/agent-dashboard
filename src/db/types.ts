@@ -10,6 +10,8 @@
  */
 
 /** Common to every table: the exposed id and the ordering key. */
+import type { CardRef, CardStatus } from './cards';
+
 export type Keyed = {
 	/** ULID. Sortable, stable, safe to expose. */
 	id: string;
@@ -71,13 +73,6 @@ export type Project = Keyed & {
 	theme: ProjectTheme | null;
 	/** The board's columns, or `null` for the default three (design §7). */
 	board: ProjectBoard | null;
-	/**
-	 * When the owner last opened this project, or `null` for never.
-	 *
-	 * `null` is not the epoch: a project the owner has never opened badges its
-	 * whole history rather than nothing.
-	 */
-	ownerSeenAt: number | null;
 };
 
 export type Agent = Keyed & {
@@ -127,18 +122,33 @@ export type Update = Keyed & {
 	editedAt: number | null;
 	/** How much this needs the owner now. `medium` unless the agent said (§7). */
 	priority: UpdatePriority;
-	/** The task this is progress on, or `null` — most updates are not (§3). */
+	/**
+	 * The task this was progress on. Dead since migration 035 took the board
+	 * away; the old values are kept as the history of what was filed where.
+	 */
 	taskId: string | null;
 	/**
-	 * When the owner last read the conversation on this card (migration 015).
+	 * Where the work on this card has got to (migration 035).
 	 *
-	 * `null` for never, which is what keeps a card in "Recent replies" while its
-	 * thread is unread.
+	 * `null` for an ordinary card. Marking one is what the task board used to be.
 	 */
-	repliesSeenAt: number | null;
+	status: CardStatus | null;
+	/**
+	 * When that state last changed (migration 037).
+	 *
+	 * What brings a card that moved back to the top of the feed. `null` for one
+	 * nobody has marked since the column existed.
+	 */
+	statusAt: number | null;
 };
 
-export type MediaKind = 'image' | 'video';
+/**
+ * What an attachment is for (migrations 026, 038).
+ *
+ * `image`, `video` and `audio` are rendered on the page; `file` is anything else
+ * — stored, listed and downloaded, never served inline.
+ */
+export type MediaKind = 'image' | 'video' | 'audio' | 'file';
 export type MediaStatus = 'pending' | 'ready' | 'failed';
 
 export type Media = Keyed & {
@@ -150,6 +160,17 @@ export type Media = Keyed & {
 	updateId: string | null;
 	/** The message this hangs off, for an image in a reply or one of the owner's posts. */
 	messageId: string | null;
+	/**
+	 * The approval this is on, or the task, when it is on one of those
+	 * (migration 030).
+	 *
+	 * Four anchors and exactly one of them set. The owner asked for every card
+	 * type to carry the same things, and this is that sentence in the schema:
+	 * there was never a reason an approval could not hold a screenshot, only an
+	 * order in which the features happened to land.
+	 */
+	requestId: string | null;
+	taskId: string | null;
 	kind: MediaKind;
 	mime: string;
 	bytes: number;
@@ -157,6 +178,13 @@ export type Media = Keyed & {
 	width: number | null;
 	height: number | null;
 	durationMs: number | null;
+	/**
+	 * What the uploader called it, for a `file` (migration 026).
+	 *
+	 * `null` for images and video, where the picture is its own label and the name
+	 * was genuinely never kept. Text: it names nothing on this filesystem.
+	 */
+	filename: string | null;
 	status: MediaStatus;
 	createdAt: number;
 };
@@ -202,9 +230,13 @@ export type AckState = 'thinking' | 'read' | 'done';
 
 export type Acknowledgement = Keyed & {
 	agentId: string;
-	/** Exactly one of these two is set. */
+	/** The card it is on — any of the four, since migration 034. */
+	card: CardRef;
+	/** Exactly one of these four is set; `card` is the same fact, named once. */
 	messageId: string | null;
 	taskId: string | null;
+	updateId: string | null;
+	requestId: string | null;
 	state: AckState;
 	/** When the agent first said anything about this. */
 	createdAt: number;
@@ -232,6 +264,10 @@ export type Task = Keyed & {
 	 * a task that merely happens to have no assignee.
 	 */
 	broadcastAt: number | null;
+	/** Kept at the top of its column by the owner (migration 034). */
+	pinned: boolean;
+	/** When its words were last corrected (migration 034). */
+	editedAt: number | null;
 };
 
 export type Message = Keyed & {
@@ -252,6 +288,36 @@ export type Message = Keyed & {
 	 * two conversations running through it can be read.
 	 */
 	answers: string | null;
+	/**
+	 * The request whose discussion this belongs to (migration 032).
+	 *
+	 * A thread on a question the owner has not answered yet: "why do you want to
+	 * do that?" before the button is pressed. Its own anchor because a request
+	 * often hangs off no card at all.
+	 */
+	requestId: string | null;
+	/**
+	 * When the author last corrected it, or `null` if nobody has (migration 033).
+	 *
+	 * Stated rather than silent, exactly as `updates.editedAt` is: a reader who
+	 * saw the line earlier has to be able to tell it has changed.
+	 */
+	editedAt: number | null;
+	/** Kept at the top of the feed by the owner (migration 034). */
+	pinned: boolean;
+	/**
+	 * Where the work on this card has got to (migration 035).
+	 *
+	 * `null` for an ordinary card. Marking one is what the task board used to be.
+	 */
+	status: CardStatus | null;
+	/**
+	 * When that state last changed (migration 037).
+	 *
+	 * What brings a card that moved back to the top of the feed. `null` for one
+	 * nobody has marked since the column existed.
+	 */
+	statusAt: number | null;
 	/** Either the literal `human` or `agent:<agent_id>` (design §3). */
 	author: string;
 	body: string;
@@ -320,7 +386,15 @@ export type Notification = Keyed & {
  * `messages.author` uses: the owner is not a row (design §1, §3).
  */
 export type Reaction = Keyed & {
-	messageId: string;
+	/** The card it is on — any of the four, since migration 034. */
+	card: CardRef;
+	/**
+	 * The message it is on, or `null` for a reaction on another kind of card.
+	 *
+	 * Kept beside `card` because a thread is where most reactions live and the
+	 * readers that render one ask this question and no other.
+	 */
+	messageId: string | null;
 	actor: string;
 	emoji: string;
 	createdAt: number;
@@ -333,7 +407,15 @@ export type ReadCursor = Keyed & {
 	lastSeenMessageSeq: number;
 };
 
-export type ApprovalState = 'pending' | 'approved' | 'rejected' | 'timeout' | 'cancelled';
+/**
+ * How a request ended, as the row stores it.
+ *
+ * `cancelled` is the owner declining to answer; `withdrawn` is the asking agent
+ * taking the question back because it stopped mattering (migration 031). Two
+ * different facts about who ended it and why, worth telling apart in history.
+ */
+export type ApprovalState =
+	'pending' | 'approved' | 'rejected' | 'timeout' | 'cancelled' | 'withdrawn';
 
 /** The shapes an owner request can take (design §5). */
 export type RequestKind = 'text' | 'confirm' | 'buttons' | 'choice' | 'multi_choice' | 'form';
@@ -375,6 +457,11 @@ export type RequestConfig = {
 	max?: number;
 	/** `form`: what to call the editable field, e.g. "Message". */
 	label?: string;
+	/**
+	 * Picture questions: the image shown on an option, by option. Each id is one
+	 * of the request's own media, attached with it.
+	 */
+	optionMedia?: Record<string, string>;
 };
 
 export type Approval = Keyed & {
@@ -417,4 +504,164 @@ export type Approval = Keyed & {
 	decidedValue: string | null;
 	/** The structured answer, and the only complete record of one. */
 	answer: RequestAnswer | null;
+	/**
+	 * When the asking agent last corrected the question (migration 033).
+	 *
+	 * `null` for one nobody has touched, and shown on the card either way: an
+	 * owner half way through deciding has to be able to tell that the question
+	 * moved under them.
+	 */
+	editedAt: number | null;
+	/** Kept at the top of the feed by the owner (migration 034). */
+	pinned: boolean;
+};
+
+/**
+ * One registered look (migration 027).
+ *
+ * `spec` is JSON text and stays that way through this layer: what a legal spec
+ * is belongs with the renderer's answer to the same question, in
+ * `$domain/embeds.ts`.
+ */
+export type EmbedType = Keyed & {
+	/** What an agent names to use it. Stable, lowercase, unique. */
+	slug: string;
+	name: string;
+	/** Who registered it, or `null` for one this deployment ships. */
+	agentId: string | null;
+	/** The blocks and palette, as JSON text. Never markup. */
+	spec: string;
+	createdAt: number;
+	updatedAt: number;
+};
+
+/** One thing being shown in a registered look (migration 027). */
+export type Embed = Keyed & {
+	typeId: string;
+	/**
+	 * Which card this is on: exactly one of the four is set (migration 030).
+	 *
+	 * An update, a message, an approval or a task — every card type carries the
+	 * same things, which is what the owner asked for and what there was never a
+	 * reason not to have.
+	 */
+	updateId: string | null;
+	messageId: string | null;
+	requestId: string | null;
+	taskId: string | null;
+	agentId: string | null;
+	/** `human` or `agent:<agent_id>`, as messages use. */
+	author: string;
+	/** The values it shows, as a flat JSON object of strings. */
+	data: string;
+	/** Where it was copied from, if the poster said. */
+	sourceUrl: string | null;
+	createdAt: number;
+};
+
+/**
+ * A word a project decided for itself (migration 039).
+ *
+ * The owner: "allow users and agents to define tags for a project, ie 'feature,
+ * bug, high priority' etc." Defined once, then offered as a button on every
+ * card in that project.
+ */
+export type Tag = Keyed & {
+	projectId: string;
+	/** The word as it is written on a card. */
+	name: string;
+	/** The same word normalised, which is what "already defined" is judged on. */
+	slug: string;
+	/** A palette name ('rose', 'amber', …), or `null` for the default. */
+	colour: string | null;
+	/** The agent that defined it, or `null` for the owner. */
+	agentId: string | null;
+	createdAt: number;
+};
+
+/** One of a project's tags, on one card (migration 039). */
+export type CardTag = Keyed & {
+	tagId: string;
+	/** The card it is on — any kind, the generic way (migration 034). */
+	card: CardRef;
+	/** Who put it there: the literal `human`, or `agent:<agent_id>`. */
+	author: string;
+	createdAt: number;
+};
+
+/**
+ * A note pinned to a card (migration 040).
+ *
+ * The owner: "allow agents to set metadata on cards, for example, branch name,
+ * PR link, anything they like." One row per name per card, so two agents writing
+ * different fields cannot lose each other's work, and each one records who set
+ * it and when.
+ */
+export type CardField = Keyed & {
+	/** The card it is on — any kind, the generic way (migration 034). */
+	card: CardRef;
+	/** What it is called, as it is shown. */
+	name: string;
+	/** The same, normalised: what "already set" is judged on. */
+	slug: string;
+	/** What it says. Text, always: this is a note, not a type system. */
+	value: string;
+	/** Who set it last: the literal `human`, or `agent:<agent_id>`. */
+	author: string;
+	createdAt: number;
+	/** When it was last corrected, which is a different fact from when it began. */
+	updatedAt: number;
+};
+
+/**
+ * Interactive UI an agent supplies (migration 041).
+ *
+ * The owner: "I want apps to be able to embed UI directly into the dashboard."
+ * Registered once by its `ui://` URI and shown as often as the agent likes, in
+ * the shape MCP Apps (SEP-1865) gives it.
+ */
+export type App = Keyed & {
+	/** The spec's own handle, e.g. `ui://review-board`. */
+	uri: string;
+	name: string;
+	description: string | null;
+	/** Who registered it, or `null` for one this deployment ships. */
+	agentId: string | null;
+	/** The document, served into a sandboxed frame and never into the page. */
+	html: string;
+	/**
+	 * The page to frame instead, for an app that lives somewhere else (042).
+	 *
+	 * `null` for one this deployment serves. Exactly one of `html` and `url` is
+	 * meaningful, which the domain enforces.
+	 */
+	url: string | null;
+	/** The origins it declared, as JSON: `{ connect, resource, frame }`. */
+	csp: string;
+	createdAt: number;
+	updatedAt: number;
+};
+
+/**
+ * One showing of one app, on one card (migration 041).
+ *
+ * `data` is what the agent handed it; `state` is what the app itself has saved
+ * since. Two directions, two columns: an agent re-sending its data must not
+ * wipe out the half-filled form in front of the owner.
+ */
+export type AppView = Keyed & {
+	appId: string;
+	/** The card it is on — any kind, the generic way (migration 034). */
+	card: CardRef;
+	agentId: string | null;
+	/** Who put it there: the literal `human`, or `agent:<agent_id>`. */
+	author: string;
+	/** What the agent sent it, as JSON text. */
+	data: string;
+	/** What the app saved for itself, as JSON text, or `null` if it never has. */
+	state: string | null;
+	/** A line above the frame, so a collapsed app still says what it is. */
+	title: string | null;
+	createdAt: number;
+	updatedAt: number;
 };

@@ -12,6 +12,7 @@
  * hide exactly the bugs these tests exist to catch.
  */
 import type {
+	EmbedView,
 	AckView,
 	DeliveryView,
 	ReactionView,
@@ -22,8 +23,9 @@ import type {
 	RequestView,
 	RequestsSnapshot,
 	SnapshotResponse,
-	TaskView,
-	TasksSnapshot,
+	CardFieldView,
+	CardTagView,
+	TagView,
 	UpdateView
 } from './types';
 import type { OwnerActions } from './actions';
@@ -71,16 +73,62 @@ export function anUpdate(overrides: Partial<UpdateView> = {}): UpdateView {
  * placeholder or a failure has to say so — which is the right way round, because
  * those two are the states most easily faked by never testing them.
  */
+/** A project's own word (migration 039), for a spec that needs one. */
+export function aTag(overrides: Partial<TagView> = {}): TagView {
+	return {
+		id: 't1',
+		projectId: 'p1',
+		name: 'Bug',
+		slug: 'bug',
+		colour: null,
+		agentId: null,
+		createdAt: Date.UTC(2026, 8, 24, 9),
+		...overrides
+	};
+}
+
+/** A note pinned to a card (migration 040), for a spec that needs one. */
+export function aCardField(overrides: Partial<CardFieldView> = {}): CardFieldView {
+	return {
+		id: 'f1',
+		card: { kind: 'update', id: 'u1' },
+		name: 'branch',
+		slug: 'branch',
+		value: 'fix/fees',
+		author: 'agent:a1',
+		createdAt: Date.UTC(2026, 8, 24, 9),
+		updatedAt: Date.UTC(2026, 8, 24, 9),
+		...overrides
+	};
+}
+
+/** One of those words, on one card. */
+export function aCardTag(overrides: Partial<CardTagView> = {}): CardTagView {
+	return {
+		id: 'ct1',
+		tagId: 't1',
+		card: { kind: 'update', id: 'u1' },
+		author: 'human',
+		createdAt: Date.UTC(2026, 8, 24, 9),
+		...overrides
+	};
+}
+
 export function aMedia(overrides: Partial<MediaView> = {}): MediaView {
 	return {
 		id: 'm1',
 		updateId: 'u1',
+		messageId: null,
+		requestId: null,
+		taskId: null,
 		kind: 'image',
 		mime: 'image/png',
 		status: 'ready',
+		bytes: 24_000,
 		width: 1200,
 		height: 800,
 		durationMs: null,
+		filename: null,
 		variants: ['original', 'thumb-640', 'thumb-1600'],
 		...overrides
 	};
@@ -286,36 +334,24 @@ export function fakeActions(): {
 			setUpdatePinned: (id, pinned) =>
 				record('setUpdatePinned', [id, pinned], anUpdate({ id, pinned })),
 			deleteUpdate: (id) => record('deleteUpdate', [id], anUpdate({ id, deletedAt: 1 })),
-			createTask: (input) =>
-				record(
-					'createTask',
-					[input],
-					aTask({
-						id: 'new',
-						title: input.title,
-						agentId: input.agentId ?? null,
-						// The server stamps a broadcast as it inserts; the double reports
-						// the row the same way rather than dropping the field.
-						broadcastAt: input.broadcast ? 1 : null
-					})
-				),
-			patchTask: (id, patch) => {
-				// `broadcast` is a verb, not a column: the row answers with the stamp
-				// the server wrote, so the double translates it the same way.
-				const { broadcast, ...fields } = patch;
-				return record(
-					'patchTask',
-					[id, patch],
-					aTask({
-						id,
-						...fields,
-						...(broadcast === undefined ? {} : { broadcastAt: broadcast ? 1 : null })
-					})
-				);
+			setCardStatus: async (kind, id, status) => {
+				await record('setCardStatus', [kind, id, status], undefined as never);
 			},
-			markProjectSeen: (reference) =>
-				record('markProjectSeen', [reference], aProject({ slug: reference })),
-			markRepliesSeen: (id) => record('markRepliesSeen', [id], anUpdate({ id, repliesSeenAt: 1 })),
+			setCardField: async (kind, id, name, value) => {
+				await record('setCardField', [kind, id, name, value], undefined as never);
+			},
+			saveAppState: async (viewId, state) => {
+				await record('saveAppState', [viewId, state], undefined as never);
+			},
+			tagCard: async (kind, id, tag, on, create) => {
+				await record('tagCard', [kind, id, tag, on, create], undefined as never);
+			},
+			defineTag: (project, name, colour) =>
+				record('defineTag', [project, name, colour], aTag({ name, colour: colour ?? null })),
+			renameTag: (id, patch) => record('renameTag', [id, patch], aTag({ id, ...patch })),
+			retireTag: async (id) => {
+				await record('retireTag', [id], undefined as never);
+			},
 			renameAgent: (id, name) => record('renameAgent', [id, name], { id, name }),
 			uploadMedia: (file) =>
 				record('uploadMedia', [file.name], aMedia({ id: `m-${file.name}`, status: 'ready' })),
@@ -326,6 +362,15 @@ export function fakeActions(): {
 					aMessage({ id: 'new', body: input.body, updateId: input.update ?? null })
 				),
 			deleteMessage: (id) => record('deleteMessage', [id], aMessage({ id })),
+			pinCard: async (kind, id, pinned) => {
+				await record('pinCard', [kind, id, pinned], undefined as never);
+			},
+			reactToCard: (kind, id, emoji, on) =>
+				record(
+					'reactToCard',
+					[kind, id, emoji, on],
+					[aReaction({ card: { kind, id }, messageId: kind === 'message' ? id : null, emoji })]
+				),
 			react: (id, emoji, on) =>
 				record('react', [id, emoji, on], [aReaction({ messageId: id, emoji, actor: 'human' })]),
 			answerRequest: (id, value) =>
@@ -491,82 +536,6 @@ export function fakeAgentsApi(initial: { seq?: number; agents?: LiveAgentView[] 
 	};
 }
 
-/** A task row with sensible defaults: on the queue, unassigned. */
-export function aTask(overrides: Partial<TaskView> = {}): TaskView {
-	return {
-		id: 't1',
-		seq: 1,
-		projectId: 'p1',
-		agentId: null,
-		title: 'Ship the task list',
-		body: 'todo, claimed, done. No drag and drop.',
-		state: 'todo',
-		createdAt: Date.UTC(2026, 7, 25, 9, 30),
-		claimedAt: null,
-		doneAt: null,
-		result: null,
-		broadcastAt: null,
-		...overrides
-	};
-}
-
-/**
- * A fake `GET /api/snapshot/tasks` plus the scheduling hook the task store
- * coalesces through.
- *
- * Like the presence double and unlike the timeline's, the answer is wholesale:
- * the endpoint sends the list as it stands, so a test says what the server now
- * holds rather than publishing a delta.
- */
-export function fakeTasksApi(initial: { seq?: number; tasks?: TaskView[]; acks?: AckView[] } = {}) {
-	let seq = initial.seq ?? 1;
-	let tasks = initial.tasks ?? [];
-	const acks = initial.acks ?? [];
-	const calls: string[] = [];
-	const queue: (() => void)[] = [];
-	let status = 200;
-
-	return {
-		calls,
-		queue,
-
-		snapshot(): TasksSnapshot {
-			return { seq, at: new Date().toISOString(), tasks, acks };
-		},
-
-		/** The server's answer is now this, at this stream cursor. */
-		replace(next: TaskView[], nextSeq = seq + 1): void {
-			tasks = next;
-			seq = nextSeq;
-		},
-
-		/** Make the next reads fail the way a dropped session or a restart would. */
-		breaks(nextStatus = 500): void {
-			status = nextStatus;
-		},
-
-		fetch(url: string): Promise<Response> {
-			calls.push(url);
-			if (status !== 200) return Promise.resolve(new Response('no', { status }));
-			return Promise.resolve(
-				new Response(JSON.stringify({ seq, at: new Date().toISOString(), tasks, acks }), {
-					status: 200,
-					headers: { 'content-type': 'application/json' }
-				})
-			);
-		},
-
-		/** Run every coalesced refetch and let its promises settle. */
-		async settle(): Promise<void> {
-			for (let pass = 0; pass < 5; pass += 1) {
-				while (queue.length > 0) queue.shift()!();
-				await Promise.resolve();
-				await new Promise((resolve) => setTimeout(resolve, 0));
-			}
-		}
-	};
-}
-
 /**
  * An acknowledgement with sensible defaults: an agent saying it is on the
  * default message (migration 013).
@@ -576,11 +545,44 @@ export function anAck(overrides: Partial<AckView> = {}): AckView {
 		id: 'ack1',
 		seq: 1,
 		agentId: 'a1',
+		card: { kind: 'message', id: 'msg1' },
 		messageId: 'msg1',
 		taskId: null,
 		state: 'thinking',
+		// Just now, not a date in the fixtures' past: a `thinking` expires
+		// (`./acks.ts`), so a stale default would make every spec that renders one
+		// through a real component silently assert the wrong thing. A spec about
+		// staleness says so by overriding these.
+		createdAt: Date.now(),
+		updatedAt: Date.now(),
+		...overrides
+	};
+}
+
+/**
+ * An embed with sensible defaults: a Slack message, in the built-in look.
+ *
+ * Enough of a spec to draw — a look with no blocks draws nothing, which would
+ * make every assertion about "is it on the card" pass for the wrong reason.
+ */
+export function anEmbed(overrides: Partial<EmbedView> = {}): EmbedView {
+	return {
+		id: 'e1',
+		updateId: 'u1',
+		messageId: null,
+		requestId: null,
+		taskId: null,
+		type: 'slack-message',
+		typeName: 'Slack message',
+		spec: {
+			theme: { accent: '#611f69' },
+			chrome: { mark: 'slack' },
+			frame: {},
+			blocks: [{ type: 'header', title: '{{username}}', layout: 'inline' }]
+		},
+		data: { username: 'sam' },
+		sourceUrl: null,
 		createdAt: Date.UTC(2026, 7, 25, 11, 1),
-		updatedAt: Date.UTC(2026, 7, 25, 11, 1),
 		...overrides
 	};
 }
@@ -590,6 +592,7 @@ export function aReaction(overrides: Partial<ReactionView> = {}): ReactionView {
 	return {
 		id: 'r1',
 		seq: 1,
+		card: { kind: 'message', id: 'msg1' },
 		messageId: 'msg1',
 		actor: 'human',
 		emoji: '\u{1f440}',
@@ -688,6 +691,33 @@ export function fakeMessagesApi(
 				await Promise.resolve();
 				await new Promise((resolve) => setTimeout(resolve, 0));
 			}
+		}
+	};
+}
+
+/**
+ * Pretend the page is inside the iPhone app: what it hands the app's message
+ * bar is recorded, and `type` plays the owner writing in that bar and pressing
+ * send. `leave` puts the plain browser back.
+ */
+export function insideTheApp() {
+	const handed: { id: string; label: string; draft: string }[] = [];
+	window.webkit = {
+		messageHandlers: {
+			agentsComposer: {
+				postMessage: (message) => handed.push(message as (typeof handed)[number])
+			}
+		}
+	};
+	return {
+		handed,
+		type: (text: string) => {
+			const last = handed.at(-1);
+			if (!last || !window.agentsComposer) throw new Error('nothing was handed to the app');
+			return window.agentsComposer.send(last.id, text);
+		},
+		leave: () => {
+			delete window.webkit;
 		}
 	};
 }

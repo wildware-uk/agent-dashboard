@@ -11,26 +11,46 @@ never learn where a file lives on disk.
 This is the highest-risk surface in the product: it is the one place a process on
 somebody else's machine writes a file on this one.
 
-| File          | Does                                                                      |
-| ------------- | ------------------------------------------------------------------------- |
-| `mime.ts`     | The allowlist, the kind and extension for each type, magic-byte sniffing. |
-| `tokens.ts`   | HMAC sign/verify, the 15 minute TTL, the absolute upload URL.             |
-| `paths.ts`    | The disk layout. Internal — nothing here is re-exported.                  |
-| `upload.ts`   | `create_upload`: validate the claim, reserve a row, mint the token.       |
-| `ingest.ts`   | The PUT: stream, cap, sniff, hash, dedup, place.                          |
-| `serve.ts`    | `/media/:id/:variant`: which file, which type, as a stream.               |
-| `queue.ts`    | The in-process job queue: two at a time, and a failure is a value.        |
-| `ffmpeg.ts`   | The `ffmpeg` / `ffprobe` wrappers, and what counts as web-playable.       |
-| `derive.ts`   | One media item: thumbnails, poster, transcode, status, `media.ready`.     |
-| `pipeline.ts` | Which media gets derived and when: the backlog pass and the worker.       |
-| `sweeper.ts`  | Garbage-collect media nothing points at.                                  |
-| `errors.ts`   | `MediaError` — codes that survive as 403 / 413 / 415 at the route.        |
+| File          | Does                                                                            |
+| ------------- | ------------------------------------------------------------------------------- |
+| `mime.ts`     | The renderable allowlist, the kind and extension per type, magic-byte sniffing. |
+| `tokens.ts`   | HMAC sign/verify, the 15 minute TTL, the absolute upload URL.                   |
+| `paths.ts`    | The disk layout. Internal — nothing here is re-exported.                        |
+| `upload.ts`   | `create_upload`: validate the claim, reserve a row, mint the token.             |
+| `ingest.ts`   | The PUT: stream, cap, sniff, hash, dedup, place.                                |
+| `serve.ts`    | `/media/:id/:variant`: which file, which type, as a stream.                     |
+| `queue.ts`    | The in-process job queue: two at a time, and a failure is a value.              |
+| `ffmpeg.ts`   | The `ffmpeg` / `ffprobe` wrappers, and what counts as web-playable.             |
+| `derive.ts`   | One media item: thumbnails, poster, transcode, status, `media.ready`.           |
+| `pipeline.ts` | Which media gets derived and when: the backlog pass and the worker.             |
+| `sweeper.ts`  | Garbage-collect media nothing points at.                                        |
+| `errors.ts`   | `MediaError` — codes that survive as 403 / 413 / 415 at the route.              |
 
 Notes carried from the design (§6):
 
-- Mime allowlist only: png, jpeg, webp, gif, mp4, webm, quicktime. **SVG is
-  rejected** — it is a script-execution vector. It is not "not implemented yet";
-  `index.test.ts` asserts it stays out.
+- **Two classes of upload** (migration 026). The types the dashboard _renders_ —
+  png, jpeg, webp, gif, mp4, webm, quicktime, and mp3, m4a, ogg, wav since
+  migration 038 — are an allowlist, and the bytes must really be what they
+  claim. Everything else is stored as kind
+  `file`: not sniffed, never rendered, served as `application/octet-stream` with
+  `Content-Disposition: attachment`. That is what lets an agent be sent a log or
+  a PDF without letting one be sent an HTML page on this origin.
+- **Sound is its own kind** (migration 038), because it is served inline and
+  played on the card rather than downloaded. Nothing is derived from it: every
+  container on the list is one a browser plays as it stands, so the pipeline only
+  probes how long it is. A sniffer answers `audio/x-m4a` for an `.m4a` and
+  `audio/ogg; codecs=opus` for an Opus file; `canonicalMime` resolves those to
+  the allowlist's spelling and can only ever narrow to a type already on it.
+- **SVG is still never rendered** — it is a script-execution vector. It may be
+  uploaded as a `file`, which always downloads. It is not "not implemented yet";
+  `index.test.ts` asserts it stays off the renderable allowlist.
+- A `file` carries the name it was uploaded with, and that is the only place a
+  caller's string is kept. It is data on a card and a `Content-Disposition`
+  value; it never reaches a path — every file on disk is
+  `original.<extension from the type>`, and every `file` shares the one
+  extension `bin`.
+- A `file` derives nothing and is `ready` the moment its bytes land: there is no
+  thumbnail for a zip, and `ready` is the status the rest of the product reads.
 - Single-use HMAC upload tokens, 15 minute TTL. The signature stops an id being
   guessed; **single use is enforced by the database** (`consumeUploadToken` is
   one conditional UPDATE), because a signature cannot express "already spent".

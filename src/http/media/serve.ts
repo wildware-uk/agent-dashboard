@@ -7,8 +7,14 @@
  * - **`X-Content-Type-Options: nosniff`** — the emitted `Content-Type` comes from
  *   bytes that were sniffed at ingest, and this stops a browser second-guessing
  *   it and executing something.
- * - **`Content-Disposition: inline`** — the dashboard renders media in place; a
- *   download prompt for an agent's screenshot is not the product.
+ * - **`Content-Disposition`** — `inline` for the media the dashboard renders,
+ *   because a download prompt for an agent's screenshot is not the product; and
+ *   `attachment` for a `file` (migration 026), which together with the
+ *   `application/octet-stream` `$media` emits for one is what keeps "any file
+ *   may be uploaded" from meaning "any HTML runs on the dashboard's origin".
+ *   The saved name is the uploader's text, so it is **encoded into the header**
+ *   — quoted with the awkward characters removed, plus an RFC 5987 `filename*`
+ *   for anything not ASCII — never concatenated into it.
  * - **`Cache-Control: public, max-age=31536000, immutable`** — an address
  *   `/media/:id/:variant` always answers with the same bytes, so it can be
  *   cached forever. `ETag` is derived from the sha256, and a matching
@@ -117,7 +123,7 @@ export function createMediaHandler(options: MediaHandlerOptions = {}): MediaHand
 			'content-length': String(file.bytes),
 			'cache-control': IMMUTABLE_CACHE_CONTROL,
 			'x-content-type-options': 'nosniff',
-			'content-disposition': 'inline',
+			'content-disposition': disposition(file.disposition, file.filename),
 			'content-security-policy': "default-src 'none'; sandbox",
 			// Seeking a video is a byte range. Answering `none` here is what made the
 			// scrub bar snap back to zero: the player asks for a window near the
@@ -150,6 +156,27 @@ export function createMediaHandler(options: MediaHandlerOptions = {}): MediaHand
 
 		return new Response(file.open(), { status: 200, headers });
 	};
+}
+
+/**
+ * The `Content-Disposition` header for one file.
+ *
+ * Two forms, as RFC 6266 recommends: a quoted `filename` every client
+ * understands, reduced to the ASCII a header may carry, and a `filename*` in
+ * RFC 5987 form carrying the real name for those that do. Neither is
+ * concatenation — the quoted form has its quotes, backslashes and control
+ * characters removed, and the encoded form is percent-encoded — because the name
+ * is text somebody else chose and a header is a place a newline in it would do
+ * real damage.
+ */
+export function disposition(kind: 'inline' | 'attachment', filename: string | null): string {
+	if (kind === 'inline') return 'inline';
+	if (!filename) return 'attachment';
+
+	const ascii = filename.replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '_');
+	const encoded = encodeURIComponent(filename);
+
+	return `attachment; filename="${ascii}"; filename*=UTF-8''${encoded}`;
 }
 
 /**

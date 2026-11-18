@@ -4,12 +4,9 @@ import {
 	createProject,
 	findProject,
 	listProjects,
-	markProjectSeen,
 	resolveProject,
-	unseenUpdateCounts,
 	updateProject
 } from './projects';
-import { postUpdate } from './updates';
 import { DomainError } from './errors';
 import { FIXED_NOW, harness, type Harness } from './testing';
 
@@ -480,52 +477,5 @@ describe('the board', () => {
 		expect(board({ columns: [{ title: 'Only', states: ['done'] }] }).board?.columns).toHaveLength(
 			1
 		);
-	});
-});
-
-describe('markProjectSeen', () => {
-	it('stamps the project and tells every open tab, so a badge cannot clear in one window only', () => {
-		const { project } = createProject(h, { name: 'Agent Dashboard' });
-
-		const seen = markProjectSeen(h, project.slug);
-
-		expect(seen.ownerSeenAt).toBe(FIXED_NOW);
-		expect(h.eventNames()).toContain('project.updated');
-	});
-
-	it('does not bump updated_at: reading a project is not editing it', () => {
-		const { project } = createProject(h, { name: 'Agent Dashboard' });
-
-		expect(markProjectSeen(h, project.slug).updatedAt).toBe(project.updatedAt);
-	});
-
-	it('takes a slug or an id, like everything else that names a project', () => {
-		const { project } = createProject(h, { name: 'Agent Dashboard' });
-
-		expect(markProjectSeen(h, project.id).id).toBe(project.id);
-	});
-
-	it('says which project it could not find', () => {
-		expect(() => markProjectSeen(h, 'nope')).toThrow(DomainError);
-	});
-});
-
-describe('unseenUpdateCounts', () => {
-	it('counts what has landed since the owner last looked, per project', () => {
-		const { project } = createProject(h, { name: 'Agent Dashboard' });
-		const agentId = h.agent('scout');
-		postUpdate(h, { project: project.slug, agentId, body: 'one' });
-
-		expect(unseenUpdateCounts(h)).toEqual({ [project.id]: 1 });
-
-		markProjectSeen(h, project.slug);
-
-		expect(unseenUpdateCounts(h)).toEqual({});
-	});
-
-	it('leaves a caught-up project out rather than reporting a zero nobody should badge', () => {
-		createProject(h, { name: 'Quiet' });
-
-		expect(unseenUpdateCounts(h)).toEqual({});
 	});
 });

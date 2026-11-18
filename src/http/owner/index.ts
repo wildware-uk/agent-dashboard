@@ -15,9 +15,11 @@
  * | `POST /api/projects`             | Create a project. Idempotent on slug.       |
  * | `PATCH /api/projects/[reference]`| Rename, re-describe, pin, archive.          |
  * | `PATCH /api/updates/[id]`        | Pin or unpin one update.                    |
+ * | `POST /api/cards/[kind]/[id]/pin`| Pin or unpin any card (migration 034).      |
+ * | `POST /api/cards/[kind]/[id]/status` | Mark a card as work, or move it (035).  |
+ * | `POST /api/cards/[kind]/[id]/reactions` | React to any card.                   |
+ * | `POST /api/apps/[view]/state`    | Keep what an app saved for itself (041).    |
  * | `DELETE /api/updates/[id]`       | Soft delete one update.                     |
- * | `POST /api/tasks`                | Create a task, optionally assigned.         |
- * | `PATCH /api/tasks/[id]`          | Reassign one task, or cancel it.            |
  * | `GET /api/messages`              | One thread, or every thread in a project.   |
  * | `POST /api/messages`             | Reply as the owner: the literal `human`.    |
  * | `POST /api/requests/[id]/answer` | Answer an agent's request. Checked in `$domain`. |
@@ -28,6 +30,11 @@
  * | `POST /api/push`                 | Store this browser's push subscription.     |
  * | `PATCH /api/push`                | What one device is notified about.          |
  * | `DELETE /api/push`               | Forget it again. Idempotent.                |
+ * | `POST/GET /api/devices`          | Mint or list the owner's phones' keys.      |
+ * | `DELETE /api/devices/[id]`       | Revoke one phone's key.                     |
+ * | `PUT /api/devices/current/apns`  | The calling phone's alert token.            |
+ * | `PUT /api/devices/current/live-activity` | Its Live Activity tokens.           |
+ * | `GET /api/summary`               | The dashboard in one read, for widgets.     |
  *
  * All of them require the owner's session and answer `401 {"error":"unauthenticated"}`
  * without it. Every success publishes exactly one event, so a second open tab
@@ -35,24 +42,38 @@
  */
 export {
 	createProjectHandler,
-	createTaskHandler,
 	deleteUpdateHandler,
-	markProjectSeenHandler,
-	markRepliesSeenHandler,
 	patchProjectHandler,
-	patchTaskHandler,
 	patchUpdateHandler,
 	readAgentPatch,
 	renameAgentHandler,
 	readCreateProject,
-	readCreateTask,
 	readProjectPatch,
-	readTaskPatch,
 	readUpdatePatch
 } from './actions';
-export type { OwnerActionEvent, OwnerHandler, OwnerHandlerOptions, TaskPatch } from './actions';
+export type { OwnerActionEvent, OwnerHandler, OwnerHandlerOptions } from './actions';
+export {
+	pinCardHandler,
+	reactToCardHandler,
+	setCardFieldHandler,
+	setCardStatusHandler,
+	tagCardHandler
+} from './cards';
+export { defineTagHandler, listTagsHandler, renameTagHandler, retireTagHandler } from './tags';
+export { saveAppStateHandler } from './apps';
 export { FILENAME_PARAM, uploadMediaHandler } from './media';
 export { answerRequestHandler, dismissRequestHandler } from './requests';
+export {
+	createDeviceHandler,
+	signInDeviceHandler,
+	deleteDeviceHandler,
+	listDevicesHandler,
+	setAlertProjectsHandler,
+	setApnsTokenHandler,
+	setLiveActivityHandler,
+	summaryHandler
+} from './devices';
+export type { DeviceHandlerOptions } from './devices';
 export {
 	revokeShareHandler,
 	shareUpdateHandler,

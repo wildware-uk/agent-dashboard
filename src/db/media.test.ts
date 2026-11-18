@@ -1,11 +1,14 @@
 import { beforeEach, describe, expect, it } from 'vitest';
+import { insertEmbed, upsertEmbedType } from './embeds';
 import { freshDatabase, type Db } from './testing';
 import { insertAgent } from './agents';
 import { insertProject, updateProject } from './projects';
 import { insertUpdate } from './updates';
+import { insertApproval } from './approvals';
 import { insertMessage } from './messages';
 import {
 	attachMediaToMessage,
+	attachMediaToRequest,
 	attachMediaToUpdate,
 	deleteMedia,
 	findMediaById,
@@ -57,8 +60,14 @@ describe('insertMedia', () => {
 		});
 	});
 
-	it('rejects a kind outside image or video', () => {
-		expect(() => upload({ kind: 'audio' as 'image' })).toThrow(/CHECK/);
+	it('rejects a kind the schema does not name', () => {
+		// `audio` joined the list in migration 038, so the refusal is demonstrated
+		// with something that is still not a kind.
+		expect(() => upload({ kind: 'hologram' as 'image' })).toThrow(/CHECK/);
+	});
+
+	it('stores sound, which is its own kind (migration 038)', () => {
+		expect(upload({ kind: 'audio', mime: 'audio/mpeg' }).kind).toBe('audio');
 	});
 });
 
@@ -281,6 +290,71 @@ describe('listOrphanedMedia and project logos', () => {
 		const swept = listOrphanedMedia(db, { createdBefore: Date.now() }).map((row) => row.id);
 
 		expect(swept).not.toContain('logo');
+	});
+
+	it('leaves an embed`s avatar alone, however old it is', () => {
+		// The bug the owner saw a day after embeds shipped: an avatar is attached to
+		// no update and no message — an embed names it inside its own values — so
+		// the sweeper collected it and every Slack card lost its face.
+		orphanable('avatar');
+		const type = upsertEmbedType(db, {
+			slug: 'slack-ish',
+			name: 'Slack-ish',
+			agentId: null,
+			spec: '{"blocks":[]}'
+		});
+		insertEmbed(db, {
+			typeId: type.id,
+			author: 'human',
+			data: JSON.stringify({ username: 'sam', avatar: 'avatar' })
+		});
+
+		const swept = listOrphanedMedia(db, { createdBefore: Date.now() }).map((row) => row.id);
+
+		expect(swept).not.toContain('avatar');
+	});
+
+	it('leaves one alone that an embed names inside a list', () => {
+		// A look reads values by name and a value may be a list, so there is no
+		// fixed path to ask for — which is why the query walks the whole object.
+		orphanable('in-a-list');
+		const type = upsertEmbedType(db, {
+			slug: 'gallery',
+			name: 'Gallery',
+			agentId: null,
+			spec: '{"blocks":[]}'
+		});
+		insertEmbed(db, {
+			typeId: type.id,
+			author: 'human',
+			data: JSON.stringify({ shots: ['in-a-list', 'another'] })
+		});
+
+		const swept = listOrphanedMedia(db, { createdBefore: Date.now() }).map((row) => row.id);
+
+		expect(swept).not.toContain('in-a-list');
+	});
+
+	it('leaves an approval`s attachments alone', () => {
+		// Migration 030 gave media two more ways to be spoken for. Forgetting them
+		// in the sweeper would delete the screenshot an approval was asking about,
+		// an hour after it was asked — which is exactly what happened to an embed's
+		// avatar the day embeds shipped.
+		orphanable('on-approval');
+		const project = insertProject(db, { slug: 'anchors', name: 'P' });
+		const agent = insertAgent(db, { name: 'asker', tokenHash: 'h' });
+		const approval = insertApproval(db, {
+			agentId: agent.id,
+			projectId: project.id,
+			kind: 'confirm',
+			question: 'ok?',
+			expiresAt: Date.now() + 60_000
+		});
+		attachMediaToRequest(db, { mediaIds: ['on-approval'], requestId: approval.id });
+
+		const swept = listOrphanedMedia(db, { createdBefore: Date.now() }).map((row) => row.id);
+
+		expect(swept).not.toContain('on-approval');
 	});
 
 	it('still collects media nothing points at', () => {

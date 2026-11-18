@@ -16,20 +16,50 @@
  * Like every snapshot it is stamped with the stream cursor it is good to, by the
  * shared handler in `./snapshot.ts`.
  */
-import { context, listPendingRequests, type DomainContext } from '$domain';
+import {
+	context,
+	listPendingRequests,
+	reactionsFor,
+	type Reaction,
+	listRequestEmbeds,
+	listRequestMedia,
+	type DomainContext,
+	type EmbedView,
+	type MediaAttachment
+} from '$domain';
 
 /**
- * The domain's own shape, named without importing `$db`.
+ * The domain's own shape, named without importing `$db`, plus what the card
+ * carries (migration 030).
  *
  * Recovered from the function's signature rather than re-declared, so the wire
- * format cannot drift from what the domain actually returns.
+ * format cannot drift from what the domain actually returns. `media` and
+ * `embeds` are always arrays for the same reason an update's are: a card that
+ * reads `media.length` should not have to guard.
  */
-export type SnapshotRequests = ReturnType<typeof listPendingRequests>;
+export type SnapshotRequest = ReturnType<typeof listPendingRequests>[number] & {
+	media: MediaAttachment[];
+	embeds: EmbedView[];
+	/** The emoji on the question itself (migration 034). */
+	reactions: Reaction[];
+};
+
+export type SnapshotRequests = SnapshotRequest[];
 
 /** Everything the banner renders, longest-blocked agent first. */
 export type RequestsSnapshot = { requests: SnapshotRequests };
 
 /** What is waiting on the owner right now. */
 export function readRequestsSnapshot(ctx: DomainContext = context()): RequestsSnapshot {
-	return { requests: listPendingRequests(ctx) };
+	// One read for the whole list, after the list is known — an approval's
+	// attachments are a property of the rows that came back, exactly as a card's
+	// are (`./snapshot.ts`).
+	return {
+		requests: listPendingRequests(ctx).map((request) => ({
+			...request,
+			media: listRequestMedia(ctx, request.id),
+			embeds: listRequestEmbeds(ctx, request.id),
+			reactions: reactionsFor(ctx, 'request', [request.id])
+		}))
+	};
 }

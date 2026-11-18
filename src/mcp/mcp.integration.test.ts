@@ -16,14 +16,7 @@ import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/
 import { getRequest, setResponse } from '@sveltejs/kit/node';
 import type { Handle, RequestEvent } from '@sveltejs/kit';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import {
-	answerRequest,
-	createTask,
-	listLiveAgents,
-	listTasks,
-	listUpdates,
-	postMessage
-} from '$domain';
+import { answerRequest, listLiveAgents, listUpdates, postMessage } from '$domain';
 import { createAuthHandle } from '$http/auth';
 import { createTokenRateLimiter, type TokenRateLimiter } from './rate-limit';
 import { createMcpHandler, MCP_SERVER_NAME } from './server';
@@ -146,24 +139,34 @@ describe('the transport', () => {
 			'acknowledge',
 			'attach_media',
 			'await_request',
-			'claim_task',
-			'complete_task',
 			'create_project',
-			'create_task',
 			'create_upload',
 			'delete_message',
+			'edit_message',
+			'edit_request',
 			'edit_update',
 			'end_session',
+			'get_card_fields',
 			'get_messages',
 			'heartbeat',
+			'list_apps',
+			'list_embed_types',
 			'list_projects',
-			'list_tasks',
+			'list_tags',
+			'list_work',
 			'post_message',
 			'post_update',
 			'react',
+			'register_app',
+			'register_embed_type',
 			'register_session',
 			'request_input',
-			'set_project_theme'
+			'set_app_data',
+			'set_card_field',
+			'set_project_theme',
+			'set_status',
+			'tag_card',
+			'withdraw_request'
 		]);
 
 		const post = tools.find((tool) => tool.name === 'post_update')!;
@@ -173,13 +176,14 @@ describe('the transport', () => {
 		// the documentation a client can render next to each field.
 		const properties = post.inputSchema.properties as Record<string, { description?: string }>;
 		expect(Object.keys(properties).sort()).toEqual([
+			'apps',
 			'body',
+			'embeds',
 			'level',
 			'media_ids',
 			'priority',
 			'project',
 			'session_id',
-			'task_id',
 			'title'
 		]);
 		for (const [name, schema] of Object.entries(properties)) {
@@ -401,97 +405,66 @@ describe('presence over the wire', () => {
 	});
 });
 
-describe('tasks over the wire', () => {
-	it('gives exactly one winner when two agents race for one task', async () => {
-		const client = await connect();
-		const rival = mcp.mint('rival');
-		const other = await connect(rival.token);
-		await call(client, 'create_project', { name: 'Agent Dashboard' });
-		const task = createTask(mcp.h, { project: 'agent-dashboard', title: 'The only task' });
-
-		// Both calls are in flight before either is answered: two sockets, two
-		// requests, one row.
-		const [mine, theirs] = await Promise.all([
-			call(client, 'claim_task', { task_id: task.id }),
-			call(other, 'claim_task', { task_id: task.id })
-		]);
-
-		const results = [mine, theirs];
-		const won = results.filter((result) => result.isError === undefined);
-		const lost = results.filter((result) => result.isError === true);
-		expect(won).toHaveLength(1);
-		expect(lost).toHaveLength(1);
-		expect(lost[0].structuredContent).toMatchObject({ error: 'conflict' });
-		expect(JSON.stringify(lost[0].structuredContent)).toContain('already claimed');
-		// One claimant in the database, and one `task.updated` on the bus.
-		expect(listTasks(mcp.h, { state: 'claimed' })).toHaveLength(1);
-		expect(mcp.h.eventNames().filter((name) => name === 'task.updated')).toEqual(['task.updated']);
-
-		await client.close();
-		await other.close();
-	});
-
-	it('lists, claims and completes with an update, and the counts follow', async () => {
+/**
+ * Work over the wire (migration 035).
+ *
+ * The board is gone: the owner asked for work to be a state a card is in, so
+ * what used to be five task tools is one `set_status` on a card that already
+ * exists.
+ */
+describe('work over the wire', () => {
+	it('marks a card as work, moves it along, and the heartbeat counts it', async () => {
 		const client = await connect();
 		await call(client, 'create_project', { name: 'Agent Dashboard' });
-		const task = createTask(mcp.h, {
-			project: 'agent-dashboard',
-			title: 'Ship tasks',
-			body: 'the brief',
-			agentId: mcp.deps.agent.id
-		});
-
-		const listed = await call(client, 'list_tasks', { mine: true, state: 'todo' });
-		expect(listed.structuredContent).toMatchObject({
-			count: 1,
-			tasks: [{ id: task.id, body: 'the brief', state: 'todo' }]
-		});
-
+		const posted = (
+			await call(client, 'post_update', {
+				project: 'agent-dashboard',
+				body: 'deploy the fee service'
+			})
+		).structuredContent as { update: { id: string } };
 		const { session_id } = (await call(client, 'register_session', {})).structuredContent as {
 			session_id: string;
 		};
-		// The heartbeat's `open_tasks` is the real count now (#10's seam, #11's fill).
-		expect(await call(client, 'heartbeat', { session_id })).toMatchObject({
-			structuredContent: { open_tasks: 1 }
+
+		const marked = await call(client, 'set_status', {
+			update_id: posted.update.id,
+			status: 'in_progress'
+		});
+		expect(marked.isError).toBeFalsy();
+		expect(marked.structuredContent).toMatchObject({ status: 'in_progress' });
+
+		// The count an agent reads out of a heartbeat: open work, not open tasks.
+		expect((await call(client, 'heartbeat', { session_id })).structuredContent).toMatchObject({
+			open_tasks: 1
 		});
 
-		await call(client, 'claim_task', { task_id: task.id });
-		const done = await call(client, 'complete_task', {
-			task_id: task.id,
-			result: 'shipped in 4 commits',
-			post_update: true
-		});
-
-		expect(done.structuredContent).toMatchObject({
-			task: { state: 'done', result: 'shipped in 4 commits' },
-			update: { level: 'success', agent_id: mcp.deps.agent.id }
-		});
-		const { updates } = listUpdates(mcp.h, { project: 'agent-dashboard' });
-		expect(updates).toHaveLength(1);
-		expect(updates[0].body).toBe('shipped in 4 commits');
-		// Nothing is open for this agent any more, so the next beat says so.
-		expect(await call(client, 'heartbeat', { session_id })).toMatchObject({
-			structuredContent: { open_tasks: 0 }
+		await call(client, 'set_status', { update_id: posted.update.id, status: 'done' });
+		expect((await call(client, 'heartbeat', { session_id })).structuredContent).toMatchObject({
+			open_tasks: 0
 		});
 
 		await client.close();
 	});
 
-	it('publishes the task tools through JSON Schema with every field described', async () => {
+	it('publishes set_status through JSON Schema with every field described', async () => {
 		const client = await connect();
 		const { tools } = await client.listTools();
 
-		const list = tools.find((tool) => tool.name === 'list_tasks')!;
-		const properties = list.inputSchema.properties as Record<string, { description?: string }>;
-		expect(Object.keys(properties).sort()).toEqual(['mine', 'project', 'state']);
+		const set = tools.find((tool) => tool.name === 'set_status')!;
+		const properties = set.inputSchema.properties as Record<string, { description?: string }>;
+		expect(Object.keys(properties).sort()).toEqual(['message_id', 'status', 'update_id']);
 		for (const [name, schema] of Object.entries(properties)) {
 			expect(schema.description, name).toBeTruthy();
 		}
-		expect(list.inputSchema.required).toBeUndefined();
+		expect(set.inputSchema.required).toEqual(['status']);
 
-		const complete = tools.find((tool) => tool.name === 'complete_task')!;
-		expect(complete.inputSchema.required).toEqual(['task_id', 'result']);
-		expect(complete.description).toContain('post_update');
+		// There is no board any more, and no tool that pretends there is.
+		for (const gone of ['list_tasks', 'create_task', 'claim_task', 'complete_task', 'edit_task']) {
+			expect(
+				tools.find((tool) => tool.name === gone),
+				gone
+			).toBeUndefined();
+		}
 
 		await client.close();
 	});
@@ -595,6 +568,21 @@ describe('owner requests over the wire (design §5)', () => {
 			response: { kind: 'choice', value: 'next' }
 		});
 
+		await client.close();
+	});
+
+	it('passes pictures on options through to the check', async () => {
+		const client = await connect();
+
+		const result = await call(client, 'request_input', {
+			kind: 'choice',
+			question: 'Which logo?',
+			options: ['A', 'B'],
+			option_media: { A: '01NOSUCHMEDIA0000000000000' }
+		});
+
+		expect(result.isError).toBe(true);
+		expect(JSON.stringify(result)).toMatch(/media/);
 		await client.close();
 	});
 

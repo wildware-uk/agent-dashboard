@@ -39,7 +39,10 @@
  */
 import {
 	alreadyDelivered,
-	countOpenTasks,
+	answeredMessage,
+	authorName,
+	countOpenWorkInScope,
+	countPendingRequestsInScope,
 	countUnreadMessagesInScope,
 	countWork,
 	findMessage,
@@ -205,8 +208,12 @@ const WATCHED: readonly AppEvent['type'][] = [
 	// reason the others are: it moves a number this stream exists to report, and
 	// a fall nobody is told about is a stale baseline downstream.
 	'messages.read',
-	'task.created',
-	'task.updated',
+	// A card was marked as work, or moved along (migration 035). This is what
+	// `open_tasks` counts now that the board is gone, and both events also fire
+	// for an edit or a pin — which move no count, and the frame is only written
+	// when one actually changed.
+	'update.updated',
+	'message.updated',
 	// The owner reacted to something this agent said (migration 024). Watched
 	// even though it moves none of the three counts: it is feedback the agent
 	// wants and the counts cannot express.
@@ -276,7 +283,13 @@ function scopedWork(
 	return {
 		...countWork(ctx, agentId),
 		unreadMessages: countUnreadMessagesInScope(ctx, agentId, subscribed),
-		openTasks: countOpenTasks(ctx, agentId, subscribed)
+		openTasks: countOpenWorkInScope(ctx, agentId, subscribed),
+		// The third of three, and the one that was missed. Sessions share a bearer
+		// token, so a request raised in one project lit up `pending_approvals` on
+		// every other session of that token — in every project, whatever each had
+		// subscribed to. The owner saw one project's questions announced to every
+		// agent they had running.
+		pendingApprovals: countPendingRequestsInScope(ctx, agentId, subscribed)
 	};
 }
 
@@ -345,7 +358,21 @@ function messageFrame(
 				project_name: project?.name ?? null,
 				update_id: message.updateId,
 				task_id: message.taskId,
+				// Which line this answers, and what that line said (the owner's
+				// report: "they can not see what I was replying to"). The ids alone
+				// would not have fixed it — `get_messages` hands back the *unread*
+				// set, so the line being answered is usually one the agent has
+				// already read and will not be given again.
+				reply_to: message.replyTo,
+				answers: message.answers ?? null,
+				in_reply_to: answeredMessage(ctx, message),
+				// A line in one of your own questions' discussions (migration 032):
+				// your owner replied instead of pressing a button, and this is how
+				// you answer them — post_message with this request_id.
+				request_id: message.requestId,
 				author: message.author,
+				// Who wrote it, by name, when another agent did; `null` for the owner.
+				author_name: authorName(ctx, message.author),
 				body: message.body,
 				created_at: new Date(message.createdAt).toISOString(),
 				// What is attached, so a notification can say "there is a picture
@@ -375,9 +402,42 @@ function messageFrame(
  * its job rather than an error: the event is broadcast to every connection and
  * only this agent's own requests are its business.
  */
-function answerFrame(ctx: DomainContext, agentId: string, requestId: string): string {
+/**
+ * Whether something filed under this project is this connection's business.
+ *
+ * The check every frame needs and only some had. Being the right *agent* is not
+ * enough, because sessions share a bearer token and are therefore one agent: a
+ * garden-game session asking "is this mine?" gets yes for a question raised in
+ * cmux, which is precisely what the owner saw.
+ *
+ * Something filed under no project belongs to the agent rather than to any
+ * project, so no subscription can exclude it.
+ */
+function inScope(
+	projectId: string | null,
+	subscribed: readonly string[] | null | undefined
+): boolean {
+	if (subscribed === null || subscribed === undefined) return true;
+	if (projectId === null) return true;
+	return subscribed.includes(projectId);
+}
+
+function answerFrame(
+	ctx: DomainContext,
+	agentId: string,
+	subscribed: readonly string[] | null | undefined,
+	requestId: string
+): string {
 	const request = findRequest(ctx, requestId);
 	if (!request || request.agentId !== agentId) return '';
+	// Mine, but not this session's: another session of the same token asked it.
+	if (!inScope(request.projectId, subscribed)) return '';
+	// An agent withdrawing its own question needs no telling — it just did it
+	// (migration 031). Suppressed here rather than in the bridge because a bridge
+	// only learns new vocabulary when its session restarts, and one that has not
+	// would read `withdrawn` as the nearest thing it knows and announce "your
+	// owner dismissed your request", which blames the one person who did nothing.
+	if (request.state === 'withdrawn') return '';
 
 	const project = request.projectId ? findProject(ctx, request.projectId) : null;
 	const body = JSON.stringify({
@@ -439,14 +499,21 @@ function concerns(ctx: DomainContext, agentId: string, message: Message): boolea
 function reactionFrame(
 	ctx: DomainContext,
 	agentId: string,
-	payload: { messageId: string; actor: string; emoji: string; on: boolean }
+	subscribed: readonly string[] | null | undefined,
+	payload: { messageId: string | null; actor: string; emoji: string; on: boolean }
 ): string {
 	// Their own emoji is not news, and neither is another agent's.
 	if (payload.actor !== 'human') return '';
+	// An emoji on a card rather than on a line: the frame an agent reads is about
+	// one of its own messages, so anything else is somebody else's news until the
+	// wire carries a card reference of its own.
+	if (payload.messageId === null) return '';
 
 	const message = findMessage(ctx, payload.messageId);
 	if (!message || message.deletedAt !== null) return '';
 	if (!concerns(ctx, agentId, message)) return '';
+	// In one of this session's projects, not merely one of this token's.
+	if (!inScope(message.projectId, subscribed)) return '';
 
 	const project = message.projectId ? findProject(ctx, message.projectId) : null;
 	const body = JSON.stringify({
@@ -617,14 +684,14 @@ export function createAgentStreamHandler(
 					// out an hour ago and is answered now moves nothing, and the agent
 					// still has to be told.
 					if (published.type === 'request.answered') {
-						write(answerFrame(ctx, agentId, published.payload.requestId));
+						write(answerFrame(ctx, agentId, subscribed, published.payload.requestId));
 					}
 
 					// An emoji the owner put on something this agent said (migration
 					// 024). Like the answer above, it moves no count and is still the
 					// news: a tick on a report is approval, and it arrives free.
 					if (published.type === 'reaction.updated') {
-						write(reactionFrame(ctx, agentId, published.payload));
+						write(reactionFrame(ctx, agentId, subscribed, published.payload));
 					}
 
 					if (same(last, next)) return;

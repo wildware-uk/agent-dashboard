@@ -35,6 +35,7 @@ export type {
 	EventOf,
 	EventPayloads,
 	MediaKind,
+	MessageThread,
 	RequestKind,
 	RequestOutcome,
 	TaskState

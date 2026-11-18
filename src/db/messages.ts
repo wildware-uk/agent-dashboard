@@ -25,9 +25,15 @@ type Row = {
 	reply_to: string | null;
 	deleted_at: number | null;
 	answers: string | null;
+	request_id: string | null;
+	edited_at: number | null;
+	pinned: number;
+	status: string | null;
+	status_at: number | null;
 };
 
-const COLUMNS = `seq, id, project_id, update_id, task_id, author, body, created_at, reply_to, deleted_at, answers`;
+const COLUMNS = `seq, id, project_id, update_id, task_id, author, body, created_at, reply_to, deleted_at, answers, request_id,
+	edited_at, pinned, status, status_at`;
 
 /**
  * The rule every read here keeps: a deleted message is gone.
@@ -50,7 +56,12 @@ function toMessage(row: Row): Message {
 		createdAt: row.created_at,
 		replyTo: row.reply_to,
 		deletedAt: row.deleted_at,
-		answers: row.answers
+		answers: row.answers,
+		requestId: row.request_id,
+		editedAt: row.edited_at,
+		pinned: row.pinned === 1,
+		status: row.status as Message['status'],
+		statusAt: row.status_at
 	};
 }
 
@@ -67,6 +78,8 @@ export type NewMessage = {
 	replyTo?: string | null;
 	/** The comment in the same thread this one is addressed to (migration 020). */
 	answers?: string | null;
+	/** The request being talked over before it is answered (migration 032). */
+	requestId?: string | null;
 };
 
 export function insertMessage(db: Db, input: NewMessage): Message {
@@ -79,19 +92,47 @@ export function insertMessage(db: Db, input: NewMessage): Message {
 		body: input.body,
 		created_at: input.createdAt ?? Date.now(),
 		reply_to: orNull(input.replyTo),
-		answers: orNull(input.answers)
+		answers: orNull(input.answers),
+		request_id: orNull(input.requestId)
 	};
 
 	const inserted = db
 		.prepare<typeof row, Row>(
 			`INSERT INTO messages
-			   (id, project_id, update_id, task_id, author, body, created_at, reply_to, answers)
-			 VALUES (:id, :project_id, :update_id, :task_id, :author, :body, :created_at, :reply_to, :answers)
+			   (id, project_id, update_id, task_id, author, body, created_at, reply_to, answers, request_id)
+			 VALUES (:id, :project_id, :update_id, :task_id, :author, :body, :created_at, :reply_to, :answers,
+			         :request_id)
 			 RETURNING ${COLUMNS}`
 		)
 		.get(row)!;
 
 	return toMessage(inserted);
+}
+
+/**
+ * An author's own correction (migration 033).
+ *
+ * Only a live message: an unsent line cannot be rewritten back into existence,
+ * and `RETURNING` with the same `deleted_at IS NULL` guard `editUpdate` uses is
+ * what makes that one statement rather than a read and a race.
+ *
+ * Whose message it is, and whether they may, is `$domain`'s to decide — this
+ * layer writes rows.
+ */
+export function editMessage(
+	db: Db,
+	id: string,
+	edit: { body: string; editedAt: number }
+): Message | undefined {
+	const row = db
+		.prepare<{ id: string; body: string; edited_at: number }, Row>(
+			`UPDATE messages SET body = :body, edited_at = :edited_at
+			 WHERE id = :id AND ${LIVE}
+			 RETURNING ${COLUMNS}`
+		)
+		.get({ id, body: edit.body, edited_at: edit.editedAt });
+
+	return row && toMessage(row);
 }
 
 /**
@@ -153,6 +194,8 @@ export type MessageQuery = {
 	projectIds?: readonly string[];
 	updateId?: string;
 	taskId?: string;
+	/** One request's discussion (migration 032). */
+	requestId?: string;
 	/** Everything newer than this seq: the read cursor's companion. */
 	afterSeq?: number;
 	/** Ignore messages by this author, typically the reader's own. */
@@ -171,45 +214,45 @@ export type MessageQuery = {
 	 * The rows still come back oldest first; only which ones are chosen changes.
 	 */
 	newest?: boolean;
+	/**
+	 * The agent reading, so a message that names other agents is left out
+	 * (migration 044). Omitted, every message is in: the owner reads them all.
+	 */
+	reader?: string;
+	/** Let a message naming the reader through whatever `projectIds` says. */
+	mentionsAnywhere?: boolean;
 };
 
 /** Messages oldest first. */
 export function listMessages(db: Db, query: MessageQuery = {}): Message[] {
 	// An empty subscription matches nothing rather than everything.
-	if (query.projectIds?.length === 0) return [];
+	if (query.projectIds?.length === 0 && !query.mentionsAnywhere) return [];
 
-	const scope = query.projectIds
-		? `AND project_id IN (${query.projectIds.map(() => '?').join(', ')})`
-		: '';
-	const params = [
-		orNull(query.projectId),
-		orNull(query.projectId),
-		orNull(query.updateId),
-		orNull(query.updateId),
-		orNull(query.taskId),
-		orNull(query.taskId),
-		orNull(query.afterSeq),
-		orNull(query.afterSeq),
-		orNull(query.excludeAuthor),
-		orNull(query.excludeAuthor),
-		...(query.projectIds ?? []),
-		query.limit ?? 100
-	];
+	const params: Record<string, unknown> = {
+		project_id: orNull(query.projectId),
+		update_id: orNull(query.updateId),
+		task_id: orNull(query.taskId),
+		request_id: orNull(query.requestId),
+		after_seq: orNull(query.afterSeq),
+		exclude_author: orNull(query.excludeAuthor),
+		limit: query.limit ?? 100
+	};
+	const scope = readerScope(query, params);
 
 	const rows = db
 		.prepare<typeof params, Row>(
-			`SELECT ${COLUMNS} FROM messages
-			 WHERE (? IS NULL OR project_id = ?)
-			   AND (? IS NULL OR update_id = ?)
-			   AND (? IS NULL OR task_id = ?)
-			   AND (? IS NULL OR seq > ?)
-			   AND (? IS NULL OR author <> ?)
-			   AND ${LIVE}
-			   ${scope}
+			`SELECT ${COLUMNS} FROM messages AS m
+			 WHERE (:project_id IS NULL OR project_id = :project_id)
+			   AND (:update_id IS NULL OR update_id = :update_id)
+			   AND (:task_id IS NULL OR task_id = :task_id)
+			   AND (:request_id IS NULL OR request_id = :request_id)
+			   AND (:after_seq IS NULL OR seq > :after_seq)
+			   AND (:exclude_author IS NULL OR author <> :exclude_author)
+			   AND ${LIVE}${scope}
 			 ORDER BY seq ${query.newest ? 'DESC' : 'ASC'}
-			 LIMIT ?`
+			 LIMIT :limit`
 		)
-		.all(...params)
+		.all(params)
 		.map(toMessage);
 
 	// Chosen newest-first, read oldest-first: a caller wanting the latest few
@@ -278,6 +321,10 @@ export type UnreadQuery = {
 	limit?: number;
 	/** Take the newest rather than the oldest; see {@link MessageQuery}. */
 	newest?: boolean;
+	/** Let a message naming this agent through whatever `projectIds` says. */
+	mentionsAnywhere?: boolean;
+	/** Only messages filed under this one project, `NO_PROJECT` for none. */
+	within?: string;
 };
 
 /** The join every unread question shares: this reader's cursor for each row. */
@@ -291,14 +338,14 @@ const UNREAD = `
 
 /** Unread messages, oldest first. */
 export function listUnreadMessages(db: Db, query: UnreadQuery): Message[] {
-	if (query.projectIds?.length === 0) return [];
+	if (query.projectIds?.length === 0 && !query.mentionsAnywhere) return [];
 
 	const params: Record<string, unknown> = {
 		agent_id: query.agentId,
 		exclude_author: orNull(query.excludeAuthor),
 		limit: query.limit ?? 100
 	};
-	const scope = projectScope(query.projectIds, params);
+	const scope = unreadScope(query, params);
 
 	const rows = db
 		.prepare<typeof params, Row>(
@@ -316,27 +363,61 @@ export function listUnreadMessages(db: Db, query: UnreadQuery): Message[] {
 
 /** How many messages this reader has not read: the heartbeat's number. */
 export function countUnreadMessages(db: Db, query: Omit<UnreadQuery, 'limit' | 'newest'>): number {
-	if (query.projectIds?.length === 0) return 0;
+	if (query.projectIds?.length === 0 && !query.mentionsAnywhere) return 0;
 
 	const params: Record<string, unknown> = {
 		agent_id: query.agentId,
 		exclude_author: orNull(query.excludeAuthor)
 	};
-	const scope = projectScope(query.projectIds, params);
+	const scope = unreadScope(query, params);
 
 	return db
 		.prepare<typeof params, { n: number }>(`SELECT count(*) AS n${UNREAD}${scope}`)
 		.get(params)!.n;
 }
 
-/** `AND m.project_id IN (...)`, with the ids bound; empty for no restriction. */
-function projectScope(
-	projectIds: readonly string[] | undefined,
+/** The unread reader's scope, plus the one-project filter only unread reads take. */
+function unreadScope(
+	query: Omit<UnreadQuery, 'limit' | 'newest'>,
 	params: Record<string, unknown>
 ): string {
-	if (!projectIds) return '';
-	projectIds.forEach((id, index) => (params[`p${index}`] = id));
-	return ` AND m.project_id IN (${projectIds.map((_, index) => `:p${index}`).join(', ')})`;
+	const scope = readerScope({ ...query, reader: query.agentId }, params);
+	if (query.within === undefined) return scope;
+	params.within = query.within;
+	return `${scope} AND coalesce(m.project_id, '') = :within`;
+}
+
+/**
+ * Who a message reaches (migration 044), as SQL to append to a query on `m`.
+ *
+ * A message that names agents with `@name` reaches only those agents, wherever
+ * they usually work when `mentionsAnywhere` is set. A message that names nobody
+ * reaches whoever the project scope says, exactly as before mentions existed.
+ * No reader means the owner, who sees everything.
+ */
+function readerScope(
+	query: { projectIds?: readonly string[]; reader?: string; mentionsAnywhere?: boolean },
+	params: Record<string, unknown>
+): string {
+	let inProjects = '';
+	if (query.projectIds) {
+		query.projectIds.forEach((id, index) => (params[`p${index}`] = id));
+		inProjects =
+			query.projectIds.length === 0
+				? '0'
+				: `m.project_id IN (${query.projectIds.map((_, index) => `:p${index}`).join(', ')})`;
+	}
+	if (query.reader === undefined) return inProjects ? ` AND ${inProjects}` : '';
+
+	params.reader = query.reader;
+	const namesAnyone = `EXISTS (SELECT 1 FROM message_mentions AS mm WHERE mm.message_id = m.id)`;
+	const namesReader = `EXISTS (SELECT 1 FROM message_mentions AS mm
+	                             WHERE mm.message_id = m.id AND mm.agent_id = :reader)`;
+	const audience = ` AND (NOT ${namesAnyone} OR ${namesReader})`;
+	if (!inProjects) return audience;
+	return query.mentionsAnywhere
+		? `${audience} AND (${inProjects} OR ${namesReader})`
+		: `${audience} AND ${inProjects}`;
 }
 
 /**

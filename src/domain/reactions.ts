@@ -25,17 +25,13 @@
  *
  * **Who is reacting comes from the caller's identity**, never from an argument:
  * the owner from the session cookie, an agent from its bearer token (design §5).
+ *
+ * What is left in this file is the vocabulary — what counts as an emoji. Putting
+ * one on something lives in `./cards.ts` with the rest of the features every
+ * card shares (migration 034): a reaction on a task is the same act as a
+ * reaction on a message, and it should not be a second copy of this code.
  */
-import {
-	addReaction,
-	findMessageById,
-	listReactions as listReactionRows,
-	removeReaction,
-	type Reaction
-} from '$db';
-import type { DomainContext } from './context';
-import { invalid, notFound } from './errors';
-import { authorText, type MessageAuthor } from './messages';
+import { invalid } from './errors';
 
 /**
  * The longest a reaction may be.
@@ -121,75 +117,4 @@ export function assertEmoji(raw: unknown): string {
 	}
 
 	return trimmed;
-}
-
-export type ReactInput = {
-	messageId: string;
-	/** From the session cookie or the bearer token, never from an argument (§5). */
-	actor: MessageAuthor;
-	emoji: string;
-	/**
-	 * `true` to react, `false` to take it back, and omitted to toggle.
-	 *
-	 * Toggling is what a click on a card means. An agent is better off saying
-	 * which it wants: a retry after a dropped connection would otherwise undo the
-	 * reaction it thought it was making.
-	 */
-	on?: boolean;
-};
-
-/** What one call left behind. */
-export type ReactResult = {
-	reactions: Reaction[];
-	/** Whether the reaction is on the message now. */
-	on: boolean;
-	/** Whether this call changed anything, so only a change publishes. */
-	changed: boolean;
-};
-
-/**
- * React to a message, or take a reaction back.
- *
- * @throws {DomainError} `not_found` for a message that does not exist or has
- *   been deleted; `invalid_argument` for something that is not an emoji.
- */
-export function react(ctx: DomainContext, input: ReactInput): ReactResult {
-	const message = findMessageById(ctx.db, input.messageId);
-	if (!message || message.deletedAt !== null) {
-		throw notFound(`no such message: ${input.messageId}`);
-	}
-
-	const emoji = assertEmoji(input.emoji);
-	const actor = authorText(input.actor);
-	const already = listReactionRows(ctx.db, [message.id]).some(
-		(reaction) => reaction.actor === actor && reaction.emoji === emoji
-	);
-	const wanted = input.on ?? !already;
-
-	let changed = false;
-	if (wanted && !already) {
-		changed = addReaction(ctx.db, { messageId: message.id, actor, emoji, at: ctx.now() }).created;
-	} else if (!wanted && already) {
-		changed = removeReaction(ctx.db, { messageId: message.id, actor, emoji });
-	}
-
-	if (changed) {
-		// Announced so every open tab and every watching agent sees it land; quiet
-		// when nothing moved, because an event saying the state is what it already
-		// was is a refetch for nothing.
-		ctx.bus.publish('reaction.updated', {
-			messageId: message.id,
-			projectId: message.projectId,
-			actor,
-			emoji,
-			on: wanted
-		});
-	}
-
-	return { reactions: listReactionRows(ctx.db, [message.id]), on: wanted, changed };
-}
-
-/** Every reaction on a page of messages, for the browser that renders them. */
-export function reactionsFor(ctx: DomainContext, messageIds: readonly string[]): Reaction[] {
-	return listReactionRows(ctx.db, messageIds);
 }

@@ -1,5 +1,5 @@
 import { beforeEach, describe, expect, it } from 'vitest';
-import { createMcpHandler, MCP_SERVER_NAME } from './server';
+import { createMcpHandler, MCP_INSTRUCTIONS, MCP_SERVER_NAME } from './server';
 import { createTokenRateLimiter } from './rate-limit';
 import { mcpHarness, type McpHarness } from './testing';
 
@@ -182,5 +182,13 @@ describe('createMcpHandler transport', () => {
 		});
 
 		expect(response.status).toBe(400);
+	});
+});
+
+describe('the instructions every agent reads first', () => {
+	it('says a message from another agent is a colleague, not the owner', () => {
+		expect(MCP_INSTRUCTIONS).toContain('author_name');
+		expect(MCP_INSTRUCTIONS).toContain('not your owner');
+		expect(MCP_INSTRUCTIONS).toContain("never your owner's approval");
 	});
 });

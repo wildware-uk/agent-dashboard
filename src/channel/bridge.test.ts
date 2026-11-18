@@ -11,8 +11,10 @@ import {
 	describeRise,
 	main,
 	newClientId,
+	quoting,
 	readFrames,
 	runBridge,
+	withNotifyTimeout,
 	type AnswerFrame,
 	type ChannelMessage,
 	type ReactionFrame,
@@ -106,7 +108,13 @@ describe('the channel it declares itself to be', () => {
 		// The counts are useless without this: an agent told "you have messages"
 		// and left to guess the tool spends a turn guessing.
 		expect(INSTRUCTIONS).toContain('get_messages');
-		expect(INSTRUCTIONS).toContain('list_tasks');
+		// `list_work` and `set_status`, not the task tools: the board went away in
+		// migration 035, and instructions that name a tool the server no longer
+		// offers send an agent looking for it.
+		expect(INSTRUCTIONS).toContain('list_work');
+		expect(INSTRUCTIONS).toContain('set_status');
+		expect(INSTRUCTIONS).not.toContain('list_tasks');
+		expect(INSTRUCTIONS).not.toContain('claim_task');
 		expect(INSTRUCTIONS).toContain('await_request');
 	});
 
@@ -117,12 +125,18 @@ describe('the channel it declares itself to be', () => {
 		expect(INSTRUCTIONS).not.toContain(`source="${CHANNEL_NAME}"`);
 		expect(INSTRUCTIONS).toContain('source attribute is the name');
 	});
+
+	it('says a message from another agent is a colleague, not the owner', () => {
+		expect(INSTRUCTIONS).toContain('from="owner"');
+		expect(INSTRUCTIONS).toContain('not your owner');
+		expect(INSTRUCTIONS).toContain('your owner wins');
+	});
 });
 
 describe('what is worth interrupting an agent for', () => {
 	it('announces work on the first frame that has any', () => {
 		expect(describeRise(null, work({ unread_messages: 2 }))).toBe(
-			'Waiting for you on the dashboard: 2 unread messages from your owner.'
+			'Waiting for you on the dashboard: 2 unread messages.'
 		);
 	});
 
@@ -156,7 +170,7 @@ describe('what is worth interrupting an agent for', () => {
 
 	it('gathers several rises into one sentence rather than several notifications', () => {
 		expect(describeRise(null, work({ unread_messages: 1, open_tasks: 2 }))).toBe(
-			'Waiting for you on the dashboard: 1 unread message from your owner, 2 open tasks.'
+			'Waiting for you on the dashboard: 1 unread message, 2 open tasks.'
 		);
 	});
 });
@@ -309,6 +323,33 @@ describe('pushing into the session', () => {
 		// spend a tool call before it knows whether the message concerns it.
 		expect(notify).toHaveBeenCalledTimes(1);
 		expect(notify.mock.calls[0]?.[0]).toBe('Your owner on Agent Dashboard: try the other branch');
+	});
+
+	it('names another agent by name, and says it is not the owner', async () => {
+		const { notify } = await bridge(
+			sse(
+				workFrame({ unread_messages: 1 }),
+				messageFrame({ author: 'agent:a2', author_name: 'home-server', body: 'which branch?' })
+			)
+		);
+
+		expect(notify.mock.calls[0]?.[0]).toBe('Agent home-server on Agent Dashboard: which branch?');
+		expect(notify.mock.calls[0]?.[1]).toMatchObject({ from: 'home-server' });
+	});
+
+	it('tags the owner as the owner', async () => {
+		const { notify } = await bridge(sse(workFrame({ unread_messages: 1 }), messageFrame({})));
+
+		expect(notify.mock.calls[0]?.[1]).toMatchObject({ from: 'owner' });
+	});
+
+	it('falls back to the raw author when an older server sends no name', async () => {
+		const { notify } = await bridge(
+			sse(workFrame({ unread_messages: 1 }), messageFrame({ author: 'agent:a2', body: 'hi' }))
+		);
+
+		expect(notify.mock.calls[0]?.[0]).toBe('Another agent (agent:a2) on Agent Dashboard: hi');
+		expect(notify.mock.calls[0]?.[1]).toMatchObject({ from: 'agent:a2' });
 	});
 
 	it('puts every id needed to reply on the tag', async () => {
@@ -727,9 +768,127 @@ describe('a message with something attached', () => {
 		).toContain('2 images and 1 video attached');
 	});
 
+	it('calls a file a file, rather than calling everything a video', () => {
+		// The owner: "I sent a glb file, the agent cannot see it, and it says it
+		// received a video." An agent told it has a video does not look for a model.
+		expect(describeAttachments([{ id: 'a', kind: 'file' }])).toContain('1 file attached');
+		expect(describeAttachments([{ id: 'a', kind: 'audio' }])).toContain('1 sound attached');
+	});
+
+	it('names every kind on one message, in one phrase', () => {
+		expect(
+			describeAttachments([
+				{ id: 'a', kind: 'image' },
+				{ id: 'b', kind: 'video' },
+				{ id: 'c', kind: 'audio' },
+				{ id: 'd', kind: 'file' },
+				{ id: 'e', kind: 'file' }
+			])
+		).toContain('1 image, 1 video, 1 sound and 2 files attached');
+	});
+
+	it('counts a kind it has no word for rather than losing it', () => {
+		// A deployment newer than this session's plugin. Saying "1 attachment" is
+		// worse than naming it and better than it never being mentioned.
+		expect(describeAttachments([{ id: 'a', kind: 'hologram' }])).toContain('1 attachment attached');
+	});
+
 	it('adds nothing at all to a message with no attachments', () => {
 		expect(describeAttachments(undefined)).toBe('');
 		expect(describeAttachments([])).toBe('');
+	});
+});
+
+/**
+ * What a reply was a reply to.
+ *
+ * The owner's report: "when I reply to a message, they can not see what I was
+ * replying to." A one-word answer is the case that breaks — "yes" arriving on
+ * its own tells an agent nothing about which of its questions was said yes to.
+ *
+ * The id alone would not have fixed it: `get_messages` hands back the *unread*
+ * set, and the line being answered is almost always one the agent already read
+ * and will never be given again. So the words travel with the answer.
+ */
+describe('a message answering another one', () => {
+	const parent = { id: 'm0', author: 'scout', body: 'shall I deploy?', truncated: false };
+
+	async function notified(message: Partial<ChannelMessage>) {
+		const notify = vi.fn().mockResolvedValue(undefined);
+		const abort = new AbortController();
+		const fetcher = vi
+			.fn()
+			.mockResolvedValue(
+				new Response(sse(workFrame({ unread_messages: 1 }), messageFrame(message)), { status: 200 })
+			);
+
+		await runBridge({
+			baseUrl: 'https://dash.test',
+			token: 'a-token',
+			projects: ['*'],
+			fetch: fetcher as unknown as typeof globalThis.fetch,
+			notify,
+			sleep: async () => abort.abort(),
+			signal: abort.signal
+		});
+
+		return notify.mock.calls[0]! as [string, Record<string, string>];
+	}
+
+	it('quotes the line it answers, so a one-word reply still means something', async () => {
+		const [content] = await notified({ body: 'yes', reply_to: 'm0', in_reply_to: parent });
+
+		expect(content).toContain('shall I deploy?');
+		expect(content).toContain('yes');
+	});
+
+	it('carries the ids, so the agent can look the thread up itself', async () => {
+		const [, meta] = await notified({
+			body: 'yes',
+			reply_to: 'm0',
+			answers: 'm0',
+			in_reply_to: parent
+		});
+
+		expect(meta).toMatchObject({ reply_to: 'm0', answers: 'm0', in_reply_to: 'm0' });
+	});
+
+	/**
+	 * A reply on a question the agent is waiting on (migration 032).
+	 *
+	 * It is parked in `await_request`, so "your owner said X" without saying what
+	 * it is about is how a discussion gets answered as a new topic.
+	 */
+	it('says when the owner is talking over a question rather than answering it', async () => {
+		const [content, meta] = await notified({ body: 'why main?', request_id: 'r1' });
+
+		expect(content).toContain('about your open question');
+		expect(meta).toMatchObject({ request_id: 'r1' });
+	});
+
+	it('reads the same as before for a message that answers nothing', async () => {
+		const [content, meta] = await notified({ body: 'have a look at this' });
+
+		expect(content).toBe('Your owner on Agent Dashboard: have a look at this');
+		expect(meta).not.toHaveProperty('in_reply_to');
+	});
+
+	it('says whose line it was, and calls the owner`s own their own', () => {
+		expect(quoting(parent)).toBe(', answering scout\'s "shall I deploy?"');
+		expect(quoting({ ...parent, author: 'human' })).toContain('their own');
+	});
+
+	it('trims a long line, and flattens the newlines out of it', () => {
+		const long = quoting({ ...parent, body: 'x'.repeat(200) }, 20);
+
+		expect(long).toContain(`${'x'.repeat(20)}…`);
+		expect(quoting({ ...parent, body: 'two\n\nlines' })).toContain('two lines');
+	});
+
+	it('adds nothing when there is nothing to quote', () => {
+		expect(quoting(null)).toBe('');
+		expect(quoting(undefined)).toBe('');
+		expect(quoting({ ...parent, body: '   ' })).toBe('');
 	});
 });
 
@@ -817,5 +976,225 @@ describe('putting one reaction into a sentence', () => {
 		// An owner removing a thumbs-up has changed their mind, and an agent told
 		// nothing would carry on as though they had not.
 		expect(describeReaction(frame({ on: false }))).toContain('removed their reaction');
+	});
+});
+
+/**
+ * The bridge going deaf, which is what the owner actually reported.
+ *
+ * Their words: "Garden game channels arent receiving!!" — and the process was
+ * alive the whole time. It held no connection to the dashboard and was not
+ * trying to make one, because a notification had never come back.
+ *
+ * A notification is a write to stdout, which is the MCP transport, and a write
+ * to a pipe nobody is draining never resolves. Every send happened inside the
+ * frame loop, so one stuck write froze the reader, the reconnect loop and the
+ * channel with it — silently, and for the rest of the session.
+ *
+ * These are the two guards that make that impossible: nothing the client does
+ * can hold the loop, and nothing the network does can leave it waiting for ever.
+ */
+describe('a client that has stopped listening', () => {
+	it('gives up on a notification rather than holding the loop for ever', async () => {
+		const log = vi.fn();
+		// The failure exactly: a send that never settles.
+		const send = vi.fn().mockImplementation(() => new Promise<void>(() => {}));
+		const guarded = withNotifyTimeout(send, 20, log);
+
+		await expect(guarded('anything', {})).rejects.toThrow(/timed out/);
+		expect(log).toHaveBeenCalledWith(expect.stringContaining('notification dropped'));
+	});
+
+	it('lets a healthy notification through untouched', async () => {
+		const send = vi.fn().mockResolvedValue(undefined);
+		const guarded = withNotifyTimeout(send, 1_000, vi.fn());
+
+		await expect(guarded('hello', { a: 'b' })).resolves.toBeUndefined();
+		expect(send).toHaveBeenCalledWith('hello', { a: 'b' });
+	});
+
+	it('keeps reading, and reconnects, when a message notification is dropped', async () => {
+		const abort = new AbortController();
+		let sends = 0;
+		const notify = vi.fn().mockImplementation(() => {
+			sends += 1;
+			// The first one wedges; a bridge that cannot survive this is the bug.
+			return sends === 1 ? new Promise<void>(() => {}) : Promise.resolve();
+		});
+
+		const body = sse(
+			'event: work\ndata: {"unread_messages":1,"open_tasks":0,"pending_approvals":0}\n\n',
+			'event: message\ndata: {"messages":[{"message_id":"m1","project":"p","body":"first"}]}\n\n',
+			'event: message\ndata: {"messages":[{"message_id":"m2","project":"p","body":"second"}]}\n\n'
+		);
+
+		await runBridge({
+			baseUrl: 'https://dash.test',
+			token: 'a-token',
+			projects: ['*'],
+			notifyTimeoutMs: 20,
+			fetch: vi.fn().mockResolvedValue(new Response(body, { status: 200 })) as never,
+			notify,
+			sleep: async () => abort.abort(),
+			signal: abort.signal
+		});
+
+		// The second message still arrived: one dead write cost one notification,
+		// not the channel.
+		expect(notify.mock.calls.some(([text]) => String(text).includes('second'))).toBe(true);
+	});
+
+	it('does not mark a dropped message as said, so the next rise says it again', async () => {
+		const abort = new AbortController();
+		let sends = 0;
+		const notify = vi.fn().mockImplementation(() => {
+			sends += 1;
+			return sends === 1 ? new Promise<void>(() => {}) : Promise.resolve();
+		});
+
+		// The same message twice, as the dashboard really does send it: the stream
+		// carries the unread set, and the cursor has not moved.
+		const frame =
+			'event: message\ndata: {"messages":[{"message_id":"m1","project":"p","body":"only"}]}\n\n';
+		const body = sse(
+			'event: work\ndata: {"unread_messages":1,"open_tasks":0,"pending_approvals":0}\n\n',
+			frame,
+			'event: work\ndata: {"unread_messages":2,"open_tasks":0,"pending_approvals":0}\n\n',
+			frame
+		);
+
+		await runBridge({
+			baseUrl: 'https://dash.test',
+			token: 'a-token',
+			projects: ['*'],
+			notifyTimeoutMs: 20,
+			fetch: vi.fn().mockResolvedValue(new Response(body, { status: 200 })) as never,
+			notify,
+			sleep: async () => abort.abort(),
+			signal: abort.signal
+		});
+
+		// Told twice: once into the void, once for real. Remembering before the
+		// send meant the agent was never told at all.
+		const said = notify.mock.calls.filter(([text]) => String(text).includes('only'));
+		expect(said.length).toBe(2);
+	});
+});
+
+describe('a connection that goes silent without saying so', () => {
+	it('stops waiting once nothing has arrived for the idle window', async () => {
+		// A body that opens and then never says anything again: a server that went
+		// away without a clean close, which is every restart behind a proxy.
+		const body = new ReadableStream<Uint8Array>({ start() {} });
+
+		const frames = readFrames(body, { idleMs: 20 });
+		await expect(frames.next()).rejects.toThrow(/no data/);
+	});
+
+	it('treats a heartbeat as proof of life, not as silence', async () => {
+		const encoder = new TextEncoder();
+		const body = new ReadableStream<Uint8Array>({
+			async start(controller) {
+				// Comments are consumed and never yielded, so a frame-driven timer
+				// would call this dead. It is not: bytes are arriving.
+				for (let at = 0; at < 4; at += 1) {
+					controller.enqueue(encoder.encode(': heartbeat\n\n'));
+					await new Promise((resolve) => setTimeout(resolve, 10));
+				}
+				controller.enqueue(encoder.encode('event: work\ndata: {"unread_messages":1}\n\n'));
+				controller.close();
+			}
+		});
+
+		const seen: Record<string, string>[] = [];
+		for await (const frame of readFrames(body, { idleMs: 60 })) seen.push(frame);
+
+		expect(seen).toEqual([{ event: 'work', data: '{"unread_messages":1}' }]);
+	});
+});
+
+/**
+ * A session that runs for hours (plugin 0.2.0).
+ *
+ * The owner: "make sure a monitor running for hours doesn't leak memory or pile
+ * up connections." The bridge reconnects for ever by design, so anything it
+ * allocates per attempt is a slow leak nobody would see until a long day.
+ */
+describe('surviving a long session', () => {
+	it('leaves no timers or sockets behind across many reconnects', async () => {
+		const abort = new AbortController();
+		let attempts = 0;
+		const encoder = new TextEncoder();
+
+		const body = () =>
+			new ReadableStream<Uint8Array>({
+				start(controller) {
+					controller.enqueue(encoder.encode(workFrame({ open_tasks: attempts % 2 })));
+					controller.close();
+				}
+			});
+
+		const before = process.getActiveResourcesInfo().length;
+
+		await runBridge({
+			baseUrl: 'https://dash.test',
+			token: 'a-token',
+			projects: ['*'],
+			notify: () => Promise.resolve(),
+			fetch: vi.fn(() =>
+				Promise.resolve(new Response(body(), { status: 200 }))
+			) as unknown as typeof globalThis.fetch,
+			sleep: async () => {
+				if (++attempts >= 200) abort.abort();
+			},
+			signal: abort.signal
+		});
+
+		// Two hundred connections, and nothing held afterwards: every timer is
+		// cleared in a `finally`, and each response body is read to the end or
+		// cancelled.
+		expect(attempts).toBe(200);
+		expect(process.getActiveResourcesInfo().length).toBeLessThanOrEqual(before + 2);
+	});
+
+	it('reopens with the current state rather than a diff, so a gap costs latency only', async () => {
+		// The dashboard sends the whole count on connect. A reconnect therefore
+		// announces what is waiting now, which is what makes a dropped minute
+		// harmless: nothing has to be replayed.
+		const notify = vi.fn().mockResolvedValue(undefined);
+		const abort = new AbortController();
+		let call = 0;
+		const encoder = new TextEncoder();
+		const bodies = [workFrame({ open_tasks: 1 }), workFrame({ open_tasks: 3 })];
+
+		await runBridge({
+			baseUrl: 'https://dash.test',
+			token: 'a-token',
+			projects: ['*'],
+			notify,
+			fetch: vi.fn(() => {
+				const frame = bodies[Math.min(call, bodies.length - 1)];
+				return Promise.resolve(
+					new Response(
+						new ReadableStream<Uint8Array>({
+							start(controller) {
+								controller.enqueue(encoder.encode(frame));
+								controller.close();
+							}
+						}),
+						{ status: 200 }
+					)
+				);
+			}) as unknown as typeof globalThis.fetch,
+			sleep: async () => {
+				if (++call >= 2) abort.abort();
+			},
+			signal: abort.signal
+		});
+
+		const said = notify.mock.calls.map(([content]) => content as string);
+		expect(said[0]).toContain('1 open task');
+		// The second connection opens with 3, which is a rise on what it knew.
+		expect(said.at(-1)).toContain('3 open tasks');
 	});
 });

@@ -4,7 +4,7 @@ import { bodyOf, exifImageBytes, pngBytes, sampleVideoBytes, tempSettings } from
 import { insertMedia } from '$db';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { SESSION_COOKIE, signSession } from '../auth';
-import { createMediaHandler, type MediaHandlerOptions } from './serve';
+import { createMediaHandler, disposition, type MediaHandlerOptions } from './serve';
 
 const SESSION_SECRET = 's'.repeat(32);
 const authConfig = () => ({ sessionSecret: SESSION_SECRET, adminPasswordHash: '$argon2id$x' });
@@ -24,12 +24,16 @@ beforeEach(() => {
 afterEach(() => temp.cleanup());
 
 /** An upload that really landed, as serving finds it. */
-async function uploaded(bytes = pngBytes()): Promise<string> {
+async function uploaded(
+	bytes = pngBytes(),
+	mime = 'image/png',
+	filename = 'shot.png'
+): Promise<string> {
 	const created = mintUpload(settings, {
 		db: ctx.db,
 		agentId,
-		filename: 'shot.png',
-		mime: 'image/png',
+		filename,
+		mime,
 		bytes: bytes.length,
 		now: ctx.now()
 	});
@@ -239,5 +243,64 @@ describe('GET /media/:id/:variant, once derivatives exist', () => {
 		expect(response.status).toBe(200);
 		expect(response.headers.get('content-type')).toBe('image/jpeg');
 		expect((await response.arrayBuffer()).byteLength).toBeGreaterThan(0);
+	});
+});
+
+/**
+ * Downloading a file (migration 026).
+ *
+ * The header is the rule. The owner asked to be able to send agents any file,
+ * and the only reason that is not "any script on the dashboard's origin" is that
+ * this route answers `application/octet-stream` with
+ * `Content-Disposition: attachment` for every one of them — so an uploaded
+ * `.html` is saved, never rendered.
+ */
+describe('GET /media/:id/original, for a file', () => {
+	const html = new TextEncoder().encode('<script>alert(1)</script>');
+
+	it('hands it back as a download, under the name it was uploaded with', async () => {
+		const id = await uploaded(html, 'text/html', 'evil.html');
+
+		const response = await get(id, 'original');
+
+		expect(response.status).toBe(200);
+		expect(response.headers.get('content-type')).toBe('application/octet-stream');
+		expect(response.headers.get('content-disposition')).toBe(
+			'attachment; filename="evil.html"; filename*=UTF-8\'\'evil.html'
+		);
+		expect(response.headers.get('x-content-type-options')).toBe('nosniff');
+		expect(new Uint8Array(await response.arrayBuffer())).toEqual(html);
+	});
+
+	it('offers no other variant, because a file derives nothing', async () => {
+		const id = await uploaded(html, 'text/html', 'evil.html');
+
+		expect((await get(id, 'thumb-640')).status).toBe(404);
+	});
+});
+
+describe('the Content-Disposition header', () => {
+	it('is plain `inline` for anything the dashboard renders', () => {
+		expect(disposition('inline', null)).toBe('inline');
+		expect(disposition('inline', 'shot.png')).toBe('inline');
+	});
+
+	it('encodes a name rather than concatenating it', () => {
+		// A quote, a backslash and a newline in a filename are the three ways a
+		// header gets broken. None of them survives into the quoted form, and the
+		// real name still travels in `filename*`.
+		expect(disposition('attachment', 'a"b\\c\nd.txt')).toBe(
+			'attachment; filename="a_b_c_d.txt"; filename*=UTF-8\'\'a%22b%5Cc%0Ad.txt'
+		);
+	});
+
+	it('keeps a non-ASCII name readable in the encoded form', () => {
+		expect(disposition('attachment', 'rapport-été.pdf')).toBe(
+			'attachment; filename="rapport-_t_.pdf"; filename*=UTF-8\'\'rapport-%C3%A9t%C3%A9.pdf'
+		);
+	});
+
+	it('says only `attachment` when nobody wrote a name down', () => {
+		expect(disposition('attachment', null)).toBe('attachment');
 	});
 });

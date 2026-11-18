@@ -16,10 +16,18 @@
  *    lies about its length is cut off mid-flight rather than buffered, measured
  *    and then rejected, which is the difference between a 1KB cap costing 1KB of
  *    memory and costing whatever the sender felt like sending.
- * 4. **Sniff the first {@link SNIFF_BYTES} before opening a file at all.** The
- *    head is held in memory, checked against the type the token authorised, and
- *    only written once it agrees. A zip renamed `.png` and an SVG therefore
- *    never reach the disk in any form.
+ * 4. **Sniff the first {@link SNIFF_BYTES} before opening a file at all** — for
+ *    an image or a video. The head is held in memory, checked against the type
+ *    the token authorised, and only written once it agrees. A zip renamed
+ *    `.png` and an SVG therefore never reach the disk in any form.
+ *
+ *    A `file` skips this step, and that is safe for the reason the step exists:
+ *    sniffing protects *rendering*, and a file is never rendered. It is served
+ *    as `application/octet-stream` with `Content-Disposition: attachment`
+ *    (`src/http/media/serve.ts`), so its declared type steers nothing. Sniffing
+ *    it would also be wrong on the merits — a log, a CSV and a `.ts` file have
+ *    no magic bytes at all, and refusing them is refusing the feature
+ *    (migration 026).
  * 5. **Hash everything for dedup.** Identical bytes are stored once: the second
  *    upload hard-links the first file, so each media row is still independently
  *    addressable and independently deletable while the bytes exist once.
@@ -152,8 +160,16 @@ export async function storeBytes(
 	settings: MediaSettings,
 	input: StoreBytesInput
 ): Promise<IngestResult> {
-	const allowed = input.allowed.filter(isAllowedMime);
-	if (allowed.length === 0) throw unsupportedType('this upload authorises no servable type');
+	// A `file` is stored under the type it was reserved as, whatever the bytes
+	// turn out to be (migration 026). Taken from the row rather than from
+	// `allowed` so there is one answer even if a hand-written token ever carried
+	// several: the row is what `./serve.ts` will read back.
+	const declared = input.media.kind === 'file' ? input.media.mime : undefined;
+
+	const allowed = declared ? [] : input.allowed.filter(isAllowedMime);
+	if (!declared && allowed.length === 0) {
+		throw unsupportedType('this upload authorises no servable type');
+	}
 
 	if (input.contentLength != null && input.contentLength > input.maxBytes) {
 		// Declared too big. Refused without reading a byte — the only thing
@@ -164,7 +180,8 @@ export async function storeBytes(
 	const written = await streamToTempFile(settings, {
 		body: input.body,
 		maxBytes: input.maxBytes,
-		allowed
+		allowed,
+		declared
 	});
 
 	const stored = await place(settings, {
@@ -210,7 +227,19 @@ type Written = { tempPath: string; bytes: number; sha256: string; mime: string }
  */
 async function streamToTempFile(
 	settings: MediaSettings,
-	options: { body: ReadableStream<Uint8Array>; maxBytes: number; allowed: readonly string[] }
+	options: {
+		body: ReadableStream<Uint8Array>;
+		maxBytes: number;
+		allowed: readonly string[];
+		/**
+		 * The type to store these bytes under without asking them, for a `file`.
+		 *
+		 * Set means "do not sniff": the head is written straight through like every
+		 * other chunk, because there is no rendering decision for a wrong answer to
+		 * corrupt.
+		 */
+		declared?: string;
+	}
 ): Promise<Written> {
 	const reader = options.body.getReader();
 	const hash = createHash('sha256');
@@ -218,7 +247,7 @@ async function streamToTempFile(
 
 	let headLength = 0;
 	let total = 0;
-	let mime: string | undefined;
+	let mime: string | undefined = options.declared;
 	let handle: FileHandle | undefined;
 	let tempPath: string | undefined;
 
@@ -273,7 +302,8 @@ async function streamToTempFile(
 		}
 
 		if (total === 0) throw mediaInvalid('the request body was empty');
-		// A file smaller than the sniff window: the whole thing is the head.
+		// An image smaller than the sniff window: the whole thing is the head. A
+		// `file` already has its type and never took this path.
 		if (!mime) await verify();
 
 		await handle?.close();

@@ -45,11 +45,16 @@ export {
 export { mediaSettings, type MediaSettings } from './settings';
 export {
 	ALLOWED_MIMES,
+	AUDIO_MIMES,
+	DOWNLOAD_MIME,
+	FILE_EXTENSION,
 	IMAGE_MIMES,
 	SNIFF_BYTES,
 	VIDEO_MIMES,
+	canonicalMime,
 	extensionForMime,
 	isAllowedMime,
+	isFileMime,
 	kindForMime,
 	normaliseMime,
 	type AllowedMime

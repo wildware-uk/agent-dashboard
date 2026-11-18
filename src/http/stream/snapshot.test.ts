@@ -230,14 +230,20 @@ describe('reading the real state through the domain', () => {
 				id: media.id,
 				updateId: update.id,
 				kind: 'image',
-				// Migration 016: an image can hang off a message instead. A card's
-				// media says so by carrying null here.
+				// Migration 016: an image can hang off a message instead, and
+				// migration 030 added an approval and a task. A card's media says so
+				// by carrying null for the three it is not on.
 				messageId: null,
+				requestId: null,
+				taskId: null,
 				mime: 'image/png',
 				status: 'pending',
+				bytes: 4321,
 				width: 1200,
 				height: 800,
 				durationMs: null,
+				// Migration 026: only a `file` carries a name; a picture is its own label.
+				filename: null,
 				variants: ['original']
 			}
 		]);

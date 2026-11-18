@@ -93,3 +93,93 @@ describe('the controls on a post', () => {
 		expect(document.querySelector('[aria-label="Add a reaction"]')).toBeNull();
 	});
 });
+
+/**
+ * The controls every card has, on a post (migration 034).
+ *
+ * The owner: "let me pin my own messages." A post could be deleted and nothing
+ * else — no pin, because pinning was written into the update card.
+ */
+describe('the owner controls on a post', () => {
+	it('pins it, naming the card rather than a kind-specific endpoint', async () => {
+		const acts = fakeActions();
+		const screen = render(PostCard, {
+			post: aMessage({ id: 'm4', author: 'human', updateId: null, taskId: null }),
+			actions: acts.actions,
+			onreply: async () => {}
+		});
+
+		await screen.getByRole('button', { name: 'Pin post' }).click();
+
+		expect(acts.calls).toEqual([{ name: 'pinCard', args: ['message', 'm4', true] }]);
+	});
+
+	it('offers to unpin one that is already pinned', async () => {
+		const acts = fakeActions();
+		const screen = render(PostCard, {
+			post: aMessage({ id: 'm4', author: 'human', updateId: null, taskId: null, pinned: true }),
+			actions: acts.actions,
+			onreply: async () => {}
+		});
+
+		await screen.getByRole('button', { name: 'Unpin post' }).click();
+
+		expect(acts.calls).toEqual([{ name: 'pinCard', args: ['message', 'm4', false] }]);
+	});
+
+	it('still asks before deleting, and says what goes with it', async () => {
+		const acts = fakeActions();
+		const screen = render(PostCard, {
+			post: aMessage({ id: 'm4', author: 'human', updateId: null, taskId: null }),
+			replies: [aMessage({ id: 'm5', replyTo: 'm4' })],
+			actions: acts.actions,
+			onreply: async () => {},
+			ondeletepost: async () => {}
+		});
+
+		await screen.getByRole('button', { name: 'Delete post' }).click();
+
+		await expect.element(screen.getByText('Delete this post and its reply?')).toBeInTheDocument();
+	});
+});
+
+/**
+ * A post that reached nobody (design §7).
+ *
+ * The owner: "when a message isn't delivered yet, hold a red icon saying it
+ * wasn't delivered to an agent."
+ */
+describe('a post nothing received', () => {
+	it('says so in red on the owner`s own post', async () => {
+		const screen = render(PostCard, {
+			post: aMessage({
+				id: 'm9',
+				author: 'human',
+				updateId: null,
+				taskId: null,
+				createdAt: Date.now() - 60_000
+			}),
+			onreply: async () => {}
+		});
+
+		expect(screen.container.querySelector('[data-ack-undelivered]')).not.toBeNull();
+	});
+
+	it('says nothing about a card that is marked as work', async () => {
+		const screen = render(PostCard, {
+			post: aMessage({
+				id: 'm9',
+				author: 'human',
+				updateId: null,
+				taskId: null,
+				status: 'todo',
+				createdAt: Date.now() - 60_000
+			}),
+			onreply: async () => {}
+		});
+
+		// Its state says where it has got to, which is a better answer than
+		// whether a delivery row exists.
+		expect(screen.container.querySelector('[data-ack-undelivered]')).toBeNull();
+	});
+});

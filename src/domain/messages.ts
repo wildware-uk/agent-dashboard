@@ -36,12 +36,13 @@ import {
 	attachMediaToMessage,
 	countUnreadMessageRows,
 	deliveredMessageIds,
+	editMessageRow,
+	findApprovalById,
 	listDeliveries,
 	recordDelivery,
 	listAgentProjectIds,
 	findAgentById,
 	findMessageById,
-	findTaskById,
 	findUpdateById,
 	insertMessage,
 	listMessages,
@@ -54,7 +55,10 @@ import {
 } from '$db';
 import type { DomainContext } from './context';
 import { invalid, notFound } from './errors';
+import { attachEmbeds, checkedEmbeds, type NewEmbedInput } from './embeds';
+import { attachApps, checkedApps, type NewAppInput } from './apps';
 import { assertAttachableToMessage } from './media';
+import { recordMentions } from './mentions';
 import { resolveProject } from './projects';
 import { requiredText } from './text';
 
@@ -109,8 +113,7 @@ export type PostMessageInput = {
 	project?: string | null;
 	/** The update this is a reply on. */
 	updateId?: string | null;
-	/** The task this is about. */
-	taskId?: string | null;
+
 	/**
 	 * The message this answers (migration 014).
 	 *
@@ -133,6 +136,16 @@ export type PostMessageInput = {
 	 */
 	answers?: string | null;
 	/**
+	 * The request being talked over (migration 032).
+	 *
+	 * The owner: "allow me to reply to form questions, so I can discuss with the
+	 * agent before giving the answer." A request grows the same thread every
+	 * other card has, and this is what puts a line in it. Its own anchor because
+	 * a request often hangs off no card at all — `request_input` with a project
+	 * and nothing else is the ordinary case — so there is no update to borrow.
+	 */
+	requestId?: string | null;
+	/**
 	 * Images to show on this message (migration 016).
 	 *
 	 * The owner's come from `POST /api/media`, an agent's from `create_upload`.
@@ -141,6 +154,21 @@ export type PostMessageInput = {
 	 * be worse than one that failed to post.
 	 */
 	mediaIds?: readonly string[];
+	/**
+	 * Things to show on this message in a registered look (migration 027).
+	 *
+	 * Checked before the insert for the same reason `mediaIds` is: a reply that
+	 * posted without the GitHub comment it was quoting would be worse than one
+	 * that failed and said which embed was wrong.
+	 */
+	embeds?: readonly NewEmbedInput[];
+	/**
+	 * Interactive UI to put on this message (migration 041).
+	 *
+	 * Checked before the insert for the same reason the embeds are, and named by
+	 * its `ui://` URI the way an agent names one everywhere else.
+	 */
+	apps?: readonly NewAppInput[];
 };
 
 /**
@@ -169,9 +197,20 @@ export function postMessage(ctx: DomainContext, input: PostMessageInput): Messag
 	// Only a caller that named *both* is refused. An anchor inherited from the
 	// message being answered is this function's own doing, and refusing it would
 	// refuse the ordinary case: answering the owner inside a card's thread.
-	if (input.replyTo != null && (input.updateId != null || input.taskId != null)) {
-		throw invalid('a reply answers a message, or hangs off an update or a task, not both');
+	if (input.replyTo != null && input.updateId != null) {
+		throw invalid('a reply answers a message, or hangs off an update, not both');
 	}
+
+	// A request's discussion is a thread of its own (migration 032), so naming a
+	// request *and* a card is a caller saying two different things about where
+	// the line goes. Inherited from the comment being answered, as every other
+	// anchor is, so a reply inside the discussion need not name it again.
+	const requestId = input.requestId ?? answered?.requestId ?? null;
+	if (input.requestId != null && (input.updateId != null || input.replyTo != null)) {
+		throw invalid('a message belongs to a request`s discussion, or to a card, not both');
+	}
+	const request = requestId === null ? null : findApprovalById(ctx.db, requestId);
+	if (requestId !== null && !request) throw notFound(`no such request: ${requestId}`);
 
 	// The message being replied to, resolved before anything is written, so a
 	// reply cannot be filed against a post that is not there.
@@ -179,11 +218,15 @@ export function postMessage(ctx: DomainContext, input: PostMessageInput): Messag
 	const target = named === null ? null : findMessageById(ctx.db, named);
 	if (named !== null && !target) throw notFound(`no such message: ${named}`);
 
-	const updateId = input.updateId ?? answered?.updateId ?? target?.updateId ?? null;
-	const taskId = input.taskId ?? answered?.taskId ?? target?.taskId ?? null;
-	if (updateId !== null && taskId !== null) {
-		throw invalid('a message hangs off an update or a task, not both');
-	}
+	// A request's discussion takes no card anchor of its own: the question is
+	// the thing being discussed, exactly as one of the owner's feed posts is.
+	const updateId = request
+		? null
+		: (input.updateId ?? answered?.updateId ?? target?.updateId ?? null);
+	// `task_id` is never set any more: the board is gone and work is a state a
+	// card is in (migration 035). The column stays because dropping one is a
+	// table rebuild for nothing.
+	const taskId = null;
 
 	/**
 	 * Answering a reply files the answer under the same post.
@@ -220,7 +263,7 @@ export function postMessage(ctx: DomainContext, input: PostMessageInput): Messag
 	 * where it was meant to: under one of their own feed posts, which anchors to
 	 * nothing else.
 	 */
-	const inThread = Boolean(target && (target.updateId !== null || target.taskId !== null));
+	const inThread = Boolean(target && target.updateId !== null);
 	const parent = inThread
 		? null
 		: target?.replyTo
@@ -243,9 +286,11 @@ export function postMessage(ctx: DomainContext, input: PostMessageInput): Messag
 	// A reply belongs to whatever its post belonged to, and an answer to whatever
 	// it answered: a message that inherited its thread must not lose the project
 	// on the way, or it lands in no feed at all.
-	const anchored = parent
-		? parent.projectId
-		: (anchorProject(ctx, { updateId, taskId }) ?? answered?.projectId ?? null);
+	const anchored = request
+		? request.projectId
+		: parent
+			? parent.projectId
+			: (anchorProject(ctx, { updateId }) ?? answered?.projectId ?? null);
 	if (anchored !== null && namedProject !== null && anchored !== namedProject) {
 		throw invalid('that update, task or message belongs to a different project');
 	}
@@ -258,10 +303,15 @@ export function postMessage(ctx: DomainContext, input: PostMessageInput): Messag
 			? assertAttachableToMessage(ctx, { mediaIds: input.mediaIds, author })
 			: [];
 
+	// Same rule, same reason: an unknown embed type is caught before the thread
+	// gains a line that is missing what it was about.
+	const embeds = input.embeds?.length ? checkedEmbeds(ctx, input.embeds) : [];
+	const apps = input.apps?.length ? checkedApps(ctx, input.apps) : [];
+
 	// An answer lands in the thread it was addressed to, which is what "keep it
 	// all in one thread" means: naming a comment on a card does not start a
 	// second conversation somewhere else.
-	if (answered && !sameThread(answered, { updateId, taskId, replyTo: anchor })) {
+	if (answered && !sameThread(answered, { updateId, replyTo: anchor, requestId })) {
 		throw invalid('that message is in a different thread');
 	}
 
@@ -274,24 +324,112 @@ export function postMessage(ctx: DomainContext, input: PostMessageInput): Messag
 		projectId,
 		updateId,
 		taskId,
-		replyTo: anchor,
+		requestId,
+		replyTo: request ? null : anchor,
 		answers: answersId,
 		author,
 		body,
 		createdAt: ctx.now()
 	});
+	recordMentions(ctx, message.id, message.body);
 
 	if (mediaIds.length > 0) {
 		attachMediaToMessage(ctx.db, { mediaIds, messageId: message.id, author });
 	}
 
+	if (embeds.length > 0) {
+		const poster = parseAuthor(author);
+		attachEmbeds(ctx, {
+			embeds,
+			messageId: message.id,
+			agentId: poster?.kind === 'agent' ? poster.agentId : null,
+			author
+		});
+	}
+
+	if (apps.length > 0) {
+		const poster = parseAuthor(author);
+		attachApps(ctx, {
+			apps,
+			card: { kind: 'message', id: message.id },
+			agentId: poster?.kind === 'agent' ? poster.agentId : null,
+			author
+		});
+	}
+
 	ctx.bus.publish('message.created', {
 		messageId: message.id,
 		projectId: message.projectId,
-		author: message.author
+		author: message.author,
+		...threadKeys(message)
 	});
 
 	return message;
+}
+
+export type EditMessageInput = {
+	messageId: string;
+	/**
+	 * Who is rewriting it. Adapters resolve an agent from its bearer token and
+	 * the owner from the session cookie, never from an argument on the request —
+	 * the whole rule here is "are these your words".
+	 */
+	by: MessageAuthor;
+	/** The replacement. Markdown, untrusted, rendered with raw HTML off (§8). */
+	body: string;
+};
+
+/**
+ * Whoever wrote a line corrects it (migration 033).
+ *
+ * The owner: "let an agent edit any of their messages, questions or comments."
+ * Updates have been editable since migration 006 and the reason holds here: an
+ * agent that pasted the wrong path should put it right where it is being read,
+ * rather than adding "sorry, ignore that" underneath and leaving the owner to
+ * work out which line is true.
+ *
+ * **Only your own, and only a live one.** The author comes from the caller's
+ * identity, and a message written by somebody else is refused with the same
+ * words {@link deleteMessage} uses — one answer for "those are not your words"
+ * wherever an agent meets it. A deleted line cannot be rewritten back into
+ * existence.
+ *
+ * The edit is *stated*: `editedAt` is set and every card shows it. A thread that
+ * rewrote itself quietly would be one the owner could not rely on (design §3).
+ *
+ * What it does not touch: the anchor, the images, the embeds and the
+ * acknowledgements. A correction is a change of words, and a line whose
+ * attachments moved under a tick that was given for the old ones would be
+ * claiming approval it never had.
+ *
+ * @throws {DomainError} `not_found` for an unknown or deleted message,
+ *   `invalid_argument` for somebody else's, or an empty or over-long body.
+ */
+export function editMessage(ctx: DomainContext, input: EditMessageInput): Message {
+	const message = findMessageById(ctx.db, input.messageId);
+	if (!message || message.deletedAt !== null) {
+		throw notFound(`no such message: ${input.messageId}`);
+	}
+
+	const by = authorText(assertAuthor(ctx, input.by));
+	if (by !== message.author) throw invalid('that message was posted by somebody else');
+
+	const body = requiredText(input.body, 'body', MESSAGE_BODY_MAX_LENGTH);
+	// Read a moment ago in a single-process deployment (design §2), so a miss
+	// here would be a bug rather than a race.
+	const saved = editMessageRow(ctx.db, message.id, { body, editedAt: ctx.now() })!;
+	// Who it reaches follows the words: an edit that adds or drops an @name moves
+	// the message into or out of those agents' inboxes.
+	recordMentions(ctx, saved.id, saved.body);
+
+	ctx.bus.publish('message.updated', {
+		messageId: saved.id,
+		projectId: saved.projectId,
+		author: saved.author,
+		...threadKeys(saved)
+	});
+
+	return saved;
 }
 
 export type DeleteMessageInput = {
@@ -359,7 +497,8 @@ export function deleteMessage(ctx: DomainContext, input: DeleteMessageInput): Me
 	ctx.bus.publish('message.deleted', {
 		messageId: message.id,
 		projectId: message.projectId,
-		replies: replies.length
+		replies: replies.length,
+		...threadKeys(message)
 	});
 
 	return findMessageById(ctx.db, message.id)!;
@@ -416,7 +555,8 @@ export function markMessagesDelivered(
 		ctx.bus.publish('message.delivered', {
 			messageId: delivery.messageId,
 			agentId: delivery.agentId,
-			projectId: message.projectId
+			projectId: message.projectId,
+			...threadKeys(message)
 		});
 	}
 
@@ -471,6 +611,60 @@ export function findMessage(ctx: DomainContext, messageId: string): Message | un
 }
 
 /**
+ * How much of the answered message travels with the answer.
+ *
+ * Enough to recognise which line was meant, not enough to be a second copy of
+ * the conversation. A reply lands in an agent's context whether it asked for it
+ * or not, so the quotation has to earn its space.
+ */
+export const QUOTED_MAX_LENGTH = 240;
+
+/** The line an answer was aimed at, as the agent reading the answer sees it. */
+export type AnsweredMessage = {
+	id: string;
+	author: string;
+	/** Trimmed to {@link QUOTED_MAX_LENGTH}, with an ellipsis when it was cut. */
+	body: string;
+	truncated: boolean;
+};
+
+/**
+ * What this message was answering, if anything.
+ *
+ * The owner's report: "when I reply to a message, they can not see what I was
+ * replying to." They were right, and an id on its own would not have fixed it —
+ * `get_messages` hands back the *unread* set, so the line being answered is
+ * usually one the agent has already read and will not be given again. An id it
+ * cannot resolve is not context.
+ *
+ * So the answered line travels with the answer, quoted. `answers` is preferred
+ * over `replyTo` because it is the more precise of the two: `answers` names the
+ * comment the owner clicked on, and `replyTo` only names the post the thread
+ * hangs from (migration 020).
+ *
+ * `null` for a message that answers nothing, and for one whose parent has been
+ * deleted — a quotation of something the owner took back would be the dashboard
+ * showing an agent what it is no longer meant to see.
+ */
+export function answeredMessage(ctx: DomainContext, message: Message): AnsweredMessage | null {
+	const parentId = message.answers ?? message.replyTo;
+	if (!parentId) return null;
+
+	const parent = findMessageById(ctx.db, parentId);
+	if (!parent || parent.deletedAt !== null) return null;
+
+	const full = parent.body;
+	const truncated = full.length > QUOTED_MAX_LENGTH;
+
+	return {
+		id: parent.id,
+		author: parent.author,
+		body: truncated ? `${full.slice(0, QUOTED_MAX_LENGTH).trimEnd()}…` : full,
+		truncated
+	};
+}
+
+/**
  * Every message in the same conversation as this one.
  *
  * "The same conversation" is whichever anchor it has: a card's thread, a task's
@@ -480,7 +674,6 @@ export function findMessage(ctx: DomainContext, messageId: string): Message | un
  */
 export function threadOf(ctx: DomainContext, message: Message): Message[] {
 	if (message.updateId !== null) return listThread(ctx, { updateId: message.updateId });
-	if (message.taskId !== null) return listThread(ctx, { taskId: message.taskId });
 
 	// A feed post: the post itself, and everything hanging off it.
 	const root = message.replyTo ?? message.id;
@@ -557,6 +750,16 @@ export function readMessages(ctx: DomainContext, input: ReadMessagesInput): Mess
 	const worksIn = projectsForAgent(ctx, agent.id);
 	const scope = projectId === undefined ? worksIn : [projectId];
 	const since = decodeCursor(input.since);
+	/**
+	 * **A message that names agents with `@name` is only theirs** (migration
+	 * 044), and it reaches them outside the projects they work in — being named
+	 * is the reason to hear it. Asking for one project still means that one.
+	 *
+	 * A read from `since` keeps the same rule. It is how an agent pages through
+	 * its inbox with the cursor this hands back, so letting other agents' mail in
+	 * there would undo the rule for anyone who pages.
+	 */
+	const audience = { reader: agent.id, mentionsAnywhere: projectId === undefined };
 
 	// Two ways to choose a page, and which one applies is whether the caller
 	// named a position. Normally it does not, and "unread" is per project
@@ -569,12 +772,14 @@ export function readMessages(ctx: DomainContext, input: ReadMessagesInput): Mess
 				afterSeq: since,
 				excludeAuthor: mine,
 				limit,
+				...audience,
 				...(scope ? { projectIds: scope } : {})
 			})
 		: listUnreadMessages(ctx.db, {
 				agentId: agent.id,
 				excludeAuthor: mine,
 				limit,
+				mentionsAnywhere: audience.mentionsAnywhere,
 				...(scope ? { projectIds: scope } : {})
 			});
 
@@ -585,6 +790,7 @@ export function readMessages(ctx: DomainContext, input: ReadMessagesInput): Mess
 			mine,
 			limit,
 			scope,
+			mentionsAnywhere: audience.mentionsAnywhere,
 			since,
 			messages
 		});
@@ -626,6 +832,8 @@ export function countUnreadMessages(ctx: DomainContext, agentId: string): number
 	return countUnreadMessageRows(ctx.db, {
 		agentId,
 		excludeAuthor: authorText({ kind: 'agent', agentId }),
+		// Named with `@name` is this agent's wherever it was said (migration 044).
+		mentionsAnywhere: true,
 		...(scope ? { projectIds: scope } : {})
 	});
 }
@@ -678,6 +886,10 @@ export function countUnreadMessagesInScope(
 	return countUnreadMessageRows(ctx.db, {
 		agentId,
 		excludeAuthor: authorText({ kind: 'agent', agentId }),
+		// A subscription says what a session is for, and being named with
+		// `@name` is the exception to it: otherwise an agent mentioned in a
+		// project none of its sessions watch would never be told (migration 044).
+		mentionsAnywhere: true,
 		...(projectIds ? { projectIds } : {})
 	});
 }
@@ -715,6 +927,8 @@ export function unreadMessagesInScope(
 		// message lands outside it. That is how the owner's newest message stopped
 		// being announced while five old ones repeated.
 		newest: true,
+		// As the count above: being named reaches past the subscription.
+		mentionsAnywhere: true,
 		...(projectIds ? { projectIds } : {})
 	});
 }
@@ -722,8 +936,13 @@ export function unreadMessagesInScope(
 export type ThreadQuery = {
 	/** One update's thread — what a card renders inline (design §7). */
 	updateId?: string;
+
+	/** One request's discussion (migration 032). */
+	requestId?: string;
 	/** One task's thread. */
 	taskId?: string;
+	/** One feed post and the replies under it, by the post's id. */
+	replyTo?: string;
 	/** A project slug or id: every message in it, its cards' threads included. */
 	project?: string;
 	/** Defaults to {@link MAX_MESSAGE_LIMIT}. */
@@ -746,9 +965,16 @@ export type ThreadQuery = {
  */
 export function listThread(ctx: DomainContext, query: ThreadQuery): Message[] {
 	const limit = pageLimit(query.limit ?? MAX_MESSAGE_LIMIT);
+	if (query.replyTo !== undefined) {
+		const post = findMessageById(ctx.db, query.replyTo);
+		if (!post || post.deletedAt !== null) return [];
+		// The post first, always: a reply with no post above it is drawn nowhere.
+		return [post, ...listRepliesTo(ctx.db, post.id).slice(-(limit - 1))];
+	}
 	const scope = {
 		updateId: query.updateId,
 		taskId: query.taskId,
+		requestId: query.requestId,
 		projectId: query.project ? resolveProject(ctx, query.project).id : undefined
 	};
 
@@ -756,12 +982,48 @@ export function listThread(ctx: DomainContext, query: ThreadQuery): Message[] {
 	let afterSeq = 0;
 	for (;;) {
 		const batch = listMessages(ctx.db, { ...scope, afterSeq, limit });
-		if (batch.length === 0) return window;
+		if (batch.length === 0) return withParents(ctx, window);
 
 		window = batch.length >= limit ? batch : [...window, ...batch].slice(-limit);
-		if (batch.length < limit) return window;
+		if (batch.length < limit) return withParents(ctx, window);
 		afterSeq = batch[batch.length - 1].seq;
 	}
+}
+
+/**
+ * Put back the posts the window cut off, when their replies are still in it.
+ *
+ * The owner: "it's like the entire card has disappeared."
+ *
+ * A post they wrote in September that an agent answered this morning is older
+ * than the newest two hundred messages, so the cap dropped the *post* and kept
+ * the *replies* — and a reply whose post is missing is rendered nowhere at all.
+ * The card vanished from the feed, and the notification about the reply pointed
+ * at something that was never drawn.
+ *
+ * Keeping the newest messages is still right: the bottom of a conversation is
+ * the part being read. What was wrong is treating a head as an ordinary message,
+ * when it is the thing its replies are attached to. So the heads named by
+ * whatever survived the cut are fetched back, at most one query per missing one,
+ * and nothing else is widened.
+ */
+function withParents(ctx: DomainContext, window: readonly Message[]): Message[] {
+	const present = new Set(window.map((message) => message.id));
+	const wanted = new Set<string>();
+	for (const message of window) {
+		if (message.replyTo && !present.has(message.replyTo)) wanted.add(message.replyTo);
+	}
+	if (wanted.size === 0) return [...window];
+
+	const heads: Message[] = [];
+	for (const id of wanted) {
+		const head = findMessageById(ctx.db, id);
+		// A deleted head takes its thread with it; there is nothing to draw.
+		if (head && head.deletedAt === null) heads.push(head);
+	}
+
+	// Oldest first, as the rest of the window is: the page reads it in order.
+	return [...heads, ...window].sort((left, right) => left.seq - right.seq);
 }
 
 /**
@@ -797,6 +1059,8 @@ function markPageRead(
 		limit: number;
 		/** The projects this read covered, or `null` for every one. */
 		scope: readonly string[] | null;
+		/** Whether the read let in messages naming this agent from anywhere. */
+		mentionsAnywhere: boolean;
 		/** The position the caller asked to read from, if it named one. */
 		since: number | undefined;
 		messages: Message[];
@@ -813,11 +1077,11 @@ function markPageRead(
 		args.scope ??
 		Array.from(new Set(args.messages.map((message) => message.projectId ?? NO_PROJECT)));
 
-	// A message that belongs to no project still has to become read, and no
-	// scope lists that bucket: it is not a project anybody works in.
-	const projects = args.messages.some((message) => message.projectId === null)
-		? [...covered, NO_PROJECT]
-		: covered;
+	// Every project something was handed from, too. A message that belongs to
+	// no project still has to become read, and no scope lists that bucket; nor
+	// does it list a project the agent was only reached in by being named with
+	// `@name` (migration 044), whose cursor would otherwise never move.
+	const projects = [...covered, ...args.messages.map((message) => message.projectId ?? NO_PROJECT)];
 
 	const handed = new Set(args.messages.map((message) => message.id));
 
@@ -835,23 +1099,45 @@ function markPageRead(
 	/** The last seq in this project that leaves nothing unread behind it. */
 	function unskipped(
 		context: DomainContext,
-		read: { agentId: string; mine: string; limit: number },
+		read: {
+			agentId: string;
+			mine: string;
+			limit: number;
+			scope: readonly string[] | null;
+			mentionsAnywhere: boolean;
+		},
 		projectId: string
 	): number {
+		// What this same read could have handed over, in this one project: a
+		// message it was never allowed to see is not one it skipped.
 		const unread = listUnreadMessages(context.db, {
 			agentId: read.agentId,
 			excludeAuthor: read.mine,
 			limit: read.limit,
-			...(projectId === NO_PROJECT ? {} : { projectIds: [projectId] })
+			mentionsAnywhere: read.mentionsAnywhere,
+			within: projectId,
+			...(read.scope ? { projectIds: read.scope } : {})
 		});
 		const skipped = unread.find((message) => !handed.has(message.id));
 		return skipped ? skipped.seq - 1 : last!;
 	}
 }
 
+/**
+ * The name of the agent that wrote a message, or `null` for the owner.
+ *
+ * So an agent reading a line from another agent can tell who it is talking to:
+ * `agent:<id>` alone means nothing to it.
+ */
+export function authorName(ctx: DomainContext, author: string): string | null {
+	const parsed = parseAuthor(author);
+	if (parsed?.kind !== 'agent') return null;
+	return findAgentById(ctx.db, parsed.agentId)?.name ?? null;
+}
+
 /** A message that heads a thread rather than sitting in one: an id, or null. */
 function threadHead(message: Message): string | null {
-	return message.updateId === null && message.taskId === null ? message.id : null;
+	return message.updateId === null ? message.id : null;
 }
 
 /**
@@ -864,14 +1150,15 @@ function threadHead(message: Message): string | null {
  */
 function sameThread(
 	answered: Message,
-	here: { updateId: string | null; taskId: string | null; replyTo: string | null }
+	here: { updateId: string | null; replyTo: string | null; requestId: string | null }
 ): boolean {
 	if (here.replyTo !== null && answered.id === here.replyTo) return true;
-	return (
-		answered.updateId === here.updateId &&
-		answered.taskId === here.taskId &&
-		(answered.replyTo ?? null) === here.replyTo
-	);
+	// A request's discussion is its own thread (migration 032), and it is the
+	// only anchor its lines carry.
+	if (here.requestId !== null || answered.requestId !== null) {
+		return answered.requestId === here.requestId;
+	}
+	return answered.updateId === here.updateId && (answered.replyTo ?? null) === here.replyTo;
 }
 
 /** The author, checked: an agent that does not exist cannot have said anything. */
@@ -890,20 +1177,11 @@ function assertAuthor(ctx: DomainContext, author: MessageAuthor): MessageAuthor 
  * is gone from every timeline (design §3), so a reply on it would be written to
  * a card the owner can no longer read.
  */
-function anchorProject(
-	ctx: DomainContext,
-	anchor: { updateId: string | null; taskId: string | null }
-): string | null {
+function anchorProject(ctx: DomainContext, anchor: { updateId: string | null }): string | null {
 	if (anchor.updateId !== null) {
 		const update = findUpdateById(ctx.db, anchor.updateId);
 		if (!update || update.deletedAt !== null) throw notFound(`no such update: ${anchor.updateId}`);
 		return update.projectId;
-	}
-
-	if (anchor.taskId !== null) {
-		const task = findTaskById(ctx.db, anchor.taskId);
-		if (!task) throw notFound(`no such task: ${anchor.taskId}`);
-		return task.projectId;
 	}
 
 	return null;
@@ -924,4 +1202,16 @@ function decodeCursor(cursor: string | null | undefined): number | undefined {
 	if (cursor === undefined || cursor === null || cursor === '') return undefined;
 	if (!/^[0-9]+$/.test(cursor)) throw invalid('since is not a cursor this server issued');
 	return Number(cursor);
+}
+
+/** The thread a message is in, as its events carry it (`MessageThread` in `$events`). */
+function threadKeys(
+	message: Message
+): Pick<Message, 'updateId' | 'replyTo' | 'requestId' | 'taskId'> {
+	return {
+		updateId: message.updateId,
+		replyTo: message.replyTo,
+		requestId: message.requestId,
+		taskId: message.taskId
+	};
 }

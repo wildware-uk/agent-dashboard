@@ -18,7 +18,19 @@
 	import Markdown from './Markdown.svelte';
 	import { absoluteLabel, relativeLabel } from './days';
 	import { levelStyle } from './levels';
-	import { durationLabel, mediaLabel, posterSrc, thumbSrc, thumbSrcset, videoSrc } from './media';
+	import Embeds from './Embeds.svelte';
+	import MediaFiles from './MediaFiles.svelte';
+	import MediaSounds from './MediaSounds.svelte';
+	import {
+		durationLabel,
+		mediaLabel,
+		posterSrc,
+		splitMedia,
+		thumbSrc,
+		thumbSrcset,
+		tileMaxWidth,
+		videoSrc
+	} from './media';
 	import type { SharedCardView } from './types';
 
 	let {
@@ -37,7 +49,12 @@
 	const renderedAt = Date.now();
 
 	const level = $derived(levelStyle(card.update.level));
-	const shown = $derived(card.media.filter((item) => item.status === 'ready'));
+	const ready = $derived(card.media.filter((item) => item.status === 'ready'));
+	// Files are downloads rather than pictures (migration 026), so they are listed
+	// under the images rather than laid out among them.
+	const shown = $derived(splitMedia(ready).tiles);
+	const sounds = $derived(splitMedia(ready).sounds);
+	const files = $derived(splitMedia(ready).files);
 </script>
 
 <article
@@ -84,11 +101,17 @@
 				{#each shown as item, index (item.id)}
 					{#if item.kind === 'video'}
 						<!-- svelte-ignore a11y_media_has_caption -->
+						<!--
+							An upright clip is capped the same way a card's cell is
+							(`./media.ts`): at full width a 9:16 capture is a tower nobody
+							can see the end of.
+						-->
 						<video
 							controls
 							preload="metadata"
 							poster={posterSrc(item, mediaPrefix) ?? undefined}
 							src={videoSrc(item, mediaPrefix) ?? undefined}
+							style={tileMaxWidth(item, 1) ? `max-width: ${tileMaxWidth(item, 1)}` : undefined}
 							class="w-full rounded-md border border-border-subtle bg-surface-sunken"
 						></video>
 						{#if durationLabel(item.durationMs)}
@@ -120,7 +143,17 @@
 						<!-- eslint-enable svelte/no-navigation-without-resolve -->
 					{/if}
 				{/each}
+
+				<MediaSounds items={sounds} prefix={mediaPrefix} />
+				<MediaFiles items={files} prefix={mediaPrefix} />
 			</div>
 		{/if}
+
+		<!--
+			Whatever the card was portraying (migration 027). Public with the rest of
+			it: an embed is part of what the card said, and each carries the look it
+			is drawn in, so this page needs no session to render one.
+		-->
+		<Embeds items={card.embeds ?? []} />
 	</div>
 </article>

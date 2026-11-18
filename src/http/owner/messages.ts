@@ -25,6 +25,7 @@ import {
 	deliveriesFor,
 	reactionsFor,
 	invalid,
+	listMessageEmbeds,
 	listMessageMedia,
 	listThread,
 	postMessage,
@@ -63,6 +64,23 @@ function mediaByMessage(
 	for (const message of messages) {
 		const media = listMessageMedia(ctx, message.id);
 		if (media.length > 0) byMessage[message.id] = media;
+	}
+	return byMessage;
+}
+
+/**
+ * The embeds on a page of messages, keyed by message id (migration 027).
+ *
+ * Absent rather than empty for the same reason the media map is.
+ */
+function embedsByMessage(
+	ctx: Parameters<typeof listMessageEmbeds>[0],
+	messages: readonly { id: string }[]
+): Record<string, ReturnType<typeof listMessageEmbeds>> {
+	const byMessage: Record<string, ReturnType<typeof listMessageEmbeds>> = {};
+	for (const message of messages) {
+		const embeds = listMessageEmbeds(ctx, message.id);
+		if (embeds.length > 0) byMessage[message.id] = embeds;
 	}
 	return byMessage;
 }
@@ -122,7 +140,7 @@ export function reactHandler(options: MessageHandlerOptions = {}): OwnerHandler 
 		};
 
 		const result = react(ctx, {
-			messageId: event.params.id ?? '',
+			card: { kind: 'message', id: event.params.id ?? '' },
 			actor: { kind: 'human' },
 			emoji: text(body.emoji, 'emoji'),
 			...(typeof body.on === 'boolean' ? { on: body.on } : {})
@@ -158,11 +176,15 @@ export function listMessagesHandler(options: MessageHandlerOptions = {}): OwnerH
 				messages,
 				// In the same read as the messages, so a tick can never paint a beat
 				// after the reply it belongs to (migration 013).
-				acks: acknowledgementsFor(ctx, { messageIds: messages.map((message) => message.id) }),
+				acks: acknowledgementsFor(ctx, { message: messages.map((message) => message.id) }),
 				// And the images on them (migration 016), for the same reason the
 				// timeline's media rides with its cards: a picture that appeared a
 				// beat after the words reads as having just been added.
 				media: mediaByMessage(ctx, messages),
+				// And the embeds (migration 027), for the same reason again: a Slack
+				// message that painted a beat after the reply quoting it reads as
+				// having just arrived.
+				embeds: embedsByMessage(ctx, messages),
 				// Who the server has actually handed each message to (migration 018).
 				// The state between "unread" and "acknowledged", which used to be
 				// invisible: a message nobody had answered looked the same whether an
@@ -176,6 +198,7 @@ export function listMessagesHandler(options: MessageHandlerOptions = {}): OwnerH
 				// having just been added to them.
 				reactions: reactionsFor(
 					ctx,
+					'message',
 					messages.map((message) => message.id)
 				)
 			}
@@ -188,24 +211,23 @@ export function readReply(body: Body): {
 	body: string;
 	project?: string;
 	updateId?: string;
-	taskId?: string;
 	replyTo?: string;
 	answers?: string;
+	requestId?: string;
 	mediaIds?: string[];
 } {
 	const input: {
 		body: string;
 		project?: string;
 		updateId?: string;
-		taskId?: string;
 		replyTo?: string;
 		answers?: string;
+		requestId?: string;
 		mediaIds?: string[];
 	} = {
 		body: text(body.body, 'body')
 	};
 	if ('update' in body) input.updateId = text(body.update, 'update');
-	if ('task' in body) input.taskId = text(body.task, 'task');
 	// The owner's own feed post (migration 014): it anchors to nothing else, so a
 	// reply names it directly.
 	if ('replyTo' in body) input.replyTo = text(body.replyTo, 'replyTo');
@@ -214,6 +236,8 @@ export function readReply(body: Body): {
 	// thread when nothing else names one, so the reply lands beside what it
 	// answers rather than starting a conversation elsewhere.
 	if ('answers' in body) input.answers = text(body.answers, 'answers');
+	// The question being talked over before it is answered (migration 032).
+	if ('request' in body) input.requestId = text(body.request, 'request');
 	// Images the owner already uploaded to `POST /api/media` (migration 016).
 	// Shape-checked here, owned-and-unattached checked in `$domain`.
 	if ('mediaIds' in body) {
@@ -227,19 +251,24 @@ export function readReply(body: Body): {
  * The query string, as a {@link ThreadQuery}.
  *
  * An absent scope is every message, which is what the whole-timeline page asks
- * for. `limit` is validated here rather than passed through as `NaN`: the domain
+ * for. `replyTo` is one feed post and its replies, and `task` one task's
+ * thread: what a client re-reads when an event names that thread. `limit` is validated here rather than passed through as `NaN`: the domain
  * would refuse it, but with a message about a number the caller never sent.
  */
 export function readThreadQuery(url: URL): ThreadQuery {
 	const query: ThreadQuery = {};
 	const update = url.searchParams.get('update');
-	const task = url.searchParams.get('task');
+	const request = url.searchParams.get('request');
 	const project = url.searchParams.get('project');
+	const task = url.searchParams.get('task');
+	const replyTo = url.searchParams.get('replyTo');
 	const limit = url.searchParams.get('limit');
 
 	if (update) query.updateId = update;
-	if (task) query.taskId = task;
+	if (request) query.requestId = request;
 	if (project) query.project = project;
+	if (task) query.taskId = task;
+	if (replyTo) query.replyTo = replyTo;
 	if (limit !== null) {
 		if (!/^[0-9]+$/.test(limit)) throw invalid('limit must be a positive integer');
 		query.limit = Number(limit);

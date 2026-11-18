@@ -31,6 +31,7 @@
 import type {
 	AckView,
 	DeliveryView,
+	EmbedView,
 	MediaView,
 	MessageView,
 	MessagesSnapshot,
@@ -65,6 +66,8 @@ export type ThreadSource = {
 	posts?(): MessageView[];
 	/** The images on one message (migration 016). */
 	mediaFor?(messageId: string): MediaView[];
+	/** The embeds on one message (migration 027). */
+	embedsFor?(messageId: string): EmbedView[];
 	/** The replies under one post. */
 	repliesTo?(messageId: string): MessageView[];
 	/**
@@ -87,6 +90,13 @@ export type ThreadSource = {
 	/** The same, for a task. */
 	acksForTask?(taskId: string): AckView[];
 	/**
+	 * The discussion on one request (migration 032).
+	 *
+	 * A question the owner is talking over before answering it. Optional so a
+	 * card spec that hands a request no conversation still renders.
+	 */
+	forRequest?(requestId: string): MessageView[];
+	/**
 	 * The conversation on a task rather than an update.
 	 *
 	 * A task is the other thing an agent and its owner talk about, and the panel
@@ -98,6 +108,10 @@ export type ThreadSource = {
 /** The events that change a thread. */
 const WATCHED = [
 	'message.created',
+	// Somebody corrected their own line (migration 033). Its own name rather
+	// than a second creation: this is a line already on screen that now reads
+	// differently, and the store refetches and replaces it like any other change.
+	'message.updated',
 	// The server handed a message to an agent (migration 018): the line under
 	// the owner's own words changes from nothing to "delivered to scout".
 	'message.delivered',
@@ -154,6 +168,14 @@ export class Threads {
 	 */
 	media = $state<Record<string, MediaView[]>>({});
 	/**
+	 * The embeds on those messages, keyed by message id (migration 027).
+	 *
+	 * Its own map beside the media's, read in the same document and defaulted the
+	 * same way: an embed is what a reply was quoting, and one that painted a beat
+	 * later would read as having just arrived.
+	 */
+	embeds = $state<Record<string, EmbedView[]>>({});
+	/**
 	 * Which agents each message has reached (migration 018).
 	 *
 	 * Held beside the messages for the same reason acknowledgements are: one
@@ -209,6 +231,11 @@ export class Threads {
 		return this.messages.filter((message) => message.updateId === updateId);
 	}
 
+	/** One question's discussion, for the card that asks it (migration 032). */
+	forRequest(requestId: string): MessageView[] {
+		return this.messages.filter((message) => message.requestId === requestId);
+	}
+
 	/** One task's thread, for the panel that renders tasks (design §7). */
 	forTask(taskId: string): MessageView[] {
 		return this.messages.filter((message) => message.taskId === taskId);
@@ -226,7 +253,14 @@ export class Threads {
 	 */
 	posts(): MessageView[] {
 		return this.messages.filter(
-			(message) => message.updateId === null && message.taskId === null && !message.replyTo
+			(message) =>
+				message.updateId === null &&
+				message.taskId === null &&
+				!message.replyTo &&
+				// A line in a question's discussion anchors to nothing else either
+				// (migration 032), and it belongs under the question rather than
+				// loose in the feed as a post of its own.
+				!message.requestId
 		);
 	}
 
@@ -238,6 +272,11 @@ export class Threads {
 	/** The images on one message. Empty for the ordinary text-only case. */
 	mediaFor(messageId: string): MediaView[] {
 		return this.media[messageId] ?? [];
+	}
+
+	/** The embeds on one message. Empty for the ordinary case, as above. */
+	embedsFor(messageId: string): EmbedView[] {
+		return this.embeds[messageId] ?? [];
 	}
 
 	/** Which agents this message has reached (migration 018). */
@@ -375,6 +414,7 @@ export class Threads {
 		// would leave a tick on a message whose acknowledgement has gone.
 		this.acks = snapshot.acks ?? [];
 		this.media = snapshot.media ?? {};
+		this.embeds = snapshot.embeds ?? {};
 		this.deliveries = snapshot.deliveries ?? [];
 		this.reactions = snapshot.reactions ?? [];
 		// Adopted, not raised to the greater of the two: the server's stamp says

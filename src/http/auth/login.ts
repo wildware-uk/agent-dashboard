@@ -65,15 +65,26 @@ export type LoginHandlerOptions = {
 	config?: () => AuthConfig | null;
 	limiter?: RateLimiter;
 	now?: () => number;
+	/** The password check to use; built from the options above when omitted. */
+	check?: PasswordCheck;
 };
 
+/** The owner password checked, on its own: no cookie, no redirect. */
+export type PasswordVerdict = { ok: true } | Exclude<LoginOutcome, { ok: true }>;
+
+export type PasswordCheck = (attempt: {
+	password: unknown;
+	clientAddress: string;
+}) => Promise<PasswordVerdict>;
+
 /**
- * Build a login handler.
+ * Build a password check with its own rate limiter.
  *
- * The limiter is created per handler and held in its closure, so the process-wide
- * singleton below is the only shared state and tests get a clean one each time.
+ * The browser's login form and an app signing in share one check (see
+ * {@link ownerPasswordCheck}), so five guesses is five guesses whichever door
+ * they knock on.
  */
-export function createLoginHandler({
+export function createPasswordCheck({
 	config = authConfig,
 	now = Date.now,
 	limiter = createRateLimiter({
@@ -81,8 +92,8 @@ export function createLoginHandler({
 		windowMs: LOGIN_WINDOW_MS,
 		now
 	})
-}: LoginHandlerOptions = {}) {
-	return async function attemptLogin(attempt: LoginAttempt): Promise<LoginOutcome> {
+}: Omit<LoginHandlerOptions, 'check'> = {}): PasswordCheck {
+	return async (attempt) => {
 		const secrets = config();
 		if (!secrets) return { ok: false, status: 503, error: UNCONFIGURED };
 
@@ -109,6 +120,22 @@ export function createLoginHandler({
 		}
 
 		limiter.reset(attempt.clientAddress);
+		return { ok: true };
+	};
+}
+
+/**
+ * Build a login handler: the password check, then the session cookie.
+ */
+export function createLoginHandler(options: LoginHandlerOptions = {}) {
+	const { config = authConfig, now = Date.now } = options;
+	const check = options.check ?? createPasswordCheck(options);
+	return async function attemptLogin(attempt: LoginAttempt): Promise<LoginOutcome> {
+		const verdict = await check(attempt);
+		if (!verdict.ok) return verdict;
+
+		const secrets = config();
+		if (!secrets) return { ok: false, status: 503, error: UNCONFIGURED };
 		attempt.cookies.set(
 			SESSION_COOKIE,
 			signSession(secrets.sessionSecret, { now: now() }),
@@ -120,7 +147,12 @@ export function createLoginHandler({
 }
 
 /**
- * The handler the login route uses. Module scope on purpose: the rate limiter
- * has to outlive a single request to mean anything.
+ * The one password check every way in shares. Module scope on purpose: the
+ * rate limiter has to outlive a single request to mean anything.
  */
-export const attemptLogin = createLoginHandler();
+export const ownerPasswordCheck = createPasswordCheck();
+
+/**
+ * The handler the login route uses.
+ */
+export const attemptLogin = createLoginHandler({ check: ownerPasswordCheck });

@@ -72,19 +72,27 @@ describe('create_upload', () => {
 		expect(mcp.h.eventNames()).toEqual([]);
 	});
 
-	it('refuses SVG, and says so as an argument error the agent can act on', () => {
+	it('reserves an SVG as a file, which downloads rather than renders', () => {
+		// Migration 026: the owner asked to be able to send any file. SVG is the
+		// sharp case — never put on a page from this origin, perfectly storable.
 		const result = run({ filename: 'diagram.svg', mime: 'image/svg+xml', bytes: 100 });
+
+		expect(result.isError).toBeUndefined();
+		expect(result.structuredContent).toMatchObject({ media_id: expect.any(String) });
+	});
+
+	it('reserves a PDF, which no allowlist would have taken', () => {
+		const result = run({ filename: 'notes.pdf', mime: 'application/pdf', bytes: 100 });
+
+		expect(result.isError).toBeUndefined();
+	});
+
+	it('refuses a declared type that is not a type at all, naming what one looks like', () => {
+		const result = run({ filename: 'notes', mime: 'notes', bytes: 100 });
 
 		expect(result.isError).toBe(true);
 		expect(result.structuredContent).toMatchObject({ error: 'invalid_argument' });
-		expect(toolText(result)).toContain('SVG');
-	});
-
-	it('refuses a type off the allowlist, naming what is allowed', () => {
-		const result = run({ filename: 'notes.pdf', mime: 'application/pdf', bytes: 100 });
-
-		expect(result.isError).toBe(true);
-		expect(toolText(result)).toContain('image/png');
+		expect(toolText(result)).toContain('type/subtype');
 	});
 
 	it('refuses a file over this deployment`s cap for its kind', () => {

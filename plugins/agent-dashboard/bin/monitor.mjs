@@ -36,6 +36,89 @@ var __copyProps = (to, from, except, desc) => {
 };
 var __toCommonJS = (mod) => __hasOwnProp.call(mod, "module.exports") ? mod["module.exports"] : __copyProps(__defProp({}, "__esModule", { value: true }), mod);
 //#endregion
+//#region src/channel/claim.ts
+/**
+* Which of the two bridges is delivering, so a session is not told twice.
+*
+* The owner: "avoid double delivery with the channel. If the session also has
+* the agent-dashboard-channel, everything would arrive twice."
+*
+* Both halves can run in one session — the channel is an MCP server, the
+* monitor is a background command — and neither can see the other's
+* configuration. So the channel leaves a note saying it is alive, and the
+* monitor reads it and stands down.
+*
+* ## Why a file, and why it expires
+*
+* A file because it is the only thing both processes can reach: they are
+* separate processes with different environments, started by different parts of
+* Claude Code. It expires because a channel that was killed must not silence
+* every future monitor — the claim is re-stamped every {@link CLAIM_EVERY_MS}
+* while the channel runs, and is ignored once it is {@link CLAIM_STALE_MS} old.
+*
+* ## Why it is careful about *whose* claim it is
+*
+* The plugin's data directory can be shared by more than one session on a
+* machine. Silencing this session's monitor because *another* session has a
+* channel would be the bug this exists to prevent, wearing a different hat. So
+* a claim carries the session it belongs to when Claude Code says what that is,
+* and is honoured only for that session; with no session id to compare, it
+* falls back to "the process that wrote it is still alive", which is the best
+* available answer and is at least never stale.
+*/
+/** The file the channel writes and the monitor reads. */
+var CLAIM_FILE = "channel.alive";
+/** How often the channel re-stamps it. */
+var CLAIM_EVERY_MS = 2e4;
+/** Where the claim lives, or `null` when this process has no plugin directory. */
+function claimPath(env) {
+	const dir = env.CLAUDE_PLUGIN_DATA?.trim();
+	return dir ? join(dir, CLAIM_FILE) : null;
+}
+/** The session Claude Code says this process belongs to, if it says at all. */
+function sessionOf(env) {
+	const id = env.CLAUDE_SESSION_ID?.trim();
+	return id ? id : null;
+}
+/** Is that process still there? `process.kill(pid, 0)` asks without signalling. */
+function processAlive(pid) {
+	try {
+		process.kill(pid, 0);
+		return true;
+	} catch {
+		return false;
+	}
+}
+/**
+* Is a channel delivering to *this* session right now?
+*
+* The rule, in order: a claim has to exist, be fresh, and be this session's —
+* by session id when both sides know one, and otherwise by the writing process
+* still being alive.
+*/
+function channelIsLive(env, io = {}) {
+	const path = claimPath(env);
+	if (!path) return false;
+	let claim;
+	try {
+		const parsed = JSON.parse(String((io.read ?? readFileSync)(path, "utf8")));
+		if (typeof parsed !== "object" || parsed === null) return false;
+		const { pid, session, at } = parsed;
+		if (typeof pid !== "number" || typeof at !== "number") return false;
+		claim = {
+			pid,
+			session: typeof session === "string" ? session : null,
+			at
+		};
+	} catch {
+		return false;
+	}
+	if ((io.now ?? Date.now)() - claim.at > 9e4) return false;
+	const mine = sessionOf(env);
+	if (mine && claim.session) return claim.session === mine;
+	return (io.alive ?? processAlive)(claim.pid);
+}
+//#endregion
 //#region node_modules/zod/v4/core/core.js
 var _a$1;
 function $constructor(name, initializer, params) {
@@ -12824,11 +12907,13 @@ var require_limit = /* @__PURE__ */ __commonJSMin(((exports) => {
 	"  mark it read. acknowledge({state: \"done\", message_id}) when you have dealt with it.",
 	"  A message with NO update_id and NO task_id is a post your owner wrote straight into the",
 	"  feed: it is the thing itself rather than a comment on something, so acknowledge it the same",
-	"  way, then decide what it needs — create_task for work, post_message({message_id}) to answer",
-	"  or to ask them a question — and do not wait to be told which.",
-	"- open_tasks above zero: call list_tasks, then claim_task for anything you are picking up.",
-	"  A task marked broadcast: true was offered to this project's agents rather than assigned",
-	"  to you, so somebody else may claim it first — a conflict means move on, not retry.",
+	"  way, then decide what it needs — set_status to mark it as work you are taking on,",
+	"  post_message({message_id}) to answer or to ask them a question — and do not wait to be",
+	"  told which.",
+	"- open_tasks above zero: that is how many cards in your projects are marked as work and",
+	"  not finished (the board is gone; work is a state a card is in). Call list_work to see",
+	"  them, then set_status({..., status: \"in_progress\"}) on the one you are taking. Check",
+	"  what is already in_progress first: another agent may be on it.",
 	"- pending_approvals above zero: one of your own request_input calls is still waiting on",
 	"  the owner; call await_request with its request_id.",
 	"- A reaction event is your owner putting an emoji on something you said: a tick means",
@@ -12868,6 +12953,30 @@ var BACKOFF_MS = [
 	3e4
 ];
 /**
+* How long one notification may take before the bridge gives up on it.
+*
+* This exists because of a failure the owner reported as "Garden game channels
+* arent receiving": a bridge process alive, holding no connection, and never
+* reconnecting. A notification is a write to stdout, which is the MCP transport
+* — and a write to a pipe nobody is draining never resolves. Every send happened
+* *inside* the frame loop, so one stuck write froze the reader, the reconnect
+* loop and the channel with it, permanently and silently.
+*
+* Ten seconds is far longer than a healthy client takes and far shorter than a
+* session lasts. Losing one notification is a bad minute; losing the loop is a
+* bad day, and the dashboard re-sends the unread set on the next rise anyway.
+*/
+var NOTIFY_TIMEOUT_MS = 1e4;
+/**
+* How long a connection may go silent before it is assumed dead.
+*
+* The dashboard heartbeats every fifteen seconds, so silence for six of them is
+* not a quiet channel — it is a connection that is gone without having said so.
+* That happens whenever the server goes away without a clean close (a restart, a
+* dropped tunnel), and without this the read simply waits for ever.
+*/
+var STREAM_IDLE_MS = 9e4;
+/**
 * What one change is worth saying out loud.
 *
 * Only the counts that went **up** are mentioned. A frame arrives whenever any
@@ -12886,20 +12995,51 @@ function describeRise(previous, next) {
 	return `Waiting for you on the dashboard: ${parts.join(", ")}.`;
 }
 /**
-* What to add to a notification when the message came with pictures.
+* The word for each kind of attachment, as a notification says it.
 *
-* Says where to get them in the same breath as saying they exist: an agent told
-* only that there is an image, with no way to see one, is worse off than one
-* told nothing.
+* Four, because there are four (migrations 026 and 038). This used to be two —
+* images, and "video" for everything else — which was written when those were
+* the only two kinds there were and then quietly outlived the truth. The owner:
+* "I sent a glb file, the agent cannot see it, and it says it received a video."
+* An agent told it has been sent a video does not go looking for a model.
+*/
+var ATTACHMENT_NOUNS = {
+	image: ["image", "images"],
+	video: ["video", "videos"],
+	audio: ["sound", "sounds"],
+	file: ["file", "files"]
+};
+/** A kind this bridge has no word for yet: say "attachment" rather than guess. */
+var UNKNOWN_NOUN = ["attachment", "attachments"];
+/**
+* What to add to a notification when the message came with something attached.
+*
+* Says where to get it in the same breath as saying it exists: an agent told
+* only that there is a file, with no way to see one, is worse off than one told
+* nothing. The kinds are counted and named separately, in a fixed order, so "2
+* images and 1 file" cannot come out as "3 videos".
 */
 function describeAttachments(media) {
 	if (!media || media.length === 0) return "";
-	const images = media.filter((item) => item.kind === "image").length;
-	const others = media.length - images;
 	const parts = [];
-	if (images > 0) parts.push(`${images} image${images === 1 ? "" : "s"}`);
-	if (others > 0) parts.push(`${others} video${others === 1 ? "" : "s"}`);
-	return ` [${parts.join(" and ")} attached — call get_messages to see ${media.length === 1 ? "it" : "them"}]`;
+	for (const kind of [
+		"image",
+		"video",
+		"audio",
+		"file"
+	]) {
+		const count = media.filter((item) => item.kind === kind).length;
+		if (count === 0) continue;
+		const [one, many] = ATTACHMENT_NOUNS[kind] ?? UNKNOWN_NOUN;
+		parts.push(`${count} ${count === 1 ? one : many}`);
+	}
+	const named = media.filter((item) => item.kind in ATTACHMENT_NOUNS).length;
+	const rest = media.length - named;
+	if (rest > 0) {
+		const [one, many] = UNKNOWN_NOUN;
+		parts.push(`${rest} ${rest === 1 ? one : many}`);
+	}
+	return ` [${parts.length <= 1 ? parts[0] ?? "" : `${parts.slice(0, -1).join(", ")} and ${parts.at(-1)}`} attached — call get_messages to see ${media.length === 1 ? "it" : "them"}]`;
 }
 /**
 * One reaction as a sentence.
@@ -12928,6 +13068,20 @@ function describeAnswer(frame) {
 	if (frame.state !== "answered") return `${frame.state === "timeout" ? "Nobody answered before your request timed out" : "Your owner dismissed your request without answering"}: ${question}. That is not permission.`;
 	return `Your owner answered ${answerText(frame.answer)} — ${question}`;
 }
+/**
+* What the message is answering, as a clause inside the notification.
+*
+* Short on purpose: the point is to recognise which line was meant, not to
+* reproduce the conversation. The server has already trimmed the body — this
+* only decides how it reads.
+*/
+function quoting(parent, limit = 100) {
+	if (!parent) return "";
+	const said = parent.body.replace(/\s+/g, " ").trim();
+	if (said === "") return "";
+	const short = said.length > limit ? `${said.slice(0, limit).trimEnd()}…` : said;
+	return `, answering ${parent.author === "human" ? "their own" : `${parent.author}'s`} "${short}"`;
+}
 /** The value itself, short enough to sit in one line of a notification. */
 function answerText(answer) {
 	if (answer === null) return "nothing";
@@ -12936,13 +13090,23 @@ function answerText(answer) {
 	if (typeof answer === "object") return `"${answer.action}" on ${answer.text.length} characters of text`;
 	return `"${answer}"`;
 }
-/** Split an SSE body into frames as the bytes arrive. */
-async function* readFrames(body) {
+/**
+* Split an SSE body into frames as the bytes arrive.
+*
+* `idleMs` is a liveness check on the *bytes*, not on the frames: the server's
+* heartbeats are comments, which are consumed here and never yielded, so a
+* timer driven by frames would fire on a perfectly healthy but quiet channel.
+* Reading is what proves the connection is still there.
+*
+* @throws when nothing arrives for `idleMs`, which the caller treats as a
+*   dropped connection and reconnects from.
+*/
+async function* readFrames(body, { idleMs = STREAM_IDLE_MS } = {}) {
 	const reader = body.getReader();
 	const decoder = new TextDecoder();
 	let buffered = "";
 	while (true) {
-		const chunk = await reader.read();
+		const chunk = await readOrTimeout(reader, idleMs);
 		if (chunk.done) return;
 		buffered += decoder.decode(chunk.value, { stream: true });
 		let split = buffered.indexOf("\n\n");
@@ -12961,6 +13125,51 @@ async function* readFrames(body) {
 	}
 }
 /**
+* One read, or a thrown error if the connection has gone silent.
+*
+* The reader is cancelled on the way out so the socket is released rather than
+* left half-open behind a promise nobody is waiting on any more.
+*/
+async function readOrTimeout(reader, idleMs) {
+	if (idleMs <= 0) return reader.read();
+	let timer;
+	try {
+		return await Promise.race([reader.read(), new Promise((_, reject) => {
+			timer = setTimeout(() => reject(/* @__PURE__ */ new Error(`no data for ${idleMs}ms`)), idleMs);
+		})]);
+	} catch (error) {
+		await reader.cancel().catch(() => {});
+		throw error;
+	} finally {
+		clearTimeout(timer);
+	}
+}
+/**
+* A notification that cannot outlast {@link NOTIFY_TIMEOUT_MS}.
+*
+* Wrapped once, where the sender enters the bridge, rather than at each of the
+* five call sites — the property being protected is "no send can hold the loop",
+* and a property with five places to forget it is not one.
+*
+* @throws when the send does not settle in time, so a caller can tell that the
+*   thing it was announcing was not in fact announced.
+*/
+function withNotifyTimeout(send, timeoutMs, log) {
+	return async (content, meta) => {
+		let timer;
+		try {
+			await Promise.race([send(content, meta), new Promise((_, reject) => {
+				timer = setTimeout(() => reject(/* @__PURE__ */ new Error(`notification timed out after ${timeoutMs}ms`)), timeoutMs);
+			})]);
+		} catch (error) {
+			log(`notification dropped: ${error instanceof Error ? error.message : String(error)}`);
+			throw error;
+		} finally {
+			clearTimeout(timer);
+		}
+	};
+}
+/**
 * Hold the dashboard's agent stream open and push what arrives into the session.
 *
 * Runs until `signal` aborts. Never throws for a connection problem: the
@@ -12968,8 +13177,8 @@ async function* readFrames(body) {
 * would take the channel down for the rest of the session with no way back.
 */
 async function runBridge(options) {
-	const { baseUrl, token, fetch: fetcher = globalThis.fetch, notify, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), signal, log = () => {} } = options;
-	if (!notify) throw new Error("runBridge needs a notify function");
+	const { baseUrl, token, fetch: fetcher = globalThis.fetch, notify: send, notifyTimeoutMs = NOTIFY_TIMEOUT_MS, idleMs = STREAM_IDLE_MS, sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms)), signal, log = () => {} } = options;
+	if (!send) throw new Error("runBridge needs a notify function");
 	const endpoint = new URL("/api/agent/stream", baseUrl);
 	for (const project of options.projects) if (project.trim() !== "") endpoint.searchParams.append("project", project.trim());
 	const clientId = options.clientId ?? newClientId();
@@ -12994,7 +13203,9 @@ async function runBridge(options) {
 		if (pendingCounts === null) return;
 		const { work, sentence } = pendingCounts;
 		pendingCounts = null;
-		await send(sentence, meta(work));
+		try {
+			await send(sentence, meta(work));
+		} catch {}
 	};
 	/**
 	* Message ids already delivered, so nothing is announced twice.
@@ -13077,11 +13288,16 @@ async function runBridge(options) {
 			if (held) Object.assign(attributes, meta(held.work));
 			const where = message.project_name ?? message.project ?? "the dashboard";
 			const who = message.author === "human" ? "Your owner" : message.author;
+			if (message.reply_to) attributes.reply_to = message.reply_to;
+			if (message.answers) attributes.answers = message.answers;
+			if (message.in_reply_to) attributes.in_reply_to = message.in_reply_to.id;
+			if (message.request_id) attributes.request_id = message.request_id;
 			if (message.media && message.media.length > 0) attributes.attachments = String(message.media.length);
+			await send(`${who} on ${where}${message.request_id ? " about your open question" : ""}${quoting(message.in_reply_to)}: ${message.body}` + describeAttachments(message.media), attributes);
 			remember(message.message_id);
-			await send(`${who} on ${where}: ${message.body}${describeAttachments(message.media)}`, attributes);
 		}
 	};
+	const notify = withNotifyTimeout(send, notifyTimeoutMs, log);
 	let previous = null;
 	let attempt = 0;
 	while (!signal?.aborted) {
@@ -13099,7 +13315,7 @@ async function runBridge(options) {
 			}
 			log("connected");
 			attempt = 0;
-			for await (const frame of readFrames(response.body)) {
+			for await (const frame of readFrames(response.body, { idleMs })) {
 				if (frame.event === "reaction" && frame.data) {
 					try {
 						await announceReaction(notify, JSON.parse(frame.data));
@@ -13166,10 +13382,41 @@ function oneLine(content, max = 300) {
 	const space = head.lastIndexOf(" ");
 	return `${(space > max / 2 ? head.slice(0, space) : head).trimEnd()}…`;
 }
-/** Read the dashboard until the session ends, writing one line per event. */
+/**
+* Read the dashboard until the session ends, writing one line per event.
+*
+* Two things the bridge treats as diagnostics are promoted to the session here,
+* because on a monitor stderr goes nowhere an agent can see and "misconfigured"
+* would look exactly like "quiet dashboard":
+*
+* - **the first connection**, so a session can tell the monitor is up at all;
+* - **a refusal**, which is nearly always a token that is wrong or revoked.
+*
+* Reconnects stay quiet. A dashboard that was restarted, or a laptop that
+* closed its lid, is not news — it is the ordinary weather of a long session,
+* and a notification per retry would be the monitor talking about itself
+* instead of about the work.
+*/
 async function runMonitor(options) {
 	const write = options.write ?? ((line) => process.stdout.write(`${line}\n`));
-	const log = options.log ?? ((message) => process.stderr.write(`agent-dashboard monitor: ${message}\n`));
+	const diagnose = options.log ?? ((message) => process.stderr.write(`agent-dashboard monitor: ${message}\n`));
+	let announcedConnection = false;
+	let announcedRefusal = false;
+	const log = (message) => {
+		diagnose(message);
+		if (message === "connected") {
+			announcedRefusal = false;
+			if (announcedConnection) return;
+			announcedConnection = true;
+			write("agent-dashboard monitor: connected — watching the dashboard for this session.");
+			return;
+		}
+		const refused = /^stream refused: (\d+)/.exec(message);
+		if (refused && !announcedRefusal) {
+			announcedRefusal = true;
+			write(refused[1] === "401" ? "agent-dashboard monitor: refused (401) — the agent token is wrong or revoked. Mint a new one with `agent-dashboard mint-token <name>` and set it under /plugin or in AGENT_DASHBOARD_TOKEN." : `agent-dashboard monitor: the dashboard refused the connection (${refused[1]}). Retrying; check the dashboard URL and that the deployment is up.`);
+		}
+	};
 	await runBridge({
 		baseUrl: options.baseUrl,
 		token: options.token,
@@ -13186,12 +13433,21 @@ async function runMonitor(options) {
 }
 /** What the `SessionStart` hook writes, and this reads. */
 var CONNECTION_FILE = "connection.json";
+/** The monitor switch, from wherever it was set. Anything unknown is `auto`. */
+function monitorMode(raw) {
+	return typeof raw === "string" && raw.trim().toLowerCase() === "off" ? "off" : "auto";
+}
 /** Split the comma-separated subscription the same way the channel does. */
 function subscription(raw) {
 	return (raw ?? "").split(",").map((project) => project.trim()).filter((project) => project !== "");
 }
 /**
 * The connection, from the environment or from the hook's file.
+*
+* **The environment wins.** A session run by hand sets `AGENT_DASHBOARD_*`, and
+* somebody who typed a URL into the command they are running should not be
+* quietly overruled by a file written for a plugin option they forgot about.
+* The file is the ordinary case; the variables are the deliberate one.
 *
 * `null` rather than a throw: the caller waits, because the file arriving a
 * moment later is the ordinary case rather than an error.
@@ -13205,20 +13461,22 @@ function readConnection(env, read = readFileSync) {
 	if (fromEnv.baseUrl && fromEnv.token && fromEnv.projects.length > 0) return {
 		baseUrl: fromEnv.baseUrl,
 		token: fromEnv.token,
-		projects: fromEnv.projects
+		projects: fromEnv.projects,
+		monitor: monitorMode(env.AGENT_DASHBOARD_MONITOR)
 	};
 	const dir = env.CLAUDE_PLUGIN_DATA?.trim();
 	if (!dir) return null;
 	try {
 		const stored = JSON.parse(String(read(join(dir, CONNECTION_FILE), "utf8")));
 		if (typeof stored !== "object" || stored === null) return null;
-		const { url, token, projects } = stored;
+		const { url, token, projects, monitor } = stored;
 		const wanted = subscription(typeof projects === "string" ? projects : void 0);
 		if (typeof url !== "string" || typeof token !== "string" || wanted.length === 0) return null;
 		return {
 			baseUrl: url.trim(),
 			token: token.trim(),
-			projects: wanted
+			projects: wanted,
+			monitor: env.AGENT_DASHBOARD_MONITOR === void 0 ? monitorMode(monitor) : monitorMode(env.AGENT_DASHBOARD_MONITOR)
 		};
 	} catch {
 		return null;
@@ -13230,9 +13488,11 @@ function readConnection(env, read = readFileSync) {
 * Entry point for the monitor (`bin/monitor.mjs`).
 *
 * Claude Code runs this as a background process for the life of a session and
-* turns every line it writes to stdout into a notification.
+* turns every line it writes to stdout into a notification. Since plugin 0.2.0
+* it starts by itself (`monitors.json` says `"when": "always"`), so a session
+* hears from the dashboard without anybody invoking a skill first.
 *
-* ## Where the connection comes from, and why it is not the plugin's config
+* ## Where the connection comes from
 *
 * A monitor command **cannot** reference `${user_config.*}`, and a monitor
 * process is not given `CLAUDE_PLUGIN_OPTION_*` either — so the plugin's own
@@ -13240,33 +13500,64 @@ function readConnection(env, read = readFileSync) {
 * read a file it owns, and this plugin's `SessionStart` hook is the half that
 * can see the settings, so the hook writes the file and this reads it.
 *
-* Environment variables win when they are set, which keeps this runnable by
-* hand and outside a plugin entirely:
+* The environment wins over the file, which keeps this runnable by hand and
+* outside a plugin entirely:
 *
 *     AGENT_DASHBOARD_URL=… AGENT_DASHBOARD_TOKEN=… \
 *     AGENT_DASHBOARD_PROJECTS='*' node build/monitor.js
 *
-* ## It waits rather than exiting
+* ## It waits rather than exiting, but it says so
 *
 * A monitor that exited because the hook had not run yet would be a fallback
-* that fails exactly when it is needed and leaves nothing behind to say why —
-* Claude Code does not restart it. So a missing configuration is a wait, with
-* one line on stderr the first time so it is diagnosable at all.
+* that fails exactly when it is needed — Claude Code does not restart it. So a
+* missing configuration is a wait. What is new in 0.2.0 is that the wait is
+* *audible*: after {@link SAY_AFTER_MS} it writes one line to stdout, because
+* stderr reaches nobody and a misconfigured monitor otherwise looks exactly
+* like a quiet dashboard.
+*
+* ## It stands aside for the channel
+*
+* A session that has the channel is already being told everything. Both running
+* would mean every reply arriving twice, so the channel stamps a claim and this
+* waits quietly while that claim is fresh (`./claim.ts`), taking over if the
+* channel goes away. `monitor: off` turns this half off for good.
 */
 /** Milliseconds between looks for a configuration that is not there yet. */
 var WAIT_MS = 5e3;
-/* c8 ignore start -- the process wrapper; `runMonitor` and `readConnection` are what is tested. */
+/**
+* How long to wait before saying nothing is configured.
+*
+* Long enough for the `SessionStart` hook to have written its file — the hook
+* and this process start at the same moment — and short enough that somebody
+* watching a fresh session sees the answer rather than wondering.
+*/
+var SAY_AFTER_MS = 2e4;
+/* c8 ignore start -- the process wrapper; `runMonitor`, `readConnection` and `channelIsLive` are what is tested. */
 async function main() {
-	let said = false;
+	const started = Date.now();
+	let saidUnconfigured = false;
+	let saidStandby = false;
 	for (;;) {
 		const connection = readConnection(process.env);
+		if (connection && connection.monitor === "off") {
+			process.stderr.write("agent-dashboard monitor: off by configuration\n");
+			return;
+		}
+		if (connection && channelIsLive(process.env)) {
+			if (!saidStandby) {
+				saidStandby = true;
+				process.stderr.write("agent-dashboard monitor: the channel is delivering for this session; standing by\n");
+			}
+			await new Promise((resolve) => setTimeout(resolve, CLAIM_EVERY_MS));
+			continue;
+		}
 		if (connection) {
 			await runMonitor(connection);
 			return;
 		}
-		if (!said) {
-			said = true;
-			process.stderr.write("agent-dashboard monitor: no connection yet — waiting for the plugin to be configured (dashboard URL, token and projects), or set AGENT_DASHBOARD_URL, AGENT_DASHBOARD_TOKEN and AGENT_DASHBOARD_PROJECTS.\n");
+		if (!saidUnconfigured && Date.now() - started >= SAY_AFTER_MS) {
+			saidUnconfigured = true;
+			process.stdout.write("agent-dashboard monitor: not configured — nothing will arrive from the dashboard. Set dashboard_url, agent_token and projects under /plugin, or set AGENT_DASHBOARD_URL, AGENT_DASHBOARD_TOKEN and AGENT_DASHBOARD_PROJECTS in the environment, then restart the session.\n");
 		}
 		await new Promise((resolve) => setTimeout(resolve, WAIT_MS));
 	}

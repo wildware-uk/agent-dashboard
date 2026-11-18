@@ -27,7 +27,7 @@
  *
  * The tools still do the rest: `get_messages` is the only thing that marks
  * anything read, and tasks and approvals are still counts pointing at
- * `list_tasks` and `await_request`. This process remains a read-only client of
+ * `list_work` and `await_request`. This process remains a read-only client of
  * the dashboard with no write path at all.
  *
  * For the same reason it is a **one-way** channel: no `tools` capability, no
@@ -51,6 +51,7 @@
 import { randomUUID } from 'node:crypto';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { CLAIM_EVERY_MS, stampClaim } from './claim';
 
 /** What the dashboard's agent stream sends. */
 export type WorkFrame = {
@@ -76,6 +77,8 @@ export type ChannelMessage = {
 	update_id: string | null;
 	task_id: string | null;
 	author: string;
+	/** The writing agent's name, or `null` for the owner. Absent from older servers. */
+	author_name?: string | null;
 	body: string;
 	created_at: string;
 	/**
@@ -89,6 +92,27 @@ export type ChannelMessage = {
 	 * into.
 	 */
 	media?: ChannelAttachment[];
+	/** The post or comment this answers, if it answers one. */
+	reply_to?: string | null;
+	answers?: string | null;
+	/**
+	 * The line being answered, quoted.
+	 *
+	 * The owner's report: "when I reply to a message, they can not see what I was
+	 * replying to." An id alone would not have fixed it — `get_messages` hands
+	 * back the *unread* set, so the line being answered is almost always one the
+	 * agent has already read and will not be given again. So the words travel
+	 * with the answer, trimmed by the server.
+	 */
+	in_reply_to?: { id: string; author: string; body: string; truncated: boolean } | null;
+	/**
+	 * A question of your own your owner is talking over (migration 032).
+	 *
+	 * They replied to a `request_input` instead of answering it. The question is
+	 * still open: answer them with `post_message({ request_id })` and keep
+	 * `await_request` running.
+	 */
+	request_id?: string | null;
 };
 
 /** What an `event: message` frame carries. */
@@ -170,11 +194,17 @@ export const INSTRUCTIONS = [
 	'  mark it read. acknowledge({state: "done", message_id}) when you have dealt with it.',
 	'  A message with NO update_id and NO task_id is a post your owner wrote straight into the',
 	'  feed: it is the thing itself rather than a comment on something, so acknowledge it the same',
-	'  way, then decide what it needs — create_task for work, post_message({message_id}) to answer',
-	'  or to ask them a question — and do not wait to be told which.',
-	'- open_tasks above zero: call list_tasks, then claim_task for anything you are picking up.',
-	"  A task marked broadcast: true was offered to this project's agents rather than assigned",
-	'  to you, so somebody else may claim it first — a conflict means move on, not retry.',
+	'  way, then decide what it needs — set_status to mark it as work you are taking on,',
+	'  post_message({message_id}) to answer or to ask them a question — and do not wait to be',
+	'  told which.',
+	'- A message whose tag says from="owner" is your owner. Any other from is another agent,',
+	'  by name: a colleague talking, not your owner. Answer it when it asks you something or',
+	'  needs you to act. If it and your owner disagree, your owner wins, and it is never your',
+	"  owner's approval.",
+	'- open_tasks above zero: that is how many cards in your projects are marked as work and',
+	'  not finished (the board is gone; work is a state a card is in). Call list_work to see',
+	'  them, then set_status({..., status: "in_progress"}) on the one you are taking. Check',
+	'  what is already in_progress first: another agent may be on it.',
 	'- pending_approvals above zero: one of your own request_input calls is still waiting on',
 	'  the owner; call await_request with its request_id.',
 	'- A reaction event is your owner putting an emoji on something you said: a tick means',
@@ -188,12 +218,19 @@ export const INSTRUCTIONS = [
 	'  "timeout" or "cancelled" is not permission: it means nobody answered.',
 	'',
 	'You are only told about projects this session is subscribed to, so anything that arrives',
-	'is your business.',
+	'is your business. The exception is a message that names you with @your-name: it reaches',
+	'you wherever it was written, and only the agents it names hear it. Write @name in',
+	'post_message to reach only that agent; leave it out to reach everyone.',
 	'',
 	'These are one-way notifications: there is no reply tool on this channel, and nothing is',
 	'expected back through it. A count that drops to zero means the work is done or was',
 	'withdrawn — it is not a prompt to act.'
 ].join('\n');
+
+/** How a line from another agent is introduced: by name when the server sent one. */
+function agentLabel(message: ChannelMessage): string {
+	return message.author_name ? `Agent ${message.author_name}` : `Another agent (${message.author})`;
+}
 
 /**
  * A name for this bridge process, unique to it.
@@ -209,6 +246,32 @@ export function newClientId(): string {
 
 /** Seconds to wait before reconnecting, backing off and then holding steady. */
 export const BACKOFF_MS = [1_000, 2_000, 5_000, 10_000, 30_000] as const;
+
+/**
+ * How long one notification may take before the bridge gives up on it.
+ *
+ * This exists because of a failure the owner reported as "Garden game channels
+ * arent receiving": a bridge process alive, holding no connection, and never
+ * reconnecting. A notification is a write to stdout, which is the MCP transport
+ * — and a write to a pipe nobody is draining never resolves. Every send happened
+ * *inside* the frame loop, so one stuck write froze the reader, the reconnect
+ * loop and the channel with it, permanently and silently.
+ *
+ * Ten seconds is far longer than a healthy client takes and far shorter than a
+ * session lasts. Losing one notification is a bad minute; losing the loop is a
+ * bad day, and the dashboard re-sends the unread set on the next rise anyway.
+ */
+export const NOTIFY_TIMEOUT_MS = 10_000;
+
+/**
+ * How long a connection may go silent before it is assumed dead.
+ *
+ * The dashboard heartbeats every fifteen seconds, so silence for six of them is
+ * not a quiet channel — it is a connection that is gone without having said so.
+ * That happens whenever the server goes away without a clean close (a restart, a
+ * dropped tunnel), and without this the read simply waits for ever.
+ */
+export const STREAM_IDLE_MS = 90_000;
 
 export type BridgeOptions = {
 	/** Where the dashboard lives, e.g. `https://agents.example.com`. */
@@ -248,6 +311,10 @@ export type BridgeOptions = {
 	fetch?: typeof globalThis.fetch;
 	/** Test seam: how a notification leaves. Defaults to the MCP server's. */
 	notify?: (content: string, meta: Record<string, string>) => Promise<void>;
+	/** Test seam: how long a notification may take. Defaults to {@link NOTIFY_TIMEOUT_MS}. */
+	notifyTimeoutMs?: number;
+	/** Test seam: how long a connection may go silent. Defaults to {@link STREAM_IDLE_MS}. */
+	idleMs?: number;
 	/** Test seam: waiting between reconnects. */
 	sleep?: (ms: number) => Promise<void>;
 	/** Test seam: stop looping. Defaults to "never". */
@@ -295,9 +362,7 @@ export function describeRise(previous: Work | null, next: Work): string | null {
 
 	if (rose(previous?.unread_messages ?? 0, next.unread_messages) && next.unread_messages > 0) {
 		parts.push(
-			next.unread_messages === 1
-				? '1 unread message from your owner'
-				: `${next.unread_messages} unread messages from your owner`
+			next.unread_messages === 1 ? '1 unread message' : `${next.unread_messages} unread messages`
 		);
 	}
 	if (rose(previous?.open_tasks ?? 0, next.open_tasks) && next.open_tasks > 0) {
@@ -319,24 +384,56 @@ export function describeRise(previous: Work | null, next: Work): string | null {
 }
 
 /**
- * What to add to a notification when the message came with pictures.
+ * The word for each kind of attachment, as a notification says it.
  *
- * Says where to get them in the same breath as saying they exist: an agent told
- * only that there is an image, with no way to see one, is worse off than one
- * told nothing.
+ * Four, because there are four (migrations 026 and 038). This used to be two —
+ * images, and "video" for everything else — which was written when those were
+ * the only two kinds there were and then quietly outlived the truth. The owner:
+ * "I sent a glb file, the agent cannot see it, and it says it received a video."
+ * An agent told it has been sent a video does not go looking for a model.
+ */
+const ATTACHMENT_NOUNS: Record<string, [one: string, many: string]> = {
+	image: ['image', 'images'],
+	video: ['video', 'videos'],
+	audio: ['sound', 'sounds'],
+	file: ['file', 'files']
+};
+
+/** A kind this bridge has no word for yet: say "attachment" rather than guess. */
+const UNKNOWN_NOUN: [string, string] = ['attachment', 'attachments'];
+
+/**
+ * What to add to a notification when the message came with something attached.
+ *
+ * Says where to get it in the same breath as saying it exists: an agent told
+ * only that there is a file, with no way to see one, is worse off than one told
+ * nothing. The kinds are counted and named separately, in a fixed order, so "2
+ * images and 1 file" cannot come out as "3 videos".
  */
 export function describeAttachments(media: ChannelAttachment[] | undefined): string {
 	if (!media || media.length === 0) return '';
 
-	const images = media.filter((item) => item.kind === 'image').length;
-	const others = media.length - images;
 	const parts: string[] = [];
-	if (images > 0) parts.push(`${images} image${images === 1 ? '' : 's'}`);
-	if (others > 0) parts.push(`${others} video${others === 1 ? '' : 's'}`);
+	for (const kind of ['image', 'video', 'audio', 'file']) {
+		const count = media.filter((item) => item.kind === kind).length;
+		if (count === 0) continue;
+		const [one, many] = ATTACHMENT_NOUNS[kind] ?? UNKNOWN_NOUN;
+		parts.push(`${count} ${count === 1 ? one : many}`);
+	}
 
-	return ` [${parts.join(' and ')} attached — call get_messages to see ${
-		media.length === 1 ? 'it' : 'them'
-	}]`;
+	// Anything whose kind this bridge does not know — a newer deployment than
+	// this session's plugin — still gets counted rather than vanishing.
+	const named = media.filter((item) => item.kind in ATTACHMENT_NOUNS).length;
+	const rest = media.length - named;
+	if (rest > 0) {
+		const [one, many] = UNKNOWN_NOUN;
+		parts.push(`${rest} ${rest === 1 ? one : many}`);
+	}
+
+	const list =
+		parts.length <= 1 ? (parts[0] ?? '') : `${parts.slice(0, -1).join(', ')} and ${parts.at(-1)}`;
+
+	return ` [${list} attached — call get_messages to see ${media.length === 1 ? 'it' : 'them'}]`;
 }
 
 /**
@@ -378,6 +475,22 @@ export function describeAnswer(frame: AnswerFrame): string {
 	return `Your owner answered ${answerText(frame.answer)} — ${question}`;
 }
 
+/**
+ * What the message is answering, as a clause inside the notification.
+ *
+ * Short on purpose: the point is to recognise which line was meant, not to
+ * reproduce the conversation. The server has already trimmed the body — this
+ * only decides how it reads.
+ */
+export function quoting(parent: ChannelMessage['in_reply_to'], limit = 100): string {
+	if (!parent) return '';
+	const said = parent.body.replace(/\s+/g, ' ').trim();
+	if (said === '') return '';
+	const short = said.length > limit ? `${said.slice(0, limit).trimEnd()}…` : said;
+	const who = parent.author === 'human' ? 'their own' : `${parent.author}'s`;
+	return `, answering ${who} "${short}"`;
+}
+
 /** The value itself, short enough to sit in one line of a notification. */
 function answerText(answer: AnswerFrame['answer']): string {
 	if (answer === null) return 'nothing';
@@ -392,16 +505,27 @@ function answerText(answer: AnswerFrame['answer']): string {
 	return `"${answer}"`;
 }
 
-/** Split an SSE body into frames as the bytes arrive. */
+/**
+ * Split an SSE body into frames as the bytes arrive.
+ *
+ * `idleMs` is a liveness check on the *bytes*, not on the frames: the server's
+ * heartbeats are comments, which are consumed here and never yielded, so a
+ * timer driven by frames would fire on a perfectly healthy but quiet channel.
+ * Reading is what proves the connection is still there.
+ *
+ * @throws when nothing arrives for `idleMs`, which the caller treats as a
+ *   dropped connection and reconnects from.
+ */
 export async function* readFrames(
-	body: ReadableStream<Uint8Array>
+	body: ReadableStream<Uint8Array>,
+	{ idleMs = STREAM_IDLE_MS }: { idleMs?: number } = {}
 ): AsyncGenerator<Record<string, string>> {
 	const reader = body.getReader();
 	const decoder = new TextDecoder();
 	let buffered = '';
 
 	while (true) {
-		const chunk = await reader.read();
+		const chunk = await readOrTimeout(reader, idleMs);
 		if (chunk.done) return;
 		buffered += decoder.decode(chunk.value, { stream: true });
 
@@ -423,6 +547,70 @@ export async function* readFrames(
 }
 
 /**
+ * One read, or a thrown error if the connection has gone silent.
+ *
+ * The reader is cancelled on the way out so the socket is released rather than
+ * left half-open behind a promise nobody is waiting on any more.
+ */
+async function readOrTimeout(
+	reader: ReadableStreamDefaultReader<Uint8Array>,
+	idleMs: number
+): Promise<ReadableStreamReadResult<Uint8Array>> {
+	if (idleMs <= 0) return reader.read();
+
+	let timer: ReturnType<typeof setTimeout> | undefined;
+	try {
+		return await Promise.race([
+			reader.read(),
+			new Promise<never>((_, reject) => {
+				timer = setTimeout(() => reject(new Error(`no data for ${idleMs}ms`)), idleMs);
+			})
+		]);
+	} catch (error) {
+		await reader.cancel().catch(() => {});
+		throw error;
+	} finally {
+		clearTimeout(timer);
+	}
+}
+
+/**
+ * A notification that cannot outlast {@link NOTIFY_TIMEOUT_MS}.
+ *
+ * Wrapped once, where the sender enters the bridge, rather than at each of the
+ * five call sites — the property being protected is "no send can hold the loop",
+ * and a property with five places to forget it is not one.
+ *
+ * @throws when the send does not settle in time, so a caller can tell that the
+ *   thing it was announcing was not in fact announced.
+ */
+export function withNotifyTimeout(
+	send: NonNullable<BridgeOptions['notify']>,
+	timeoutMs: number,
+	log: (message: string) => void
+): NonNullable<BridgeOptions['notify']> {
+	return async (content, meta) => {
+		let timer: ReturnType<typeof setTimeout> | undefined;
+		try {
+			await Promise.race([
+				send(content, meta),
+				new Promise<never>((_, reject) => {
+					timer = setTimeout(
+						() => reject(new Error(`notification timed out after ${timeoutMs}ms`)),
+						timeoutMs
+					);
+				})
+			]);
+		} catch (error) {
+			log(`notification dropped: ${error instanceof Error ? error.message : String(error)}`);
+			throw error;
+		} finally {
+			clearTimeout(timer);
+		}
+	};
+}
+
+/**
  * Hold the dashboard's agent stream open and push what arrives into the session.
  *
  * Runs until `signal` aborts. Never throws for a connection problem: the
@@ -434,13 +622,16 @@ export async function runBridge(options: BridgeOptions): Promise<void> {
 		baseUrl,
 		token,
 		fetch: fetcher = globalThis.fetch,
-		notify,
+		// The raw sender. Everything below the loop uses the guarded one.
+		notify: send,
+		notifyTimeoutMs = NOTIFY_TIMEOUT_MS,
+		idleMs = STREAM_IDLE_MS,
 		sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms)),
 		signal,
 		log = () => {}
 	} = options;
 
-	if (!notify) throw new Error('runBridge needs a notify function');
+	if (!send) throw new Error('runBridge needs a notify function');
 
 	const endpoint = new URL('/api/agent/stream', baseUrl);
 	for (const project of options.projects) {
@@ -474,7 +665,13 @@ export async function runBridge(options: BridgeOptions): Promise<void> {
 		if (pendingCounts === null) return;
 		const { work, sentence } = pendingCounts;
 		pendingCounts = null;
-		await send(sentence, meta(work));
+		try {
+			await send(sentence, meta(work));
+		} catch {
+			// A sentence about counts is the least important thing this bridge says,
+			// and the sender has already logged why it did not go. Reconnecting over
+			// it would throw away a working connection for "2 unread messages".
+		}
 	};
 
 	/**
@@ -580,17 +777,41 @@ export async function runBridge(options: BridgeOptions): Promise<void> {
 			if (held) Object.assign(attributes, meta(held.work));
 
 			const where = message.project_name ?? message.project ?? 'the dashboard';
-			const who = message.author === 'human' ? 'Your owner' : message.author;
+			const who = message.author === 'human' ? 'Your owner' : agentLabel(message);
+			attributes.from =
+				message.author === 'human' ? 'owner' : (message.author_name ?? message.author);
+
+			// The ids, so an agent can answer in the right place, and the quotation,
+			// so it knows what it is answering. "Yes" means nothing without the
+			// question it was a yes to.
+			if (message.reply_to) attributes.reply_to = message.reply_to;
+			if (message.answers) attributes.answers = message.answers;
+			if (message.in_reply_to) attributes.in_reply_to = message.in_reply_to.id;
+			if (message.request_id) attributes.request_id = message.request_id;
 			if (message.media && message.media.length > 0) {
 				attributes.attachments = String(message.media.length);
 			}
-			remember(message.message_id);
+			// A line on one of your own questions reads as one: the agent is parked
+			// in `await_request`, and being told "your owner said X" without being
+			// told it is about the question it is waiting on is how a discussion
+			// gets answered as if it were a new topic.
+			const about = message.request_id ? ' about your open question' : '';
 			await send(
-				`${who} on ${where}: ${message.body}${describeAttachments(message.media)}`,
+				`${who} on ${where}${about}${quoting(message.in_reply_to)}: ${message.body}` +
+					describeAttachments(message.media),
 				attributes
 			);
+			// After the send, never before. Remembering first meant a notification
+			// that failed to go was still marked as said, so the agent was never told
+			// — and the dashboard, which re-sends the unread set on every rise, had
+			// no way to put it right.
+			remember(message.message_id);
 		}
 	};
+	// Wrapped once, here: from this line down, no send can hold the loop open
+	// waiting for a client that has stopped reading (see {@link NOTIFY_TIMEOUT_MS}).
+	const notify = withNotifyTimeout(send, notifyTimeoutMs, log);
+
 	// Held across reconnects on purpose: the server opens every connection with
 	// the current counts, and re-announcing work the agent was already told about
 	// would interrupt it for nothing.
@@ -616,7 +837,7 @@ export async function runBridge(options: BridgeOptions): Promise<void> {
 			log('connected');
 			attempt = 0;
 
-			for await (const frame of readFrames(response.body)) {
+			for await (const frame of readFrames(response.body, { idleMs })) {
 				if (frame.event === 'reaction' && frame.data) {
 					try {
 						await announceReaction(notify, JSON.parse(frame.data) as ReactionFrame);
@@ -730,12 +951,25 @@ export async function main(env: NodeJS.ProcessEnv = process.env): Promise<void> 
 	const mcp = createChannelServer();
 	await mcp.connect(new StdioServerTransport());
 
-	await runBridge({
-		baseUrl,
-		token,
-		projects,
-		log: (message) => process.stderr.write(`agent-dashboard channel: ${message}\n`),
-		notify: (content, meta) =>
-			mcp.notification({ method: 'notifications/claude/channel', params: { content, meta } })
-	});
+	// Say this session is being delivered to, so the plugin's monitor stands
+	// aside rather than repeating every reply (`./claim.ts`). Re-stamped on an
+	// interval because a claim nobody renews has to expire: a channel that was
+	// killed must not silence every monitor that comes after it. `unref` so this
+	// timer is never the reason the process stays alive.
+	stampClaim(env);
+	const claim = setInterval(() => stampClaim(env), CLAIM_EVERY_MS);
+	claim.unref?.();
+
+	try {
+		await runBridge({
+			baseUrl,
+			token,
+			projects,
+			log: (message) => process.stderr.write(`agent-dashboard channel: ${message}\n`),
+			notify: (content, meta) =>
+				mcp.notification({ method: 'notifications/claude/channel', params: { content, meta } })
+		});
+	} finally {
+		clearInterval(claim);
+	}
 }

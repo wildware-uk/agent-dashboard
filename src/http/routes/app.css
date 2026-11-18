@@ -11,6 +11,7 @@
  * folded into the attribute.
  */
 @custom-variant dark (&:where([data-theme='dark'], [data-theme='dark'] *));
+@custom-variant native-app (&:where([data-native-app] *));
 
 /* Semantic surface tokens. Slices should reach for these, not raw palette steps. */
 @theme {
@@ -44,6 +45,288 @@
 	--content-muted: oklch(0.5 0.014 265);
 	--accent: oklch(0.52 0.16 250);
 	color-scheme: light;
+}
+
+/*
+	Syntax colours for fenced code (design §7).
+
+	Stated as tokens rather than as a highlight.js theme file, for the reason
+	every colour in this project is: the dashboard has two themes and an embed
+	paints its own card, so a stylesheet with baked-in hex values would be right
+	in exactly one of the three places code appears.
+
+	The hues are the familiar ones — keywords violet, strings green, numbers
+	amber, comments grey — chosen at a lightness that holds up on this surface.
+	The light set below is not the same hues dimmed: on a light background the
+	same lightness reads as washed out, so each one is darkened as well.
+*/
+:root,
+[data-theme='dark'] {
+	--code-keyword: oklch(0.74 0.14 305);
+	--code-string: oklch(0.78 0.14 145);
+	--code-number: oklch(0.82 0.12 75);
+	--code-comment: oklch(0.6 0.02 265);
+	--code-name: oklch(0.82 0.11 230);
+	--code-type: oklch(0.83 0.1 90);
+	--code-literal: oklch(0.78 0.13 35);
+	--code-meta: oklch(0.68 0.06 265);
+	--code-deleted: oklch(0.72 0.16 25);
+	--code-added: oklch(0.76 0.14 150);
+}
+
+[data-theme='light'] {
+	--code-keyword: oklch(0.5 0.19 305);
+	--code-string: oklch(0.46 0.13 145);
+	--code-number: oklch(0.5 0.13 65);
+	--code-comment: oklch(0.58 0.02 265);
+	--code-name: oklch(0.5 0.15 250);
+	--code-type: oklch(0.48 0.11 75);
+	--code-literal: oklch(0.52 0.17 30);
+	--code-meta: oklch(0.55 0.05 265);
+	--code-deleted: oklch(0.5 0.18 25);
+	--code-added: oklch(0.45 0.13 150);
+}
+
+/*
+	An embed paints its own card, and every look this deployment ships is a light
+	one — a Slack message is white wherever the dashboard is. So code inside an
+	embed takes the light set regardless of the dashboard's theme, unless the look
+	declared a dark background, which `Embed.svelte` says by adding `embed-dark`.
+*/
+.embed .markdown-body,
+.embed .embed-code {
+	--code-keyword: oklch(0.5 0.19 305);
+	--code-string: oklch(0.46 0.13 145);
+	--code-number: oklch(0.5 0.13 65);
+	--code-comment: oklch(0.58 0.02 265);
+	--code-name: oklch(0.5 0.15 250);
+	--code-type: oklch(0.48 0.11 75);
+	--code-literal: oklch(0.52 0.17 30);
+	--code-meta: oklch(0.55 0.05 265);
+	--code-deleted: oklch(0.5 0.18 25);
+	--code-added: oklch(0.45 0.13 150);
+}
+
+.embed-dark .markdown-body,
+.embed-dark .embed-code {
+	--code-keyword: oklch(0.74 0.14 305);
+	--code-string: oklch(0.78 0.14 145);
+	--code-number: oklch(0.82 0.12 75);
+	--code-comment: oklch(0.6 0.02 265);
+	--code-name: oklch(0.82 0.11 230);
+	--code-type: oklch(0.83 0.1 90);
+	--code-literal: oklch(0.78 0.13 35);
+	--code-meta: oklch(0.68 0.06 265);
+	--code-deleted: oklch(0.72 0.16 25);
+	--code-added: oklch(0.76 0.14 150);
+}
+
+/*
+	The chrome around a code block: what language it is, and a copy button
+	(`src/web/codeblock.ts`).
+
+	The header and the block are one object, so the wrapper owns the border and
+	the corners and the `pre` inside it owns neither. Without that the two would
+	each draw their own edge and the seam would show.
+
+	Everything is stated against the code tokens rather than the page's, so this
+	is correct inside an embed — which paints its own card — as well as on the
+	dashboard's own surface.
+*/
+.code-block {
+	max-width: 100%;
+	overflow: hidden;
+	border: 1px solid var(--color-border-subtle);
+	border-radius: 0.375rem;
+}
+
+.code-block-header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 0.5rem;
+	padding: 0.25rem 0.375rem 0.25rem 0.625rem;
+	border-bottom: 1px solid var(--color-border-subtle);
+	background-color: color-mix(in oklab, var(--color-content) 5%, transparent);
+}
+
+.code-block-language {
+	font-size: 0.6875rem;
+	font-weight: 500;
+	letter-spacing: 0.02em;
+	color: var(--color-content-muted);
+	/* A language is a name, not a sentence: never let it push the button off. */
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+/*
+	The button is quiet until you go near the block, which is the right weight for
+	something on every code block in a long feed — but it is never *hidden*, since
+	a control you cannot see is a control a keyboard user cannot find.
+*/
+.code-block-copy {
+	flex-shrink: 0;
+	padding: 0.125rem 0.5rem;
+	border-radius: 0.25rem;
+	font-size: 0.6875rem;
+	line-height: 1.5;
+	color: var(--color-content-muted);
+	background-color: transparent;
+	border: 1px solid transparent;
+	cursor: pointer;
+	transition:
+		color 0.12s ease,
+		border-color 0.12s ease,
+		background-color 0.12s ease;
+}
+
+.code-block:hover .code-block-copy,
+.code-block-copy:focus-visible {
+	color: var(--color-content);
+	border-color: var(--color-border-subtle);
+	background-color: var(--color-surface);
+}
+
+.code-block-copy[data-state='copied'] {
+	color: var(--code-added);
+	border-color: color-mix(in oklab, var(--code-added) 40%, transparent);
+}
+
+.code-block-copy[data-state='failed'] {
+	color: var(--code-deleted);
+	border-color: color-mix(in oklab, var(--code-deleted) 40%, transparent);
+}
+
+/*
+	The block inside the wrapper gives up its own frame: one object, one edge.
+	Stated for both places a code block appears — an agent's markdown, and an
+	embed's own `code` block.
+*/
+.code-block > pre {
+	margin: 0 !important;
+	border: 0 !important;
+	border-radius: 0 !important;
+}
+
+/*
+	Inside an embed the chrome takes the card's palette rather than the page's, so
+	a Slack message's code block stays part of the Slack message.
+*/
+.embed .code-block {
+	border-color: var(--embed-border, var(--color-border-subtle));
+}
+
+.embed .code-block-header {
+	border-bottom-color: var(--embed-border, var(--color-border-subtle));
+	background-color: color-mix(
+		in oklab,
+		var(--embed-foreground, var(--color-content)) 6%,
+		transparent
+	);
+}
+
+.embed .code-block-language,
+.embed .code-block-copy {
+	color: var(--embed-muted, var(--color-content-muted));
+}
+
+.embed .code-block:hover .code-block-copy,
+.embed .code-block-copy:focus-visible {
+	color: var(--embed-foreground, var(--color-content));
+	border-color: var(--embed-border, var(--color-border-subtle));
+	background-color: color-mix(
+		in oklab,
+		var(--embed-foreground, var(--color-content)) 6%,
+		transparent
+	);
+}
+
+/*
+	highlight.js emits one class per token kind and there are a lot of them, so
+	they are grouped by what they mean rather than listed one per rule. Anything
+	it emits that is not named here simply inherits the block's own colour, which
+	is the right default: an unstyled token should look like code, not like a gap.
+*/
+.hljs-comment,
+.hljs-quote {
+	color: var(--code-comment);
+	font-style: italic;
+}
+
+.hljs-keyword,
+.hljs-selector-tag,
+.hljs-literal,
+.hljs-section,
+.hljs-doctag,
+.hljs-name,
+.hljs-strong {
+	color: var(--code-keyword);
+}
+
+.hljs-string,
+.hljs-regexp,
+.hljs-addition,
+.hljs-attribute,
+.hljs-meta .hljs-string {
+	color: var(--code-string);
+}
+
+.hljs-number,
+.hljs-symbol,
+.hljs-bullet,
+.hljs-link,
+.hljs-selector-attr,
+.hljs-selector-pseudo,
+.hljs-template-variable,
+.hljs-variable {
+	color: var(--code-number);
+}
+
+.hljs-title,
+.hljs-title.class_,
+.hljs-title.function_,
+.hljs-selector-id,
+.hljs-selector-class {
+	color: var(--code-name);
+}
+
+.hljs-type,
+.hljs-class .hljs-title,
+.hljs-built_in,
+.hljs-params {
+	color: var(--code-type);
+}
+
+.hljs-attr,
+.hljs-property,
+.hljs-operator,
+.hljs-punctuation {
+	color: var(--code-literal);
+}
+
+.hljs-meta,
+.hljs-comment .hljs-doctag,
+.hljs-tag {
+	color: var(--code-meta);
+}
+
+/* A diff reads by colour before it reads by sign, so these two are their own. */
+.hljs-deletion {
+	color: var(--code-deleted);
+}
+
+.hljs-addition {
+	color: var(--code-added);
+}
+
+.hljs-emphasis {
+	font-style: italic;
+}
+
+.hljs-strong {
+	font-weight: 600;
 }
 
 html {
@@ -130,42 +413,47 @@ body {
 }
 
 /*
- * "… is thinking…" (migration 013).
+ * The column the feed is read in.
  *
- * Three staggered dots rather than a spinner: the owner is reading a line of
- * text, and a spinner beside it would be a second thing competing for the same
- * glance. The dots never fade to nothing — 0.25 rather than 0 — because an
- * ellipsis that disappears reads as text having been cut off.
+ * The owner: "the central feed is too thin, can you make it wider, like half of
+ * the area is dead space." They were right — the column was 48rem whatever the
+ * screen was, so on a 2560px display the cards used about a third of the space
+ * between the two sidebars and the rest was empty.
+ *
+ * It is one class rather than three copies of a utility because three things
+ * have to agree on it exactly: the composer above the scroller, the cards inside
+ * it, and the "jump to top" pill that floats over them. They line up or the
+ * composer reads as part of the page chrome instead of part of the feed.
+ *
+ * 80rem, not the whole width. A card is mostly prose, and prose set across a
+ * 2000px screen is unreadable however much space there is to fill — the line
+ * lengths inside the cards are capped for the same reason (`.markdown-body`).
+ * What the extra width is really buying is the things beside the words: a
+ * thread's nesting, a fields table, a row of screenshots, an app's frame.
  */
-@keyframes thinking-blink {
-	0%,
-	80%,
-	100% {
-		opacity: 0.25;
-	}
-	40% {
-		opacity: 1;
-	}
+.feed-column {
+	margin-inline: auto;
+	width: 100%;
+	max-width: min(100%, 80rem);
 }
 
-.thinking-dots span {
-	animation: thinking-blink 1.4s ease-in-out infinite both;
-}
-
-.thinking-dots span:nth-child(2) {
-	animation-delay: 0.2s;
-}
-
-.thinking-dots span:nth-child(3) {
-	animation-delay: 0.4s;
-}
-
-/* An animation nobody asked for is not worth a headache. */
-@media (prefers-reduced-motion: reduce) {
-	.thinking-dots span {
-		animation: none;
-		opacity: 1;
-	}
+/*
+ * A card off screen costs nothing to have on the page.
+ *
+ * The feed is one long column — eighty cards on a busy project, each with
+ * markdown, code, images and a thread — and the browser was laying out and
+ * painting every one of them, whether or not it was anywhere near the viewport.
+ * `content-visibility: auto` lets it skip the ones that are not: they stay in
+ * the document, stay findable, and are rendered the moment they come near.
+ *
+ * `contain-intrinsic-size: auto <height>` is what keeps the scrollbar honest. The
+ * `auto` keyword tells the browser to remember each card's real height once it
+ * has been rendered once, so scrolling past does not make the bar jump; the
+ * length is the guess used before that, chosen as roughly a short card.
+ */
+[data-timeline] article {
+	content-visibility: auto;
+	contain-intrinsic-size: auto 240px;
 }
 
 /*
@@ -191,4 +479,180 @@ body {
 	textarea {
 		font-size: 16px;
 	}
+}
+
+/*
+ * Movement, and what it is for (design §7, `src/web/motion.ts`).
+ *
+ * The owner: "can we make the dashboard more animated, cards flow to the top
+ * when they are updated, spinners and loading and thinking bars are animated."
+ *
+ * Every animation below says something: this is working, this just moved, this
+ * has not arrived yet. Each one is switched off under `prefers-reduced-motion`
+ * at the end of this file, in one place, so none can be added without that
+ * being considered.
+ */
+
+/* The one spinner (`Spinner.svelte`). */
+@keyframes spin {
+	to {
+		transform: rotate(1turn);
+	}
+}
+
+.spinner {
+	animation: spin 700ms linear infinite;
+}
+
+/*
+	A card that just moved to the top.
+
+	A ring that fades rather than a flash of colour: the card keeps its own level
+	colour and its own accent rail, so the marker has to be something neither of
+	them uses — and it has to leave by itself, because "this one moved" stops
+	being true a second later.
+*/
+@keyframes bump-fade {
+	0% {
+		box-shadow: 0 0 0 2px color-mix(in oklab, var(--color-accent) 75%, transparent);
+	}
+	100% {
+		box-shadow: 0 0 0 2px transparent;
+	}
+}
+
+[data-bumped='true'] {
+	border-radius: 0.5rem;
+	animation: bump-fade 1.4s ease-out both;
+}
+
+/*
+	The thinking bar (migration 013).
+
+	Under "… is thinking…", a thread of light travelling left to right: the dots
+	say an agent has the message, and this says work is still going on. It is
+	indeterminate on purpose — nobody knows how far through a thought an agent is,
+	and a bar that pretended to would be a lie that fills up.
+*/
+@keyframes thinking-sweep {
+	from {
+		transform: translateX(-100%);
+	}
+	to {
+		transform: translateX(300%);
+	}
+}
+
+.thinking-bar {
+	position: relative;
+	overflow: hidden;
+	border-radius: 9999px;
+	background-color: color-mix(in oklab, var(--color-content) 12%, transparent);
+}
+
+.thinking-bar::after {
+	content: '';
+	position: absolute;
+	inset: 0;
+	width: 33%;
+	border-radius: 9999px;
+	background-color: var(--color-accent);
+	animation: thinking-sweep 1.3s ease-in-out infinite;
+}
+
+/*
+	The trough an upload's progress bar sits in (migration 016's box, given a
+	number). Same grey as the thinking bar's, because it is the same statement —
+	"this is how far along something is" — and two different greys for it would
+	read as two different kinds of waiting.
+*/
+.upload-trough {
+	background-color: color-mix(in oklab, var(--color-content) 12%, transparent);
+}
+
+/*
+	Something that has not arrived yet: an image still being derived, a card still
+	being fetched. A sweep across a grey block, which is the shape the thing will
+	be — the page does not jump when it lands.
+*/
+@keyframes skeleton-sweep {
+	from {
+		background-position: 200% 0;
+	}
+	to {
+		background-position: -200% 0;
+	}
+}
+
+.skeleton {
+	background-image: linear-gradient(
+		90deg,
+		transparent 0%,
+		color-mix(in oklab, var(--color-content) 10%, transparent) 50%,
+		transparent 100%
+	);
+	background-size: 200% 100%;
+	animation: skeleton-sweep 1.6s linear infinite;
+}
+
+/* An animation nobody asked for is not worth a headache. */
+@media (prefers-reduced-motion: reduce) {
+	.spinner,
+	.thinking-bar::after,
+	.skeleton,
+	[data-bumped='true'] {
+		animation: none;
+	}
+
+	/* The spinner still has to read as "working", so it keeps its ring. */
+	.thinking-bar::after {
+		width: 100%;
+		opacity: 0.5;
+	}
+}
+
+/*
+ * Only the feed scrolls (design §7).
+ *
+ * The owner: "can scroll down the entire page on garden game project, not just
+ * the feed, causes some weird bugs like scrolling down to black or doing it by
+ * accident on mobile."
+ *
+ * `Shell.svelte` adds `app-locked` to `<html>` while the dashboard is mounted,
+ * and takes it off again — the login page and a shared card are ordinary
+ * documents that should scroll, so this cannot live on `body` unconditionally.
+ *
+ * `position: fixed` on the body is the part that matters on a phone. `100dvh`
+ * changes as the browser's own bar slides, which leaves the document a little
+ * taller than the screen; a flick then drags the whole app and shows a strip of
+ * nothing beneath it. A fixed body has no length to drag.
+ */
+.app-locked,
+.app-locked body {
+	height: 100%;
+	overflow: hidden;
+	overscroll-behavior: none;
+}
+
+.app-locked body {
+	position: fixed;
+	inset: 0;
+	width: 100%;
+}
+
+/*
+	With the body pinned, the shell takes the real height rather than the dynamic
+	one: `100dvh` and "what is actually visible" are the same number here, and
+	only one of them stops changing under a thumb.
+*/
+.app-locked .app-shell {
+	height: 100%;
+}
+
+/*
+	A flick that reaches the end of the feed stops there rather than handing the
+	rest of its momentum to whatever is behind it.
+*/
+[data-timeline] {
+	overscroll-behavior-y: contain;
 }

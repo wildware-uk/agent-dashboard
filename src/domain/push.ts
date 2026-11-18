@@ -60,6 +60,7 @@ import { findRequest, type OwnerRequest } from './requests';
 import { UPDATE_LEVELS, UPDATE_PRIORITIES } from './updates';
 import { HUMAN_AUTHOR, parseAuthor } from './messages';
 import { optionalText } from './text';
+import { markdownToPlainText } from './plain-text';
 
 /**
  * The kinds of thing a device can be notified about (design §7).
@@ -404,7 +405,7 @@ export function requestMessage(
 
 	const message: PushMessage = {
 		title: `${who} is waiting on you`,
-		body: request.question,
+		body: notificationText(request.question),
 		url: project ? `${base}/projects/${project.slug}?focus=${request.id}` : `${base}/`,
 		tag: `request-${request.id}`,
 		requestId: request.id
@@ -447,10 +448,10 @@ function actionsFor(kind: OwnerRequest['kind'], options: string[] | null): PushA
 	return [];
 }
 
-/** The first line of a body, for a notification that has one line to say it in. */
-function firstLine(body: string, max = 140): string {
-	const flat = body.replace(/\s+/g, ' ').trim();
-	return flat.length <= max ? flat : `${flat.slice(0, max).trimEnd()}…`;
+/** An agent's markdown as a notification can show it: plain text, kept short. */
+function notificationText(markdown: string, max = 140): string {
+	const plain = markdownToPlainText(markdown).replace(/[ \t]+/g, ' ');
+	return plain.length <= max ? plain : `${plain.slice(0, max).trimEnd()}…`;
 }
 
 /**
@@ -494,7 +495,7 @@ export function updateMessage(
 	return {
 		message: {
 			title: update.title ?? `${agent?.name ?? 'An agent'} posted an update`,
-			body: update.title ? firstLine(update.body) : firstLine(update.body),
+			body: notificationText(update.body),
 			url: projectUrl(ctx, update.projectId, base, update.id),
 			tag: `update-${update.id}`
 		},
@@ -572,7 +573,7 @@ export function replyMessage(
 	return {
 		message: {
 			title: answered ? `${name} replied to you` : `${name} commented`,
-			body: firstLine(message.body),
+			body: notificationText(message.body),
 			url: projectUrl(ctx, message.projectId, base, message.id),
 			tag: `message-${message.id}`
 		},

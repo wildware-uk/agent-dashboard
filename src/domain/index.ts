@@ -86,9 +86,7 @@ export {
 	createProject,
 	findProject,
 	listProjects,
-	markProjectSeen,
 	resolveProject,
-	unseenUpdateCounts,
 	BOARD_COLUMNS_MAX,
 	COLUMN_TITLE_MAX_LENGTH,
 	DEFAULT_BOARD,
@@ -102,10 +100,63 @@ export {
 	type UpdateProjectInput
 } from './projects';
 export {
+	EMBEDS_PER_POST_MAX,
+	EMBED_AVATAR_SHAPES,
+	EMBED_BLOCK_TYPES,
+	EMBED_CHIP_STYLES,
+	EMBED_FIELD_LAYOUTS,
+	EMBED_HEADER_LAYOUTS,
+	EMBED_MARKS,
+	EMBED_PADDINGS,
+	EMBED_SIZES,
+	EMBED_TONES,
+	EMBED_DATA_KEYS_MAX,
+	EMBED_FIELDS_MAX,
+	EMBED_FONTS,
+	EMBED_BLOCKS_MAX,
+	EMBED_NAME_MAX_LENGTH,
+	EMBED_RADII,
+	EMBED_SLUG,
+	EMBED_SLUG_MAX_LENGTH,
+	EMBED_VALUE_MAX_LENGTH,
+	attachEmbeds,
+	checkedEmbeds,
+	isMediaReference,
+	listEmbedTypeViews,
+	listMessageEmbeds,
+	listRequestEmbeds,
+	listUpdateEmbeds,
+	parseEmbedData,
+	parseEmbedSpec,
+	registerEmbedType,
+	type EmbedAvatarShape,
+	type EmbedBlock,
+	type EmbedBlockType,
+	type EmbedChipStyle,
+	type EmbedChrome,
+	type EmbedFieldLayout,
+	type EmbedFrame,
+	type EmbedHeaderLayout,
+	type EmbedMark,
+	type EmbedPadding,
+	type EmbedSize,
+	type EmbedTone,
+	type EmbedData,
+	type EmbedSpec,
+	type EmbedTheme,
+	type EmbedTypeView,
+	type EmbedView,
+	type NewEmbedInput,
+	type RegisterEmbedTypeInput
+} from './embeds';
+export {
 	ALLOWED_MIMES,
+	DOWNLOAD_MIME,
 	assertAttachableToMessage,
 	listMessageMedia,
+	listRequestMedia,
 	mediaSettings,
+	mediaIsAttached,
 	readAttachmentBytes,
 	uploadOwnerMedia,
 	FILENAME_MAX_LENGTH,
@@ -140,7 +191,6 @@ export {
 	deleteUpdate,
 	findUpdate,
 	listUpdates,
-	markRepliesSeen,
 	postUpdate,
 	editUpdate,
 	setUpdatePinned,
@@ -184,13 +234,19 @@ export {
 	HUMAN_AUTHOR,
 	MAX_MESSAGE_LIMIT,
 	MESSAGE_BODY_MAX_LENGTH,
+	authorName,
 	authorText,
 	countUnreadMessages,
 	alreadyDelivered,
 	countUnreadMessagesInScope,
 	deleteMessage,
 	deliveriesFor,
+	editMessage,
+	type EditMessageInput,
 	findMessage,
+	answeredMessage,
+	type AnsweredMessage,
+	QUOTED_MAX_LENGTH,
 	markMessagesDelivered,
 	projectsForAgent,
 	unreadMessagesInScope,
@@ -206,15 +262,99 @@ export {
 	type ReadMessagesInput,
 	type ThreadQuery
 } from './messages';
+export { EMOJI_MAX_LENGTH, SHORTCODES, assertEmoji } from './reactions';
 export {
-	EMOJI_MAX_LENGTH,
-	SHORTCODES,
-	assertEmoji,
-	react,
-	reactionsFor,
-	type ReactInput,
-	type ReactResult
-} from './reactions';
+	FIELDS_PER_CARD,
+	FIELD_NAME_MAX,
+	FIELD_VALUE_MAX,
+	fieldSlug,
+	fieldsForCards,
+	fieldsOn,
+	setField,
+	type CardField,
+	type FieldScope,
+	type SetFieldInput,
+	type SetFieldResult
+} from './fields';
+export {
+	APPS_PER_POST_MAX,
+	APP_CSP_ORIGINS_MAX,
+	APP_DATA_MAX_LENGTH,
+	APP_DESCRIPTION_MAX_LENGTH,
+	APP_HTML_MAX_LENGTH,
+	APP_MIME,
+	APP_NAME_MAX_LENGTH,
+	APP_STATE_MAX_LENGTH,
+	APP_TITLE_MAX_LENGTH,
+	APP_URI_MAX_LENGTH,
+	APP_URI_SCHEME,
+	APP_URL_MAX_LENGTH,
+	appDocument,
+	appViewById,
+	appsForCards,
+	appsOn,
+	attachApps,
+	checkedApps,
+	listAppSummaries,
+	parseAppCsp,
+	parseAppPage,
+	parseAppUri,
+	registerApp,
+	saveAppState,
+	setAppData,
+	type AppCsp,
+	type AppScope,
+	type AppSummary,
+	type AppViewData,
+	type CheckedApp,
+	type NewAppInput,
+	type RegisterAppInput,
+	type SetAppDataInput
+} from './apps';
+export {
+	TAGS_PER_CARD,
+	TAGS_PER_PROJECT,
+	TAG_COLOURS,
+	TAG_MAX_LENGTH,
+	defineTag,
+	isTagColour,
+	listTags,
+	renameTag,
+	retireTag,
+	tagCard,
+	tagSlug,
+	tagsForCards,
+	type DefineTagInput,
+	type CardTag,
+	type Tag,
+	type TagCardInput,
+	type TagCardResult,
+	type TagColour,
+	type TagScope
+} from './tags';
+export {
+	CARD_KINDS,
+	CARD_STATUSES,
+	WORK_SUMMARY_CHARS,
+	announceCard,
+	countOpenWorkInScope,
+	isCardKind,
+	isCardStatus,
+	listWorkInScope,
+	oneCard,
+	pinCard,
+	setStatus,
+	reactToCard as react,
+	reactionsForCards as reactionsFor,
+	resolveCard,
+	type CardKind,
+	type CardRef,
+	type CardStatus,
+	type ReactToCardInput as ReactInput,
+	type ReactResult,
+	type WorkItem,
+	type WorkScope
+} from './cards';
 export {
 	DEFAULT_NOTIFICATION_LIMIT,
 	countUnseen,
@@ -244,8 +384,12 @@ export {
 	answerRequest,
 	awaitRequest,
 	cancelRequest,
+	withdrawRequest,
 	countPendingRequests,
+	countPendingRequestsInScope,
 	createRequest,
+	editRequest,
+	type EditRequestInput,
 	expireRequests,
 	findRequest,
 	listPendingRequests,
@@ -263,28 +407,14 @@ export {
 	type RequestValue,
 	type RequestWaitOptions
 } from './requests';
-export {
-	OPEN_TASK_STATES,
-	TASK_BODY_MAX_LENGTH,
-	TASK_DEFAULT_LIMIT,
-	TASK_MAX_LIMIT,
-	TASK_RESULT_MAX_LENGTH,
-	TASK_TITLE_MAX_LENGTH,
-	assignTask,
-	broadcastTask,
-	cancelTask,
-	claimTask,
-	completeTask,
-	countOpenTasks,
-	findTask,
-	createTask,
-	listTasks,
-	type ClaimTaskInput,
-	type CompleteTaskInput,
-	type CompletedTask,
-	type CreateTaskInput,
-	type ListTasksInput
-} from './tasks';
+/*
+ * The task lifecycle is gone (migration 035).
+ *
+ * The owner: "remove tasks and the board." Work is a state a card is in now —
+ * `setStatus` in `./cards.ts` — so there is nothing here to create, claim,
+ * complete or cancel. `$db`'s task rows survive as the history the conversion
+ * came from, and nothing in the product reads them.
+ */
 /**
  * Web Push (design §5, §7): the one channel that reaches an owner whose
  * dashboard is closed. Off unless a VAPID keypair is configured.
@@ -320,6 +450,57 @@ export type {
 	RequestPusherOptions,
 	SendPushOptions
 } from './push';
+/** The owner's phones: a per-install owner key and its Apple push tokens. */
+export {
+	ALERT_PROJECTS_MAX,
+	APNS_ENVIRONMENTS,
+	DEVICE_NAME_MAX_LENGTH,
+	DEVICE_SEEN_RESOLUTION_MS,
+	authenticateOwnerDevice,
+	deviceAlertProjects,
+	deviceWantsAlert,
+	findOwnerDevice,
+	forgetDeviceToken,
+	listOwnerDevices,
+	deviceName,
+	mintOwnerDevice,
+	revokeOwnerDevice,
+	setDeviceAlertProjects,
+	setDeviceApnsToken,
+	setDeviceLiveActivityTokens
+} from './devices';
+export type { ApnsEnvironment, MintedDevice, OwnerDevice } from './devices';
+/** One small read of the whole dashboard, for widgets and the Live Activity. */
+export { liveActivityState, ownerSummary } from './summary';
+export type { LiveActivityState, OwnerSummary, SummaryRequest } from './summary';
+/** Apple push for the iOS app: alerts, and the Live Activity. */
+export {
+	alertHeaders,
+	alertPayload,
+	apnsAlertFor,
+	createApnsTransport,
+	createProviderTokenSigner,
+	deliverToDevice,
+	sendApnsAlert,
+	startApnsPusher,
+	truncateBytes
+} from './apns';
+export type {
+	AlertSource,
+	ApnsAlert,
+	ApnsPusherOptions,
+	ApnsRequest,
+	ApnsResponse,
+	ApnsSettings,
+	ApnsTransport
+} from './apns';
+export {
+	LIVE_ACTIVITY_ATTRIBUTES_TYPE,
+	createLiveActivityPusher,
+	liveActivityHeaders,
+	startLiveActivityPusher
+} from './live-activity';
+export type { LiveActivityPusher, LiveActivityPusherOptions } from './live-activity';
 /**
  * Public share links (design §7, §8): the one unauthenticated read in the
  * product, scoped to a single card and revocable.

@@ -21,19 +21,25 @@
 	 * no new notification path at all.
 	 */
 	import Attachments from './Attachments.svelte';
+	import Spinner from './Spinner.svelte';
+	import TagPicker from './TagPicker.svelte';
 	import { actionMessage, type OwnerActions } from './actions';
+	import { tagLook, tagsFor } from './tags';
 	import { Uploads } from './uploads.svelte';
-	import type { ProjectView } from './types';
+	import type { ProjectView, TagView } from './types';
 
 	let {
 		/** The project on screen, or `null` on the all-projects view. */
 		project = null,
 		/** Every project, for the picker the all-projects view needs. */
 		projects = [],
+		/** Every word the projects on this page know (migration 039). */
+		tags = [],
 		actions
 	}: {
 		project?: string | null;
 		projects?: ProjectView[];
+		tags?: TagView[];
 		actions: OwnerActions;
 	} = $props();
 
@@ -54,8 +60,26 @@
 	/** True while a file is being dragged over the box, so it can say it will take it. */
 	let dragging = $state(false);
 
+	/**
+	 * The words this post will wear, chosen before it exists (migration 039).
+	 *
+	 * The owner: "let me set tags on a post before I actually post it." A draft
+	 * has no id, so nothing can be written yet — the ids are held here and
+	 * applied the moment the post comes back with one. If the post lands and a
+	 * tag does not, the post still stands: a label is worth less than the words.
+	 */
+	let picked = $state<string[]>([]);
+	let picking = $state(false);
+	/** The button that opens the picker, so pressing it again closes it. */
+	let tagTrigger = $state<HTMLElement | null>(null);
+
 	/** Where it goes: the project on screen, or the one picked. */
 	const destination = $derived(project ?? target);
+	/** Which project's words to offer: the one this post is going to. */
+	const project_ = $derived(projects.find((candidate) => candidate.slug === destination) ?? null);
+	const available = $derived(tagsFor(project_?.id, tags));
+	const chosen = $derived(new Set(picked));
+	const wearing = $derived(available.filter((tag) => chosen.has(tag.id)));
 	// A picture on its own is a post: "look at this" needs no words. What it must
 	// not do is post while an upload is still in flight, or the ids would be short
 	// by however many had not landed.
@@ -71,12 +95,19 @@
 		busy = true;
 		error = null;
 		try {
-			await actions.postMessage({
+			const posted = await actions.postMessage({
 				project: destination,
 				body,
 				...(mediaIds.length > 0 ? { mediaIds } : {})
 			});
+			// The tags the owner chose before there was anything to put them on.
+			// One call each, after the fact: the post is the thing that matters, and
+			// a label that failed to land is not worth failing the post for.
+			for (const tagId of picked) {
+				await actions.tagCard('message', posted.id, tagId, true).catch(() => {});
+			}
 			text = '';
+			picked = [];
 			uploads.clear();
 			// The card arrives the way every other card does: the write publishes
 			// `message.created`, the tab hears it and refetches. Nothing is inserted
@@ -183,13 +214,71 @@
 			type="button"
 			disabled={!ready}
 			onclick={send}
-			class="min-h-11 shrink-0 rounded bg-accent px-3 text-xs font-medium text-surface disabled:opacity-50"
+			class="flex min-h-11 shrink-0 items-center gap-1.5 rounded bg-accent px-3 text-xs font-medium text-surface disabled:opacity-50"
 		>
-			Post
+			<!-- What is happening, not just that the button is dead (design §7). -->
+			{#if busy}<Spinner size="0.75rem" />{/if}
+			{busy ? 'Posting' : 'Post'}
 		</button>
 	</div>
 
-	<Attachments {uploads} label="Add image" />
+	<!--
+		The words this post will wear (migration 039). The owner: "let me set tags
+		on a post before I actually post it." Beside the attachments, because both
+		are things going out with the post rather than things about the box.
+	-->
+	<div class="flex flex-wrap items-center gap-1" data-testid="composer-tags">
+		{#each wearing as tag (tag.id)}
+			<button
+				type="button"
+				data-tag={tag.id}
+				aria-label="Remove the tag {tag.name}"
+				onclick={() => (picked = picked.filter((id) => id !== tag.id))}
+				class="rounded-full border px-2 py-0.5 text-[0.7rem] font-medium {tagLook(tag.colour)}"
+			>
+				{tag.name}
+			</button>
+		{/each}
+
+		{#if destination !== ''}
+			<div class="relative">
+				<button
+					bind:this={tagTrigger}
+					type="button"
+					aria-expanded={picking}
+					aria-label="Add a tag"
+					data-testid="tag-add"
+					onclick={() => (picking = !picking)}
+					class="flex size-5 items-center justify-center rounded border border-border-subtle text-xs leading-none text-content-muted hover:border-accent hover:text-content"
+				>
+					<span aria-hidden="true">+</span>
+				</button>
+
+				{#if picking}
+					<TagPicker
+						tags={available}
+						{chosen}
+						ontoggle={(tagId, on) => {
+							picked = on ? [...picked, tagId] : picked.filter((id) => id !== tagId);
+						}}
+						oncreate={async (name, colour) => {
+							// A word invented while writing: it is decided for the project
+							// straight away, and held for this post like any other.
+							const made = await actions.defineTag(destination, name, colour);
+							if (!picked.includes(made.id)) picked = [...picked, made.id];
+						}}
+						onrecolour={async (tagId, colour) => {
+							await actions.renameTag(tagId, { colour });
+						}}
+						trigger={tagTrigger}
+						onclose={() => (picking = false)}
+					/>
+				{/if}
+			</div>
+		{/if}
+	</div>
+
+	<Attachments {uploads} label="Add file" />
 
 	{#if error}
 		<p role="alert" class="text-xs text-rose-400">{error}</p>

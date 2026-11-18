@@ -2,9 +2,9 @@
 // class name: a rule that does not exist would pass a class-name check.
 import '../http/routes/app.css';
 import { render } from 'vitest-browser-svelte';
-import { describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import Thread from './Thread.svelte';
-import { aMedia, aMessage, aRequest, anAck, fakeActions } from './testing';
+import { aMedia, aMessage, aRequest, anAck, fakeActions, insideTheApp } from './testing';
 
 /**
  * The conversation on a card (design §7): the thread, and the box the owner
@@ -62,7 +62,12 @@ describe('untrusted markdown in a message', () => {
 });
 
 describe('the thread', () => {
-	it('reads downwards, oldest first, and says who said what', async () => {
+	/**
+	 * Newest first (the owner: "long threads are hard to follow, reverse the
+	 * order replies are shown in"). A card's conversation is something you come
+	 * back to, and what you came back for is the last thing said.
+	 */
+	it('reads downwards, newest first, and says who said what', async () => {
 		const screen = render(Thread, {
 			messages: [
 				aMessage({ id: 'm1', body: 'from the owner', author: 'human' }),
@@ -75,10 +80,37 @@ describe('the thread', () => {
 		const bodies = [...document.querySelectorAll('[data-message]')].map((node) =>
 			node.textContent?.replace(/\s+/g, ' ')
 		);
-		expect(bodies[0]).toContain('from the owner');
-		expect(bodies[1]).toContain('from the agent');
+		expect(bodies[0]).toContain('from the agent');
+		expect(bodies[1]).toContain('from the owner');
 		await expect.element(screen.getByText('You')).toBeInTheDocument();
 		await expect.element(screen.getByText('scout')).toBeInTheDocument();
+	});
+
+	it('puts the reply control above the conversation, where the newest line is', async () => {
+		render(Thread, {
+			messages: [aMessage({ id: 'm1' }), aMessage({ id: 'm2' })],
+			onreply: replies().onreply
+		});
+
+		// Under a long thread the box used to be a scroll away from everything it
+		// was about, which is half of what made one hard to follow.
+		const control = document.querySelector('[data-thread] button')!;
+		const list = document.querySelector('[data-thread] ol')!;
+		expect(control.compareDocumentPosition(list) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+	});
+
+	it('says when a line has been corrected, and stays quiet when it has not', async () => {
+		render(Thread, {
+			messages: [
+				aMessage({ id: 'm1', body: 'the file is src/right.ts', editedAt: Date.now() }),
+				aMessage({ id: 'm2', body: 'untouched' })
+			],
+			onreply: replies().onreply
+		});
+
+		// Stated, not silent (migration 033): a reader who saw this earlier has to
+		// be able to tell that it now says something else.
+		expect(document.querySelectorAll('[data-testid="message-edited"]')).toHaveLength(1);
 	});
 
 	it('names an agent it has no name for readably, never as a raw ULID', async () => {
@@ -238,9 +270,10 @@ describe('what an agent said about a message', () => {
 
 		await expect.element(screen.getByText('scout marked this done')).toBeInTheDocument();
 
+		// Newest first, so the acknowledged message is the second one on screen.
 		const items = [...document.querySelectorAll('[data-message]')];
-		expect(items[0].querySelector('[data-ack]')).not.toBeNull();
-		expect(items[1].querySelector('[data-ack]')).toBeNull();
+		expect(items[1].querySelector('[data-ack-done]')).not.toBeNull();
+		expect(items[0].querySelector('[data-ack-done]')).toBeNull();
 	});
 
 	it('shows an online agent thinking about it', async () => {
@@ -255,13 +288,31 @@ describe('what an agent said about a message', () => {
 		await expect.element(screen.getByText(/scout is thinking/)).toBeInTheDocument();
 	});
 
-	it('leaves a message alone when nobody has said anything', async () => {
+	it('claims nothing about an agent`s own line that nobody answered', async () => {
 		render(Thread, {
-			messages: [aMessage({ id: 'm1' })],
+			messages: [aMessage({ id: 'm1', author: 'agent:a1' })],
 			onreply: replies().onreply
 		});
 
+		// An agent's own words are not waiting to be delivered to anybody, so an
+		// unanswered one says nothing at all.
 		expect(document.querySelector('[data-ack]')).toBeNull();
+	});
+
+	/**
+	 * The owner's line that reached nobody (design §7).
+	 *
+	 * The owner: "when a message isn't delivered yet, hold a red icon saying it
+	 * wasn't delivered to an agent." This is the worst silence on the dashboard —
+	 * they typed, and nothing is listening.
+	 */
+	it('says in red when the owner`s own line has reached nobody', async () => {
+		render(Thread, {
+			messages: [aMessage({ id: 'm1', author: 'human', createdAt: Date.now() - 60_000 })],
+			onreply: replies().onreply
+		});
+
+		expect(document.querySelector('[data-ack-undelivered]')).not.toBeNull();
 	});
 });
 
@@ -305,7 +356,8 @@ describe('separating the replies', () => {
 			onreply: replies().onreply
 		});
 
-		const [mine, theirs] = [...document.querySelectorAll('[data-message]')];
+		// Newest first: the agent's line is on top, the owner's under it.
+		const [theirs, mine] = [...document.querySelectorAll('[data-message]')];
 		expect(mine.getAttribute('data-mine')).toBe('true');
 		expect(theirs.getAttribute('data-mine')).toBeNull();
 		// Measured, not asserted by class name: the accent rail is the signal.
@@ -611,4 +663,73 @@ describe('a question in the thread', () => {
 		// prompt it cannot settle would be a dead control.
 		expect(document.body.textContent).not.toContain('Ship it?');
 	});
+});
+
+/**
+ * Inside the iPhone app, Reply hands over to the app's own bar. The owner:
+ * "pressing reply shouldn't show any text boxes on the phone, it should use the
+ * integrated native text box."
+ */
+describe('inside the iPhone app', () => {
+	let app: ReturnType<typeof insideTheApp>;
+	beforeEach(() => {
+		app = insideTheApp();
+	});
+	afterEach(() => app.leave());
+
+	it('opens no box on the page, and sends what was typed in the app', async () => {
+		const { sent, onreply } = replies();
+		const screen = render(Thread, { messages: [], onreply });
+
+		await screen.getByRole('button', { name: 'Reply' }).click();
+
+		expect(document.querySelector('[data-thread] textarea')).toBeNull();
+		expect(app.handed).toEqual([expect.objectContaining({ label: 'Reply on this card' })]);
+
+		await app.type('  on it  ');
+		expect(sent).toEqual(['on it']);
+	});
+
+	it('answers the comment the owner pressed Reply under', async () => {
+		const answers: (string | undefined)[] = [];
+		const screen = render(Thread, {
+			messages: [aMessage({ id: 'm1', author: 'agent:01SCOUT', body: 'done?' })],
+			agentNames: { '01SCOUT': 'scout' },
+			onreply: async (_body: string, _media?: string[], answering?: string) => {
+				answers.push(answering);
+			}
+		});
+
+		await screen.getByRole('button', { name: 'Reply to scout' }).click();
+		expect(app.handed.at(-1)?.label).toBe('Reply to scout');
+
+		await app.type('yes');
+		expect(answers).toEqual(['m1']);
+	});
+
+	it('hands the refusal back to the app, so the words stay in its bar', async () => {
+		const { onreply } = replies(() => Promise.reject(new Error('offline')));
+		const screen = render(Thread, { messages: [], onreply });
+
+		await screen.getByRole('button', { name: 'Reply' }).click();
+
+		await expect(app.type('hello')).rejects.toThrow('offline');
+	});
+
+	it('refuses words for a reply that was replaced by a newer one', async () => {
+		const screen = render(Thread, { messages: [], onreply: replies().onreply });
+		await screen.getByRole('button', { name: 'Reply' }).click();
+		const first = app.handed[0];
+		await screen.getByRole('button', { name: 'Reply' }).click();
+
+		await expect(window.agentsComposer!.send(first.id, 'late')).rejects.toThrow(/closed/);
+	});
+});
+
+it('keeps its own box in a plain browser', async () => {
+	const screen = render(Thread, { messages: [], onreply: replies().onreply });
+
+	await screen.getByRole('button', { name: 'Reply' }).click();
+
+	expect(document.querySelector('[data-thread] textarea')).not.toBeNull();
 });

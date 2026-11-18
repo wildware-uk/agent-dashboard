@@ -56,7 +56,7 @@ import { context, type DomainContext } from './context';
 import { conflict, invalid, notFound } from './errors';
 import { countPendingRequests } from './requests';
 import { countUnreadMessages } from './messages';
-import { countOpenTasks } from './tasks';
+import { countOpenWorkInScope } from './cards';
 import { optionalText } from './text';
 
 /**
@@ -383,8 +383,14 @@ export type WorkCounter = (ctx: DomainContext, agentId: string) => number;
 export const WORK_COUNTERS: Record<keyof WorkCounts, WorkCounter> = {
 	/** Messages after this agent's cursor, its own excluded (`./messages.ts`). */
 	unreadMessages: (ctx, agentId) => countUnreadMessages(ctx, agentId),
-	/** This agent's `todo` and `claimed` rows (`./tasks.ts`). */
-	openTasks: (ctx, agentId) => countOpenTasks(ctx, agentId),
+	/**
+	 * Cards marked as work that is not finished (`./cards.ts`).
+	 *
+	 * The field keeps the name `openTasks` on the wire even though the board is
+	 * gone (migration 035): it is what every running session's channel bridge
+	 * parses out of a heartbeat, and renaming it would make them all read zero.
+	 */
+	openTasks: (ctx, agentId) => countOpenWorkInScope(ctx, agentId),
 	/**
 	 * This agent's requests still waiting on the owner (`./requests.ts`).
 	 *

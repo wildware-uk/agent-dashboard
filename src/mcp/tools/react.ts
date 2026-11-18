@@ -16,7 +16,7 @@
  * There is no argument for who is reacting: the reactor is resolved from the
  * bearer token (design §5).
  */
-import { react } from '$domain';
+import { oneCard, react } from '$domain';
 import { z } from 'zod';
 import { guard, ok, reactionView } from '../results';
 import type { McpTool } from './types';
@@ -24,10 +24,19 @@ import type { McpTool } from './types';
 const inputSchema = {
 	message_id: z
 		.string()
+		.optional()
 		.describe(
 			'The message to react to, from get_messages or post_message — your owner’s, another ' +
-				'agent’s, or your own.'
+				'agent’s, or your own. Name exactly one card.'
 		),
+	update_id: z
+		.string()
+		.optional()
+		.describe('An update to react to instead, from post_update or list_projects’ feed.'),
+	request_id: z
+		.string()
+		.optional()
+		.describe('A question to react to instead, from request_input or a channel event.'),
 	emoji: z
 		.string()
 		.describe(
@@ -48,24 +57,27 @@ const inputSchema = {
 export const reactTool: McpTool<typeof inputSchema> = {
 	name: 'react',
 	config: {
-		title: 'React to a message with an emoji',
+		title: 'React to a card with an emoji',
 		description: [
-			'React to a message with an emoji: 👀 to say you are looking at it, ✅ when it is done,',
-			'👍 or 👎 to agree or disagree, 🎉 when something landed. It appears on the message',
-			'itself, live, and costs your owner nothing to read.',
+			'React to anything on the dashboard with an emoji: 👀 to say you are looking at it, ✅',
+			'when it is done, 👍 or 👎 to agree or disagree, 🎉 when something landed. It appears on',
+			'the card itself, live, and costs your owner nothing to read.',
 			'',
 			'This is the cheapest thing you can say, and cheap matters: a card that has been reacted',
 			'to is a card somebody has seen, and silence is what makes an owner wonder whether you',
 			'are there at all.',
 			'',
-			'Arguments:',
-			'- message_id (required): the message, from get_messages or post_message.',
+			'Arguments (name exactly one card):',
+			'- message_id: a message, from get_messages or post_message.',
+			'- update_id: an update, from post_update.',
+			'- request_id: a question, from request_input or a channel event.',
 			'- emoji (required): the character itself, or one of these shortcodes — eyes, tick,',
 			'  done, +1, -1, tada, rocket, heart, thinking, warning, x, fire, smile.',
 			'- on (optional): true to react, false to remove it. Omitted it toggles; pass it',
 			'  explicitly if a retry is possible, or a second attempt will undo the first.',
 			'',
-			'Returns { reactions: [{ id, message_id, actor, emoji, created_at }], on }. `actor` is',
+			'Returns { reactions: [{ id, card_kind, card_id, message_id, actor, emoji, created_at }],',
+			'on }. `actor` is',
 			'the literal "human" for your owner or "agent:<agent_id>", so you can see who else has',
 			'reacted; `on` is whether your own reaction is there now.',
 			'',
@@ -73,9 +85,9 @@ export const reactTool: McpTool<typeof inputSchema> = {
 			'poor way to answer a question — your owner cannot tell "👍 I agree" from "👍 I have',
 			'read this" when they asked you which of two things to do.',
 			'',
-			'On failure: "not_found" means no such message, or one that has been deleted.',
+			'On failure: "not_found" means no such card, or one that has been deleted.',
 			'"invalid_argument" means what you sent is not an emoji — a word, a sentence, or',
-			'something far too long.'
+			'something far too long — or that you named no card, or more than one.'
 		].join('\n'),
 		inputSchema,
 		annotations: { destructiveHint: false, idempotentHint: false, openWorldHint: false }
@@ -84,7 +96,11 @@ export const reactTool: McpTool<typeof inputSchema> = {
 	run: ({ ctx, agent }, args) =>
 		guard(() => {
 			const result = react(ctx, {
-				messageId: args.message_id,
+				card: oneCard({
+					message: args.message_id,
+					update: args.update_id,
+					request: args.request_id
+				}),
 				// Identity comes from the token, never from `args` (design §5).
 				actor: { kind: 'agent', agentId: agent.id },
 				emoji: args.emoji,
@@ -93,8 +109,8 @@ export const reactTool: McpTool<typeof inputSchema> = {
 
 			return ok(
 				result.on
-					? `Reacted. Your owner sees it on the message.`
-					: `Reaction removed. It is gone from the message.`,
+					? `Reacted. Your owner sees it on the card.`
+					: `Reaction removed. It is gone from the card.`,
 				{ reactions: result.reactions.map(reactionView), on: result.on }
 			);
 		})

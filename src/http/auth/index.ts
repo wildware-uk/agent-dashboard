@@ -5,10 +5,19 @@
  * cookie protects. Routes import from here; nothing outside `src/http/` should
  * import this at all.
  */
-export { attemptLogin, createLoginHandler, LOGIN_MAX_ATTEMPTS, LOGIN_WINDOW_MS } from './login';
-export type { LoginAttempt, LoginOutcome } from './login';
+export {
+	attemptLogin,
+	createLoginHandler,
+	createPasswordCheck,
+	LOGIN_MAX_ATTEMPTS,
+	LOGIN_WINDOW_MS,
+	ownerPasswordCheck
+} from './login';
+export type { LoginAttempt, LoginOutcome, PasswordCheck, PasswordVerdict } from './login';
 export { logout } from './logout';
 export { authHandle, createAuthHandle } from './handle';
+export { bearerToken } from './bearer';
+export type { DeviceTokenCheck } from './bearer';
 export { authConfig } from './env';
 export type { AuthConfig } from './env';
 export {

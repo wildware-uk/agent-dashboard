@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { acknowledgementsFor, createProject, createTask, postMessage } from '$domain';
+import { acknowledgementsFor, createProject, postMessage, postUpdate } from '$domain';
 import { mcpHarness, toolText, type McpHarness } from '../testing';
 import { acknowledgeTool } from './acknowledge';
 
@@ -31,7 +31,7 @@ describe('saying you have seen it', () => {
 		});
 
 		expect(result.isError).toBeFalsy();
-		expect(acknowledgementsFor(mcp.h, { messageIds: [message.id] })).toMatchObject([
+		expect(acknowledgementsFor(mcp.h, { message: [message.id] })).toMatchObject([
 			{ agentId: mcp.deps.agent.id, state: 'thinking', taskId: null }
 		]);
 	});
@@ -43,20 +43,24 @@ describe('saying you have seen it', () => {
 
 		await acknowledgeTool.run(mcp.deps, { state: 'done', message_id: message.id });
 
-		expect(acknowledgementsFor(mcp.h, { messageIds: [message.id] })).toMatchObject([
+		expect(acknowledgementsFor(mcp.h, { message: [message.id] })).toMatchObject([
 			{ state: 'done' }
 		]);
 	});
 
-	it('works on a task', async () => {
+	it('works on an update, not only on a message', async () => {
 		const mcp = mcpHarness();
 		const { project } = createProject(mcp.h, { name: 'Dashboard' });
-		const task = createTask(mcp.h, { project: project.slug, title: 'look at it' });
+		const update = postUpdate(mcp.h, {
+			project: project.slug,
+			agentId: mcp.deps.agent.id,
+			body: 'shipped'
+		});
 
-		const result = await acknowledgeTool.run(mcp.deps, { state: 'done', task_id: task.id });
+		const result = await acknowledgeTool.run(mcp.deps, { state: 'done', update_id: update.id });
 
 		expect(result.isError).toBeFalsy();
-		expect(acknowledgementsFor(mcp.h, { taskIds: [task.id] })).toMatchObject([{ state: 'done' }]);
+		expect(acknowledgementsFor(mcp.h, { update: [update.id] })).toMatchObject([{ state: 'done' }]);
 	});
 
 	it('says which state it recorded, so the answer is readable without the payload', async () => {
@@ -68,10 +72,14 @@ describe('saying you have seen it', () => {
 		expect(toolText(result)).toContain('tick');
 	});
 
-	it('refuses a call naming neither target, and one naming both', async () => {
+	it('refuses a call naming no card, and one naming two', async () => {
 		const mcp = mcpHarness();
 		const { project, message } = aMessage(mcp);
-		const task = createTask(mcp.h, { project: project.slug, title: 'look at it' });
+		const update = postUpdate(mcp.h, {
+			project: project.slug,
+			agentId: mcp.deps.agent.id,
+			body: 'shipped'
+		});
 
 		expect((await acknowledgeTool.run(mcp.deps, { state: 'done' })).isError).toBe(true);
 		expect(
@@ -79,7 +87,7 @@ describe('saying you have seen it', () => {
 				await acknowledgeTool.run(mcp.deps, {
 					state: 'done',
 					message_id: message.id,
-					task_id: task.id
+					update_id: update.id
 				})
 			).isError
 		).toBe(true);

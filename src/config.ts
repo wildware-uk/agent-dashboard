@@ -17,10 +17,15 @@ export const CONFIG_VARS = [
 	'PUBLIC_BASE_URL',
 	'MAX_IMAGE_BYTES',
 	'MAX_VIDEO_BYTES',
+	'MAX_FILE_BYTES',
 	'HOLD_S',
 	'VAPID_PUBLIC_KEY',
 	'VAPID_PRIVATE_KEY',
-	'VAPID_SUBJECT'
+	'VAPID_SUBJECT',
+	'APNS_KEY_ID',
+	'APNS_TEAM_ID',
+	'APNS_KEY_PATH',
+	'APNS_BUNDLE_ID'
 ] as const;
 
 export type ConfigVar = (typeof CONFIG_VARS)[number];
@@ -67,6 +72,15 @@ const schema = z
 		MAX_VIDEO_BYTES: bytes(200 * 1024 * 1024),
 
 		/**
+		 * Upload cap for everything else — a PDF, a log, a zip (migration 026).
+		 *
+		 * Its own number rather than the image cap reused, because a file is never
+		 * rendered: it is stored, listed and downloaded, so the reason to keep it
+		 * small is disk rather than a browser's patience.
+		 */
+		MAX_FILE_BYTES: bytes(50 * 1024 * 1024),
+
+		/**
 		 * How long `request_input` parks on the event bus before handing the agent a
 		 * `pending` result to resume on. Must stay under the 60 second tool timeout
 		 * common to MCP clients (design §5).
@@ -96,7 +110,18 @@ const schema = z
 			.optional()
 			.refine((value) => value === undefined || /^(mailto:|https:\/\/)/.test(value), {
 				error: 'VAPID_SUBJECT must be a mailto: address or an https:// URL'
-			})
+			}),
+
+		/**
+		 * Apple push, for the iOS companion app. Optional and all-or-none: without
+		 * them the app still works, it just is not woken by anything.
+		 */
+		APNS_KEY_ID: z.string().min(1).optional(),
+		APNS_TEAM_ID: z.string().min(1).optional(),
+		/** Path to the `.p8` signing key downloaded from the Apple developer site. */
+		APNS_KEY_PATH: z.string().min(1).optional(),
+		/** The app's bundle id, which is the push topic. */
+		APNS_BUNDLE_ID: z.string().min(1).optional()
 	})
 	.superRefine((config, ctx) => {
 		// One key without the other cannot sign anything, and silently disabling push
@@ -108,6 +133,21 @@ const schema = z
 			ctx.addIssue({
 				code: 'custom',
 				message: 'VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY must be set together, or neither'
+			});
+		}
+
+		const apns = [
+			config.APNS_KEY_ID,
+			config.APNS_TEAM_ID,
+			config.APNS_KEY_PATH,
+			config.APNS_BUNDLE_ID
+		];
+		const set = apns.filter((value) => value !== undefined).length;
+		if (set !== 0 && set !== apns.length) {
+			ctx.addIssue({
+				code: 'custom',
+				message:
+					'APNS_KEY_ID, APNS_TEAM_ID, APNS_KEY_PATH and APNS_BUNDLE_ID must be set together, or none'
 			});
 		}
 	});
@@ -129,6 +169,27 @@ export function pushConfig(config: Config): PushConfig | null {
 		publicKey: config.VAPID_PUBLIC_KEY,
 		privateKey: config.VAPID_PRIVATE_KEY,
 		subject: config.VAPID_SUBJECT ?? config.PUBLIC_BASE_URL
+	};
+}
+
+/** What an Apple push send needs, or `null` when APNs is not configured. */
+export type ApnsConfig = { keyId: string; teamId: string; keyPath: string; bundleId: string };
+
+/** APNs settings, or `null`: on exactly when all four variables are set. */
+export function apnsConfig(config: Config): ApnsConfig | null {
+	if (
+		!config.APNS_KEY_ID ||
+		!config.APNS_TEAM_ID ||
+		!config.APNS_KEY_PATH ||
+		!config.APNS_BUNDLE_ID
+	) {
+		return null;
+	}
+	return {
+		keyId: config.APNS_KEY_ID,
+		teamId: config.APNS_TEAM_ID,
+		keyPath: config.APNS_KEY_PATH,
+		bundleId: config.APNS_BUNDLE_ID
 	};
 }
 
@@ -232,7 +293,7 @@ export function assertBodyLimitAllowsUploads(env: RawEnv, config: Config): void 
 	// An unparseable value is the adapter's error to report, not ours.
 	if (limit === null) return;
 
-	const largest = Math.max(config.MAX_IMAGE_BYTES, config.MAX_VIDEO_BYTES);
+	const largest = Math.max(config.MAX_IMAGE_BYTES, config.MAX_VIDEO_BYTES, config.MAX_FILE_BYTES);
 	if (limit >= largest) return;
 
 	throw new Error(
@@ -241,6 +302,6 @@ export function assertBodyLimitAllowsUploads(env: RawEnv, config: Config): void 
 			`  up to ${largest} bytes. adapter-node enforces BODY_SIZE_LIMIT before any route\n` +
 			'  runs, so larger uploads would be rejected with a 413 the app never sees and\n' +
 			'  cannot explain, after the agent has already spent its upload token.\n' +
-			`  Set BODY_SIZE_LIMIT=${largest} (or lower MAX_IMAGE_BYTES / MAX_VIDEO_BYTES).`
+			`  Set BODY_SIZE_LIMIT=${largest} (or lower MAX_IMAGE_BYTES / MAX_VIDEO_BYTES / MAX_FILE_BYTES).`
 	);
 }

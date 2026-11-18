@@ -9,6 +9,7 @@
  * either of them covers.
  */
 import type { Handle, RequestEvent } from '@sveltejs/kit';
+import { bearerToken, type DeviceTokenCheck } from './bearer';
 import { authConfig, type AuthConfig } from './env';
 import { isBrowserApi, loginRedirect, requiresSession } from './guard';
 import { sessionFromCookies } from './session';
@@ -28,16 +29,27 @@ function refuse(event: RequestEvent): Response {
 }
 
 export function createAuthHandle({
-	config = authConfig
-}: { config?: () => AuthConfig | null } = {}): Handle {
+	config = authConfig,
+	device = () => false
+}: {
+	config?: () => AuthConfig | null;
+	/** Injected because this module may not reach the database that knows the keys. */
+	device?: DeviceTokenCheck;
+} = {}): Handle {
 	return async ({ event, resolve }) => {
 		// `route.id` is null for anything that matched no route — static assets and
 		// 404s. Those carry nothing to protect, and guarding them would turn a
 		// missing file into a redirect loop.
 		if (event.route.id !== null && requiresSession(event.url.pathname)) {
-			const secrets = config();
-			const session = secrets && sessionFromCookies(event.cookies, secrets.sessionSecret);
-			if (!session) return refuse(event);
+			// A bearer decides on its own: a stale key must not ride on a cookie.
+			const bearer = bearerToken(event.request.headers);
+			if (bearer !== null) {
+				if (!device(bearer)) return refuse(event);
+			} else {
+				const secrets = config();
+				const session = secrets && sessionFromCookies(event.cookies, secrets.sessionSecret);
+				if (!session) return refuse(event);
+			}
 		}
 
 		return resolve(event);

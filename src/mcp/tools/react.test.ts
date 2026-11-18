@@ -34,7 +34,7 @@ describe('reacting as an agent', () => {
 
 		expect(result.isError).toBeFalsy();
 		expect(toolText(result)).toContain('Reacted');
-		expect(reactionsFor(mcp.h, [message.id])).toEqual([
+		expect(reactionsFor(mcp.h, 'message', [message.id])).toEqual([
 			expect.objectContaining({ emoji: '👀', actor: `agent:${mcp.deps.agent.id}` })
 		]);
 	});
@@ -47,7 +47,7 @@ describe('reacting as an agent', () => {
 		await reactTool.run(mcp.deps, { message_id: message.id, emoji: '✅', on: true });
 
 		// A toggle would have undone it; saying `on: true` twice is one reaction.
-		expect(reactionsFor(mcp.h, [message.id])).toHaveLength(1);
+		expect(reactionsFor(mcp.h, 'message', [message.id])).toHaveLength(1);
 	});
 
 	it('takes one back', async () => {
@@ -62,7 +62,7 @@ describe('reacting as an agent', () => {
 		});
 
 		expect(toolText(result)).toContain('removed');
-		expect(reactionsFor(mcp.h, [message.id])).toEqual([]);
+		expect(reactionsFor(mcp.h, 'message', [message.id])).toEqual([]);
 	});
 
 	it('refuses a sentence, saying what is wrong with it', async () => {
