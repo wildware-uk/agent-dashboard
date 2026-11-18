@@ -41,6 +41,13 @@ Notes carried from the design (§4):
   matching event, the timeout, or an abort; resolves `undefined` when no match
   arrived, and always unsubscribes. `since` scans the replay buffer first, which
   closes the race between writing a request row and waiting on its answer.
+- `bus.close()` — the process is stopping: every parked `waitFor` resolves
+  `undefined` now (a timeout, which every caller already handles), and later
+  ones resolve `undefined` at once.
+- `shutdown` (`Shutdown`) — stopping promptly. `begin()` (on SIGTERM) fires
+  `shutdown.signal`, which ends every live stream, and closes the bus.
+  `adopt(stop)` takes a background job; `finish()` (once the HTTP server has
+  closed) stops them all. Clients reconnect to the next process.
 - `AppEvent`, `EventOf<K>`, `EventPayloads`, `EventName` and the small literal
   unions the payloads use.
 

@@ -27,6 +27,10 @@ import {
 	startRequestSweeper
 } from '$domain';
 import { startDerivativeWorker } from '$media';
+import { shutdown } from '$events';
+
+/** How long a closed server may take to wind down before the process exits anyway. */
+const EXIT_GRACE_MS = 2_000;
 
 assertClientAddressTrustworthy(process.env);
 
@@ -44,14 +48,14 @@ if (!building) assertBodyLimitAllowsUploads(process.env, loadConfig(process.env)
 // so that gate fails loudly instead (design §4). It resolves its own database
 // handle per tick, so starting it here costs nothing until it first runs, and it
 // is skipped while building, when there is no deployment to sweep.
-if (!building) startPresenceSweeper();
+if (!building) shutdown.adopt(startPresenceSweeper());
 
 // A request whose deadline has passed is a prompt the owner can no longer
 // answer and an agent that has stopped waiting for one. A parked agent times
 // itself out at its own deadline (design §5), so this is what clears the ones
 // nobody is holding out of the banner. Same shape as above: its own database
 // handle per tick, failures logged rather than thrown.
-if (!building) startRequestSweeper();
+if (!building) shutdown.adopt(startRequestSweeper());
 
 // A request is the one thing that can happen while nobody is looking at the
 // dashboard: the agent has stopped, and only the owner can start it again. This
@@ -60,27 +64,27 @@ if (!building) startRequestSweeper();
 // It is a no-op unless a VAPID keypair is configured, it never awaits anything
 // on the publishing path, and a push service that refuses is logged rather than
 // thrown — a notification is a nudge, and the request itself is already stored.
-if (!building) startRequestPusher();
+if (!building) shutdown.adopt(startRequestPusher());
 
 // The same three events again, for the owner's iPhone over Apple push, plus the
 // Live Activity on its lock screen. Both are no-ops until the APNS_* variables
 // are set, and like Web Push they log a refusal rather than throw.
-if (!building) startApnsPusher();
-if (!building) startLiveActivityPusher();
+if (!building) shutdown.adopt(startApnsPusher());
+if (!building) shutdown.adopt(startLiveActivityPusher());
 
 // The same events, written down (migration 021). A push reaches a phone in a
 // pocket, but only if it is awake, permitted and delivered — so what the owner
 // was told about is recorded as well, and the app shows the list whether any
 // push landed or not. Failures are logged: the update, the reply and the
 // request have all already happened by the time this runs.
-if (!building) startNotificationRecorder();
+if (!building) shutdown.adopt(startNotificationRecorder());
 
 // Uploads happen before the update that references them, so an agent that
 // crashes in between leaves bytes on disk that nothing will ever point at. This
 // collects them an hour later (design §3, §6). Same shape as above: it resolves
 // its own database handle and settings per tick, and a failure is logged rather
 // than thrown.
-if (!building) startMediaSweeper();
+if (!building) shutdown.adopt(startMediaSweeper());
 
 // Derivatives (design §6 steps 4-5). The worker polls the `media` table for rows
 // that are still `pending` with bytes on disk, which is what makes it correct for
@@ -91,7 +95,24 @@ if (!building) startMediaSweeper();
 // dashboard that will not boot or a process that exits on a bad file.
 //
 // An operator can also drain the backlog by hand; see `src/media/README.md`.
-if (!building) startDerivativeWorker();
+if (!building) shutdown.adopt(startDerivativeWorker());
+
+// Stopping promptly. systemd sends SIGTERM and SIGKILLs 90 s later. adapter-node
+// closes the HTTP server on SIGTERM, but a server does not close while responses
+// are open, and this one holds them open on purpose: every live stream, and
+// every agent parked on its owner's answer. `shutdown.begin` ends those at once
+// (clients reconnect to the next process), so the close takes milliseconds
+// rather than adapter-node's 30 s grace. Once it has closed, the background jobs
+// stop, and if anything else still holds the event loop the process exits
+// anyway a moment later: what it was doing is either done or safe to redo.
+if (!building) {
+	process.once('SIGTERM', () => shutdown.begin());
+	process.once('SIGINT', () => shutdown.begin());
+	process.once('sveltekit:shutdown', () => {
+		shutdown.finish();
+		setTimeout(() => process.exit(0), EXIT_GRACE_MS).unref();
+	});
+}
 
 // The dashboard's own HTML is a megabyte of server-rendered markdown and
 // hydration payload, and compresses to a tenth of that; the snapshot endpoints

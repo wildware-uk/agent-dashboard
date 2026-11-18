@@ -63,7 +63,13 @@ import {
 	type DomainContext,
 	type WorkCounts
 } from '$domain';
-import { bus as sharedBus, type AppEvent, type EventBus, type Unsubscribe } from '$events';
+import {
+	bus as sharedBus,
+	shutdown,
+	type AppEvent,
+	type EventBus,
+	type Unsubscribe
+} from '$events';
 import {
 	authenticateMcpRequest,
 	createTokenRateLimiter,
@@ -250,6 +256,12 @@ export type AgentStreamHandlerOptions = {
 	 * cuts the stream it holds. `0` disables them.
 	 */
 	authCheckMs?: number;
+	/**
+	 * Fires when the process starts stopping, and ends the stream then, so a
+	 * restart is not held up by connections that never end on their own. The
+	 * client reconnects to the next process. Defaults to the process's own.
+	 */
+	stopping?: AbortSignal;
 };
 
 export type AgentStreamHandler = (event: AgentStreamRequestEvent) => Response;
@@ -573,7 +585,8 @@ export function createAgentStreamHandler(
 		rateLimiter = createTokenRateLimiter(),
 		heartbeatMs = AGENT_HEARTBEAT_MS,
 		retryMs = AGENT_RETRY_MS,
-		authCheckMs = AUTH_CHECK_MS
+		authCheckMs = AUTH_CHECK_MS,
+		stopping = shutdown.signal
 	} = options;
 
 	return (event) => {
@@ -651,6 +664,7 @@ export function createAgentStreamHandler(
 					if (heartbeat !== undefined) clearInterval(heartbeat);
 					if (authCheck !== undefined) clearInterval(authCheck);
 					event.request.signal?.removeEventListener('abort', teardown);
+					stopping.removeEventListener('abort', teardown);
 					try {
 						controller.close();
 					} catch {
@@ -745,6 +759,9 @@ export function createAgentStreamHandler(
 				signal?.addEventListener('abort', teardown, { once: true });
 				// An already-aborted request never fires the listener above.
 				if (signal?.aborted) teardown();
+				// The process is stopping: end this stream now rather than hold the exit.
+				stopping.addEventListener('abort', teardown, { once: true });
+				if (stopping.aborted) teardown();
 			},
 			cancel() {
 				teardown();

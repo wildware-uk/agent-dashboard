@@ -155,6 +155,10 @@ export function createApnsTransport(
 		created.on('close', forget);
 		created.on('goaway', forget);
 		created.setTimeout(IDLE_SESSION_MS, () => created.close());
+		// Kept open for reuse, but never a reason for the process to stay up: a
+		// session that held the event loop kept a stopping server alive until
+		// systemd killed it. A request in flight still holds the loop while it runs.
+		created.unref?.();
 		sessions.set(authority, created);
 		return created;
 	};

@@ -51,7 +51,7 @@ function connect(
 	mcp: McpHarness,
 	token: string = mcp.token,
 	query = '',
-	options: { authCheckMs?: number } = {}
+	options: { authCheckMs?: number; stopping?: AbortSignal } = {}
 ) {
 	const handler = createAgentStreamHandler({
 		bus: mcp.h.bus,
@@ -59,7 +59,8 @@ function connect(
 		config: () => ({ tokenSecret: mcp.secret, holdMs: 1_000 }),
 		rateLimiter: createTokenRateLimiter(),
 		heartbeatMs: 0,
-		authCheckMs: options.authCheckMs ?? 0
+		authCheckMs: options.authCheckMs ?? 0,
+		stopping: options.stopping ?? new AbortController().signal
 	});
 
 	const abort = new AbortController();
@@ -1425,5 +1426,18 @@ describe('a message that names an agent with @name', () => {
 		expect(heard.filter((frame) => frame.event === 'message').flatMap(bodiesOf)).toEqual([
 			'everyone'
 		]);
+	});
+});
+
+describe('when the server is stopping', () => {
+	it("ends every agent's open stream at once; the bridge reconnects to the new process", async () => {
+		const mcp = mcpHarness();
+		const stopping = new AbortController();
+		const stream = connect(mcp, mcp.token, '', { stopping: stopping.signal });
+		await stream.take(3);
+
+		stopping.abort();
+
+		expect(await stream.closed()).toBe(true);
 	});
 });

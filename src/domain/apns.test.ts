@@ -185,6 +185,23 @@ describe('the HTTP/2 transport', () => {
 		expect(seen[1].headers.authorization).not.toBe(seen[0].headers.authorization);
 	});
 
+	it('never keeps the process alive: an idle session to Apple must not hold up a shutdown', async () => {
+		const sessions: ClientHttp2Session[] = [];
+		const send = createApnsTransport(SETTINGS, {
+			readKey: () => PEM,
+			connect: () => {
+				const session = connect(`http://127.0.0.1:${port}`);
+				sessions.push(session);
+				vi.spyOn(session, 'unref');
+				return session;
+			}
+		});
+
+		await send(request());
+
+		expect(sessions[0].unref).toHaveBeenCalled();
+	});
+
 	it('opens a new session once the old one is gone', async () => {
 		const sessions: ClientHttp2Session[] = [];
 		const send = createApnsTransport(SETTINGS, {

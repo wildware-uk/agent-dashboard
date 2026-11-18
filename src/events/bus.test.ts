@@ -400,3 +400,23 @@ describe('the shared bus', () => {
 		expect(sharedBus).toBeInstanceOf(EventBus);
 	});
 });
+
+describe('closing the bus', () => {
+	it('lets every parked wait go at once, as if it had timed out', async () => {
+		const bus = new EventBus({ boot: 'b1' });
+		const parked = bus.waitFor({ timeoutMs: 60_000, types: ['request.answered'] });
+
+		bus.close();
+
+		await expect(parked).resolves.toBeUndefined();
+		expect(bus.listenerCount).toBe(0);
+	});
+
+	it('answers a wait asked for after it closed straight away', async () => {
+		const bus = new EventBus({ boot: 'b1' });
+		bus.close();
+
+		await expect(bus.waitFor({ timeoutMs: 60_000 })).resolves.toBeUndefined();
+		expect(bus.listenerCount).toBe(0);
+	});
+});

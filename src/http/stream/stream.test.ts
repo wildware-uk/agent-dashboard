@@ -51,6 +51,8 @@ type ConnectOptions = {
 	/** Which keys name a device. Defaults to none. */
 	devices?: (token: string) => boolean;
 	authCheckMs?: number;
+	/** The server's "shutting down" signal. Defaults to one that never fires. */
+	stopping?: AbortSignal;
 };
 
 /**
@@ -66,7 +68,8 @@ function connect(bus: Bus, options: ConnectOptions = {}) {
 		config,
 		devices: (token) => (devices(token) ? ({ id: 'd1' } as OwnerDevice) : null),
 		heartbeatMs: options.heartbeatMs ?? 0,
-		authCheckMs: options.authCheckMs ?? 0
+		authCheckMs: options.authCheckMs ?? 0,
+		stopping: options.stopping ?? new AbortController().signal
 	});
 	const abort = new AbortController();
 	const headers = new Headers();
@@ -503,6 +506,31 @@ describe('an unauthenticated request', () => {
 
 		expect(client.response.status).toBe(401);
 		expect(client.response.headers.get('content-type')).toBe('application/json');
+		expect(bus.listenerCount).toBe(0);
+	});
+});
+
+describe('when the server is stopping', () => {
+	it('ends every open stream at once, so the process need not wait for them', async () => {
+		const bus = new EventBus({ boot: 'b1' });
+		const stopping = new AbortController();
+		const stream = connect(bus, { stopping: stopping.signal });
+		await stream.preamble();
+
+		stopping.abort();
+
+		expect(await stream.closed()).toBe(true);
+		expect(bus.listenerCount).toBe(0);
+	});
+
+	it('ends a stream opened while it was already stopping', async () => {
+		const bus = new EventBus({ boot: 'b1' });
+		const stopping = new AbortController();
+		stopping.abort();
+
+		const stream = connect(bus, { stopping: stopping.signal });
+
+		expect(await stream.closed()).toBe(true);
 		expect(bus.listenerCount).toBe(0);
 	});
 });

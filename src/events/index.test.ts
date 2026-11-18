@@ -10,6 +10,12 @@ describe('the $events entry point', () => {
 	});
 
 	it('exports nothing else at runtime, so the surface stays the documented one', () => {
-		expect(Object.keys(events).sort()).toEqual(['EventBus', 'RING_CAPACITY', 'bus']);
+		expect(Object.keys(events).sort()).toEqual([
+			'EventBus',
+			'RING_CAPACITY',
+			'Shutdown',
+			'bus',
+			'shutdown'
+		]);
 	});
 });

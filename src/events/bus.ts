@@ -76,6 +76,9 @@ export class EventBus {
 	/** Published but not yet handed to listeners: see {@link EventBus.publish}. */
 	readonly #pending: AppEvent[] = [];
 	#dispatching = false;
+	/** Every parked wait's way out, so closing the bus can let them all go. */
+	readonly #parked = new Set<() => void>();
+	#closed = false;
 
 	/**
 	 * Which process lifetime this bus belongs to.
@@ -182,6 +185,20 @@ export class EventBus {
 	}
 
 	/**
+	 * The process is stopping: let every parked wait go now, as if it had timed
+	 * out, and answer any later one the same way at once.
+	 *
+	 * A parked owner request holds its HTTP call open for up to a minute, and a
+	 * server that waits for open calls before it exits would wait that long. A
+	 * timeout is an answer every caller already handles: the request is still
+	 * pending, and the agent asks again of the next process.
+	 */
+	close(): void {
+		this.#closed = true;
+		for (const release of [...this.#parked]) release();
+	}
+
+	/**
 	 * Park until a matching event arrives, the timeout elapses, or the caller
 	 * aborts.
 	 *
@@ -200,7 +217,7 @@ export class EventBus {
 			return where ? where(event as EventOf<K>) : true;
 		};
 
-		if (signal?.aborted) return Promise.resolve(undefined);
+		if (signal?.aborted || this.#closed) return Promise.resolve(undefined);
 
 		if (since !== undefined) {
 			const replay = this.replaySince(since);
@@ -217,9 +234,11 @@ export class EventBus {
 				unsubscribe();
 				clearTimeout(timer);
 				signal?.removeEventListener('abort', onAbort);
+				this.#parked.delete(onAbort);
 				resolve(event);
 			};
 			const onAbort = () => settle(undefined);
+			this.#parked.add(onAbort);
 			const timer = setTimeout(() => settle(undefined), timeoutMs);
 			const unsubscribe = this.subscribe((event) => {
 				if (matches(event)) settle(event as EventOf<K>);

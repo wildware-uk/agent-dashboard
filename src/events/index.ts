@@ -20,6 +20,7 @@
  * ```
  */
 export { EventBus, RING_CAPACITY, bus } from './bus';
+export { Shutdown, shutdown } from './shutdown';
 export type {
 	EventBusOptions,
 	EventListener,

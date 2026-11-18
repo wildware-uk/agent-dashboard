@@ -17,7 +17,7 @@
  * in this file decides *what* is worth publishing — it subscribes to the bus and
  * serialises. That is why an SSE bug can never become a business-rule bug.
  */
-import { EventBus, bus as sharedBus, type AppEvent, type Unsubscribe } from '$events';
+import { EventBus, bus as sharedBus, shutdown, type AppEvent, type Unsubscribe } from '$events';
 import { bearerToken, type AuthConfig, type SessionCookieReader } from '../auth';
 import {
 	SSE_HEADERS,
@@ -89,6 +89,12 @@ export type StreamHandlerOptions = {
 	retryMs?: number;
 	/** Milliseconds between checks that a device key still works. `0` disables them. */
 	authCheckMs?: number;
+	/**
+	 * Fires when the process starts stopping, and ends the stream then, so a
+	 * restart is not held up by connections that never end on their own. The
+	 * client reconnects to the next process. Defaults to the process's own.
+	 */
+	stopping?: AbortSignal;
 };
 
 export type StreamHandler = (event: StreamRequestEvent) => Response;
@@ -107,7 +113,8 @@ export function createStreamHandler(options: StreamHandlerOptions = {}): StreamH
 		devices = environmentDevices,
 		heartbeatMs = HEARTBEAT_MS,
 		retryMs = RETRY_MS,
-		authCheckMs = AUTH_CHECK_MS
+		authCheckMs = AUTH_CHECK_MS,
+		stopping = shutdown.signal
 	} = options;
 
 	return (event) => {
@@ -146,6 +153,7 @@ export function createStreamHandler(options: StreamHandlerOptions = {}): StreamH
 					if (heartbeat !== undefined) clearInterval(heartbeat);
 					if (authCheck !== undefined) clearInterval(authCheck);
 					event.request.signal?.removeEventListener('abort', teardown);
+					stopping.removeEventListener('abort', teardown);
 					try {
 						controller.close();
 					} catch {
@@ -209,6 +217,9 @@ export function createStreamHandler(options: StreamHandlerOptions = {}): StreamH
 				signal?.addEventListener('abort', teardown, { once: true });
 				// An already-aborted request never fires the listener above.
 				if (signal?.aborted) teardown();
+				// The process is stopping: end this stream now rather than hold the exit.
+				stopping.addEventListener('abort', teardown, { once: true });
+				if (stopping.aborted) teardown();
 			},
 			cancel() {
 				teardown();
