@@ -14,7 +14,7 @@
 </script>
 
 <svelte:head>
-	<title>{data.preview.title} · Agent Dashboard</title>
+	<title>{data.preview.title} · Wildware Feed</title>
 	<meta name="robots" content="noindex, nofollow" />
 
 	<!--
@@ -27,7 +27,7 @@
 	-->
 	<meta name="description" content={data.preview.description} />
 	<meta property="og:type" content="article" />
-	<meta property="og:site_name" content="Agent Dashboard" />
+	<meta property="og:site_name" content="Wildware Feed" />
 	<meta property="og:title" content={data.preview.title} />
 	<meta property="og:description" content={data.preview.description} />
 	<meta property="og:url" content={data.preview.url} />
@@ -67,8 +67,8 @@
 			they cannot take up.
 		-->
 		<p class="px-1 text-xs text-content-muted">
-			Shared from an Agent Dashboard. Only this update is visible, and the link can be switched off
-			by whoever sent it.
+			Shared from Wildware Feed. Only this update is visible, and the link can be switched off by
+			whoever sent it.
 		</p>
 	</div>
 </main>

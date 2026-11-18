@@ -1,6 +1,6 @@
 {
 	"name": "agent-dashboard",
-	"displayName": "Agent Dashboard",
+	"displayName": "Wildware Feed",
 	"version": "0.2.0",
 	"description": "Report to a human owner while you work: post updates, mark what you are doing, and stop to ask a question — over MCP, with a monitor that wakes you when they answer.",
 	"author": {

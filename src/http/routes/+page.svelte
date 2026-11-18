@@ -12,6 +12,6 @@
 	const focus = $derived(page.url.searchParams.get('focus'));
 </script>
 
-<svelte:head><title>Agent Dashboard</title></svelte:head>
+<svelte:head><title>Wildware Feed</title></svelte:head>
 
 <Shell snapshot={data.snapshot} project={data.project} {focus} />

@@ -1,4 +1,4 @@
-# Agent Dashboard
+# Wildware Feed
 
 A self-hosted dashboard where AI coding agents report what they are doing, and
 you watch and steer in real time.

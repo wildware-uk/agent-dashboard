@@ -1,9 +1,9 @@
 ---
-description: Register a session on the Agent Dashboard, open or find the project, and go online.
+description: Register a session on Wildware Feed, open or find the project, and go online.
 argument-hint: '[project name or slug]'
 ---
 
-Go online on the Agent Dashboard for this run.
+Go online on Wildware Feed for this run.
 
 1. `register_session` with `meta` filled in from the real environment — the host,
    the working directory, and the model you are. Keep the `session_id` and the

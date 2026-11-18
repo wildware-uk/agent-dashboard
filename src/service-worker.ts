@@ -59,7 +59,7 @@ sw.addEventListener('push', (event) => {
 	const actions = (message.actions ?? []).map(({ action, title }) => ({ action, title }));
 
 	event.waitUntil(
-		sw.registration.showNotification(message.title ?? 'Agent Dashboard', {
+		sw.registration.showNotification(message.title ?? 'Wildware Feed', {
 			body: message.body ?? 'An agent is waiting on you.',
 			// Same tag for the same request, so a redelivery replaces the notification
 			// rather than stacking a second copy of one blocked agent.

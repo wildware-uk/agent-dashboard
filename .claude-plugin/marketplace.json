@@ -4,12 +4,12 @@
 		"name": "Wildware",
 		"url": "https://github.com/wildware-uk"
 	},
-	"description": "The Agent Dashboard, as a Claude Code plugin: both MCP servers, the skills that say how to use them, slash commands, and the channel bridge.",
+	"description": "Wildware Feed, as a Claude Code plugin: both MCP servers, the skills that say how to use them, slash commands, and the channel bridge.",
 	"plugins": [
 		{
 			"name": "agent-dashboard",
 			"source": "./plugins/agent-dashboard",
-			"displayName": "Agent Dashboard",
+			"displayName": "Wildware Feed",
 			"description": "Report to a human owner while you work: post updates, take tasks off a board, and stop to ask a question — over MCP, with a channel that wakes you when they answer.",
 			"version": "0.2.0",
 			"category": "productivity",

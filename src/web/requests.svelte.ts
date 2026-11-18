@@ -273,6 +273,6 @@ export function browserNotifier(): Notifier | null {
 
 	return ({ question, kind }) => {
 		if (Notification.permission !== 'granted') return;
-		new Notification('Agent Dashboard', { body: `${question} (${kind})`, tag: 'owner-request' });
+		new Notification('Wildware Feed', { body: `${question} (${kind})`, tag: 'owner-request' });
 	};
 }

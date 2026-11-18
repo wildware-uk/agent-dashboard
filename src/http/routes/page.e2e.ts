@@ -23,7 +23,7 @@ test.describe('dark-first with system preference', () => {
 	test('serves the shell', async ({ page }) => {
 		await page.goto('/');
 
-		await expect(page.getByRole('heading', { name: 'Agent Dashboard' })).toBeVisible();
+		await expect(page.getByRole('heading', { name: 'Wildware Feed' })).toBeVisible();
 	});
 
 	test('ships dark in the HTML, so there is no light flash', async ({ request }) => {

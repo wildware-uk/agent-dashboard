@@ -1,4 +1,4 @@
-# Agent Dashboard (design §10).
+# Wildware Feed (design §10).
 #
 # One process, one SQLite file, one data directory. Nothing external, so the
 # image is the whole product and the only state is the volume mounted at /data.

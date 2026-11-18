@@ -576,7 +576,7 @@
 
 			{#if !wordmark}
 				<h1 class="truncate text-base font-semibold tracking-tight sm:text-lg">
-					{activeProject ? activeProject.name : 'Agent Dashboard'}
+					{activeProject ? activeProject.name : 'Wildware Feed'}
 				</h1>
 			{/if}
 

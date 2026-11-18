@@ -1,5 +1,5 @@
 ---
-description: Close the Agent Dashboard session cleanly at the end of a run.
+description: Close the Wildware Feed session cleanly at the end of a run.
 ---
 
 Wind down on the dashboard.

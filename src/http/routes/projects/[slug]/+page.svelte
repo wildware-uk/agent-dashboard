@@ -15,7 +15,7 @@
 	const focus = $derived(page.url.searchParams.get('focus'));
 </script>
 
-<svelte:head><title>{project?.name ?? 'Project'} · Agent Dashboard</title></svelte:head>
+<svelte:head><title>{project?.name ?? 'Project'} · Wildware Feed</title></svelte:head>
 
 <!--
 	Keyed on the slug: navigating from one project to another is a different

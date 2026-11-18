@@ -68,7 +68,7 @@ test.beforeAll(async () => {
 				// Fixed port, so make sure the thing answering is ours: a stray process
 				// on 4179 would otherwise turn every assertion below into a mystery.
 				const html = await response.text();
-				if (!html.includes('Agent Dashboard')) {
+				if (!html.includes('Wildware Feed')) {
 					throw new Error(`something other than this app is listening on ${ORIGIN}`);
 				}
 				break;

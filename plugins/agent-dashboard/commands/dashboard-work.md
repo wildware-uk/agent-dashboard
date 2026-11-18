@@ -1,5 +1,5 @@
 ---
-description: Check the Agent Dashboard for open work, and pick something up if there is any.
+description: Check Wildware Feed for open work, and pick something up if there is any.
 argument-hint: '[project slug]'
 ---
 

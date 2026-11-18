@@ -1,4 +1,4 @@
-# Agent Dashboard — one service, one volume (design §10).
+# Wildware Feed — one service, one volume (design §10).
 #
 #   cp .env.example .env      # then fill in the three secrets
 #   docker compose up -d --build

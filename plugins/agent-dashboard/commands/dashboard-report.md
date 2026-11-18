@@ -1,5 +1,5 @@
 ---
-description: Post a status update to the Agent Dashboard about what just happened.
+description: Post a status update to Wildware Feed about what just happened.
 argument-hint: '[what to report, or blank to summarise the work so far]'
 ---
 

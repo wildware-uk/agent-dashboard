@@ -1,6 +1,6 @@
 {
-	"name": "Agent Dashboard",
-	"short_name": "Agents",
+	"name": "Wildware Feed",
+	"short_name": "Wildware Feed",
 	"description": "Watch what your coding agents are doing, and answer the questions they stop on.",
 	"start_url": "/",
 	"scope": "/",

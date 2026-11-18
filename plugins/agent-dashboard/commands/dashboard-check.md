@@ -1,5 +1,5 @@
 ---
-description: Verify the Agent Dashboard plugin is configured and reachable, and say exactly what is wrong if not.
+description: Verify the Wildware Feed plugin is configured and reachable, and say exactly what is wrong if not.
 allowed-tools: Bash
 ---
 

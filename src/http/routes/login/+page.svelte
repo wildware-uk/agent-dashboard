@@ -8,11 +8,11 @@
 	let { data, form }: { data: PageData; form: ActionData } = $props();
 </script>
 
-<svelte:head><title>Sign in · Agent Dashboard</title></svelte:head>
+<svelte:head><title>Sign in · Wildware Feed</title></svelte:head>
 
 <main class="mx-auto flex min-h-dvh max-w-md flex-col justify-center gap-6 px-6 py-16">
 	<div class="flex items-baseline justify-between gap-4">
-		<h1 class="text-2xl font-semibold tracking-tight">Agent Dashboard</h1>
+		<h1 class="text-2xl font-semibold tracking-tight">Wildware Feed</h1>
 		<Theme />
 	</div>
 

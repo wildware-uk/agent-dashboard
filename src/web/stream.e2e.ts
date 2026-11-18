@@ -61,7 +61,7 @@ test.beforeAll(async () => {
 			const response = await fetch(`${ORIGIN}/login`);
 			if (response.ok) {
 				const html = await response.text();
-				if (!html.includes('Agent Dashboard')) {
+				if (!html.includes('Wildware Feed')) {
 					throw new Error(`something other than this app is listening on ${ORIGIN}`);
 				}
 				break;
