@@ -341,7 +341,7 @@ the first request.
 | `HOLD_S`              | `55`              | Seconds `request_input` parks before returning `pending`. Max 59.                                                             |
 | `VAPID_PUBLIC_KEY`    | push off          | Web Push keypair, from `vapid-keys`. Both halves or neither; startup refuses on one.                                          |
 | `VAPID_PRIVATE_KEY`   | push off          | The private half. Changing either invalidates every browser subscription.                                                     |
-| `VAPID_SUBJECT`       | `PUBLIC_BASE_URL` | `mailto:` or `https://` address a push service can complain to.                                                               |
+| `VAPID_SUBJECT`       | `PUBLIC_BASE_URL` | `mailto:` or `https://` address a push service can complain to. Required with push on when `PUBLIC_BASE_URL` is not https.    |
 | `APNS_KEY_ID`         | iOS push off      | Apple push key id, for the iOS app. All four `APNS_*` or none; startup refuses on some.                                       |
 | `APNS_TEAM_ID`        | iOS push off      | Apple developer team id.                                                                                                      |
 | `APNS_KEY_PATH`       | iOS push off      | Path to the `.p8` signing key. Keep it out of git.                                                                            |

@@ -104,6 +104,7 @@ const schema = z
 		 * Who a push service should complain to about this deployment, as a `mailto:`
 		 * or an `https://` URL. Defaults to `PUBLIC_BASE_URL`, which is a real address
 		 * for this deployment and is the value most operators would type anyway.
+		 * Required when push is on and `PUBLIC_BASE_URL` is not https.
 		 */
 		VAPID_SUBJECT: z
 			.string()
@@ -133,6 +134,25 @@ const schema = z
 			ctx.addIssue({
 				code: 'custom',
 				message: 'VAPID_PUBLIC_KEY and VAPID_PRIVATE_KEY must be set together, or neither'
+			});
+		}
+
+		// The subject falls back to PUBLIC_BASE_URL, and push services reject a
+		// subject that is not mailto: or https:. Booting anyway would fail every
+		// send, and ten failures in a row delete a phone's subscription, so a
+		// typo-free but http deployment would quietly unsubscribe every device.
+		const keys = config.VAPID_PUBLIC_KEY !== undefined && config.VAPID_PRIVATE_KEY !== undefined;
+		if (
+			keys &&
+			config.VAPID_SUBJECT === undefined &&
+			!config.PUBLIC_BASE_URL.startsWith('https://')
+		) {
+			ctx.addIssue({
+				code: 'custom',
+				path: ['VAPID_SUBJECT'],
+				message:
+					`unset, so push would sign with PUBLIC_BASE_URL (${config.PUBLIC_BASE_URL}), which is not https: ` +
+					'and which push services reject. Set VAPID_SUBJECT=mailto:<your address>'
 			});
 		}
 

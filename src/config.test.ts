@@ -202,7 +202,8 @@ describe('push notifications', () => {
 	});
 
 	it('is on when both keys are set', () => {
-		expect(pushConfig(loadConfig({ ...required, ...keys }))).toMatchObject({
+		const config = loadConfig({ ...required, ...keys, PUBLIC_BASE_URL: 'https://agents.test' });
+		expect(pushConfig(config)).toMatchObject({
 			publicKey: 'pub',
 			privateKey: 'priv'
 		});
@@ -217,6 +218,24 @@ describe('push notifications', () => {
 		const config = loadConfig({ ...required, ...keys, PUBLIC_BASE_URL: 'https://agents.test' });
 
 		expect(pushConfig(config)?.subject).toBe('https://agents.test');
+	});
+
+	it('refuses to start when the subject would fall back to a non-https address', () => {
+		// Push services reject every send signed with an http: subject, and each
+		// rejection counted against the subscription until ten of them deleted it.
+		expect(() => loadConfig({ ...required, ...keys })).toThrow(/VAPID_SUBJECT/);
+		expect(() =>
+			loadConfig({ ...required, ...keys, PUBLIC_BASE_URL: 'http://dash.lan:3000' })
+		).toThrow(/VAPID_SUBJECT/);
+	});
+
+	it('starts on an http address when a subject is given, or push is off', () => {
+		const http = { ...required, PUBLIC_BASE_URL: 'http://dash.lan:3000' };
+
+		expect(
+			pushConfig(loadConfig({ ...http, ...keys, VAPID_SUBJECT: 'mailto:o@example.com' }))
+		).not.toBeNull();
+		expect(pushConfig(loadConfig(http))).toBeNull();
 	});
 
 	it('takes a mailto: or an https: subject, and nothing else', () => {
