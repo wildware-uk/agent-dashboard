@@ -13,6 +13,7 @@ import { findOwnerDeviceById } from '$db';
 import {
 	alertHeaders,
 	alertPayload,
+	CRITICAL_STYLE,
 	MARKDOWN_MAX_BYTES,
 	apnsAlertFor,
 	createApnsTransport,
@@ -539,5 +540,73 @@ describe('the alert sender', () => {
 
 		expect(sent).toEqual([]);
 		stop();
+	});
+});
+
+describe('a critical alert', () => {
+	let h: Harness;
+	let agentId: string;
+	let sent: ApnsRequest[];
+	const transport: ApnsTransport = (request) => {
+		sent.push(request);
+		return Promise.resolve({ status: 200, reason: null });
+	};
+	const levelFor = (token: string) =>
+		JSON.parse(sent.find((request) => request.deviceToken === token)!.payload).aps[
+			'interruption-level'
+		];
+
+	beforeEach(() => {
+		h = harness();
+		agentId = h.agent('scout');
+		sent = [];
+		createProject(h, { name: 'Fees', slug: 'fees' });
+		const pager = mintOwnerDevice(h, { name: 'pager', secret: 't'.repeat(32) }).device;
+		setDeviceApnsToken(h, pager.id, { token: 'abab', environment: 'production' });
+		setDeviceAlertPrefs(h, pager.id, { critical: true });
+		const plain = mintOwnerDevice(h, { name: 'plain', secret: 't'.repeat(32) }).device;
+		setDeviceApnsToken(h, plain.id, { token: 'cdcd', environment: 'production' });
+	});
+
+	const send = async (priority: 'high' | 'critical') => {
+		const update = postUpdate(h, {
+			project: 'fees',
+			agentId,
+			body: 'prod is down',
+			level: 'error',
+			priority
+		});
+		const alert = apnsAlertFor(h, { type: 'update.created', updateId: update.id }, BASE)!;
+		await sendApnsAlert(h, alert, { settings: SETTINGS, transport });
+	};
+
+	it('breaks through on a phone that turned critical alerts on, and is a normal alert elsewhere', async () => {
+		expect(CRITICAL_STYLE).toBe('time-sensitive');
+		await send('critical');
+		expect(levelFor('abab')).toBe('time-sensitive');
+		expect(levelFor('cdcd')).toBe('active');
+	});
+
+	it('is never made of a high-priority update', async () => {
+		await send('high');
+		expect(levelFor('abab')).toBe('active');
+	});
+
+	it('marks the alert as critical for the app', async () => {
+		await send('critical');
+		expect(JSON.parse(sent[0].payload).priority).toBe('critical');
+	});
+
+	it('becomes an Apple critical alert, loud through silent mode, in one switch', () => {
+		const update = postUpdate(h, {
+			project: 'fees',
+			agentId,
+			body: 'prod is down',
+			priority: 'critical'
+		});
+		const alert = apnsAlertFor(h, { type: 'update.created', updateId: update.id }, BASE)!;
+		const aps = alertPayload(alert, { page: 'critical' }).aps as Record<string, unknown>;
+		expect(aps['interruption-level']).toBe('critical');
+		expect(aps.sound).toEqual({ critical: 1, name: 'default', volume: 1 });
 	});
 });

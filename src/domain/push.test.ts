@@ -17,6 +17,7 @@ import {
 	subscribeToPush,
 	assertPushPrefs,
 	notifies,
+	pages,
 	setDevicePrefs,
 	unsubscribeFromPush
 } from './push';
@@ -555,6 +556,74 @@ describe('markdown in a notification', () => {
 
 		expect(replyMessage(h, message.id, BASE)?.message.body).toBe(
 			'Merged. Ran npm test:\n• 2502 passed\n• log'
+		);
+	});
+});
+
+describe('critical alerts', () => {
+	const critical = {
+		type: 'update' as const,
+		level: 'error' as const,
+		priority: 'critical' as const,
+		agentId: 'a1',
+		projectSlug: 'fees'
+	};
+
+	it('are off until a device turns them on', () => {
+		expect(pages(null, critical)).toBe(false);
+		expect(pages({ critical: false }, critical)).toBe(false);
+		expect(pages({ critical: true }, critical)).toBe(true);
+	});
+
+	it('page only for what is marked critical', () => {
+		expect(pages({ critical: true }, { ...critical, priority: 'high' })).toBe(false);
+		expect(
+			pages(
+				{ critical: true },
+				{ type: 'request', priority: 'critical', agentId: 'a1', projectSlug: null }
+			)
+		).toBe(true);
+		expect(
+			pages(
+				{ critical: true },
+				{ type: 'request', priority: 'medium', agentId: 'a1', projectSlug: null }
+			)
+		).toBe(false);
+	});
+
+	it('page only for the agents and projects a device allowed, when it named any', () => {
+		expect(pages({ critical: true, criticalAgents: ['a1'] }, critical)).toBe(true);
+		expect(pages({ critical: true, criticalAgents: ['a2'] }, critical)).toBe(false);
+		expect(pages({ critical: true, criticalProjects: ['fees'] }, critical)).toBe(true);
+		expect(pages({ critical: true, criticalProjects: ['docs'] }, critical)).toBe(false);
+		expect(
+			pages({ critical: true, criticalProjects: ['docs'] }, { ...critical, projectSlug: null })
+		).toBe(false);
+	});
+
+	it('still reach a device whose filters would have dropped them, as a normal alert', () => {
+		// Critical outranks high: a phone that only wants high-priority updates hears critical ones.
+		expect(notifies({ priorities: ['high'] }, critical)).toBe(true);
+		// A page goes through every filter the phone set: it asked to be woken.
+		expect(notifies({ types: ['request'], critical: true }, critical)).toBe(true);
+		expect(notifies({ types: ['request'] }, critical)).toBe(false);
+	});
+
+	it('are stored with the rest of a device’s choices, and checked', () => {
+		expect(
+			assertPushPrefs({ critical: true, criticalAgents: ['a1', 'a1'], criticalProjects: ['fees'] })
+		).toEqual({
+			critical: true,
+			criticalAgents: ['a1'],
+			criticalProjects: ['fees']
+		});
+		expect(assertPushPrefs({ priorities: ['critical'] })).toEqual({ priorities: ['critical'] });
+		expect(() => assertPushPrefs({ critical: 'yes' })).toThrow(/critical must be true or false/);
+		expect(() => assertPushPrefs({ criticalAgents: 'a1' })).toThrow(
+			/criticalAgents must be a list/
+		);
+		expect(() => assertPushPrefs({ criticalProjects: [3] })).toThrow(
+			/criticalProjects must be a list of strings/
 		);
 	});
 });

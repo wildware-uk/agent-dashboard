@@ -267,15 +267,19 @@ export const UPDATE_LEVELS = ['info', 'success', 'warn', 'error'] as const;
 /**
  * How much an update needs the owner now (design §7).
  *
- * Deliberately three, and deliberately not the same axis as `level`. Level is
+ * Deliberately not the same axis as `level`. Level is
  * what happened and colours the card; priority is whether it can wait, and is
  * what a phone at 2am filters on. An agent that has to express "this failed but
  * it does not matter" needs both, and a single field would make it choose.
+ *
+ * `critical` pages the owner's phones through Do Not Disturb, on a phone that
+ * turned critical alerts on. It is for emergencies and for an owner who asked to
+ * be paged, and the tool descriptions say so plainly.
  */
-export const UPDATE_PRIORITIES = ['low', 'medium', 'high'] as const;
+export const UPDATE_PRIORITIES = ['low', 'medium', 'high', 'critical'] as const;
 
 /** A priority, checked. The default is `medium`: most things are ordinary. */
-function assertPriority(priority: UpdatePriority): UpdatePriority {
+export function assertPriority(priority: UpdatePriority): UpdatePriority {
 	if (!UPDATE_PRIORITIES.includes(priority)) {
 		throw invalid(`priority must be one of: ${UPDATE_PRIORITIES.join(', ')}`);
 	}

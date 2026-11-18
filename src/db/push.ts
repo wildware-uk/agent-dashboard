@@ -52,6 +52,15 @@ export type PushPrefs = {
 	levels?: string[];
 	/** For updates: which priorities are. */
 	priorities?: string[];
+	/**
+	 * Whether something marked `critical` pages this device through Do Not Disturb.
+	 * Off unless the owner turns it on; a critical alert is a normal one until then.
+	 */
+	critical?: boolean;
+	/** Only these agents (by id) may page it; absent for any agent. */
+	criticalAgents?: string[];
+	/** Only these projects (by slug) may page it; absent for any project. */
+	criticalProjects?: string[];
 };
 
 type Row = {

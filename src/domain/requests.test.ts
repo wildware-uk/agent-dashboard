@@ -996,3 +996,25 @@ describe('options with pictures', () => {
 		expect(edited.config?.optionMedia).toEqual({ Red: red });
 	});
 });
+
+describe('priority', () => {
+	it('is medium unless the agent says, and may be critical', () => {
+		expect(createRequest(h, { agentId, kind: 'confirm', question: 'ok?' }).request.priority).toBe(
+			'medium'
+		);
+		const { request } = createRequest(h, {
+			agentId,
+			kind: 'confirm',
+			question: 'prod is down, roll back?',
+			priority: 'critical'
+		});
+		expect(request.priority).toBe('critical');
+		expect(findRequest(h, request.id)?.priority).toBe('critical');
+	});
+
+	it('refuses a priority it does not know', () => {
+		expect(() =>
+			createRequest(h, { agentId, kind: 'confirm', question: 'ok?', priority: 'urgent' as never })
+		).toThrow(/priority must be one of: low, medium, high, critical/);
+	});
+});

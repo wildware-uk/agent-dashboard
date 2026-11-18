@@ -67,7 +67,8 @@ import {
 	type RequestAnswer,
 	type RequestConfig,
 	type RequestKind,
-	type RequestValue
+	type RequestValue,
+	type UpdatePriority
 } from '$db';
 import { context as sharedContext, type DomainContext } from './context';
 import { attachEmbeds, checkedEmbeds, type NewEmbedInput } from './embeds';
@@ -75,6 +76,7 @@ import { conflict, invalid, notFound } from './errors';
 import { assertAttachableToMessage, MEDIA_PER_UPDATE_MAX } from './media';
 import { resolveProject } from './projects';
 import { optionalText, requiredText } from './text';
+import { assertPriority } from './updates';
 
 /** The five kinds, in the order design §5 tabulates them. */
 /**
@@ -182,6 +184,8 @@ export type OwnerRequest = {
 	editedAt: number | null;
 	/** Kept at the top of the feed by the owner (migration 034). */
 	pinned: boolean;
+	/** How much it needs the owner now (migration 048); `critical` pages their phones. */
+	priority: UpdatePriority;
 };
 
 /** What an agent gets back from a wait, whichever tool it called. */
@@ -197,6 +201,8 @@ export type CreateRequestInput = {
 	agentId: string;
 	kind: RequestKind;
 	question: string;
+	/** How much it needs the owner now; `critical` pages their phones. `medium` unless said. */
+	priority?: UpdatePriority;
 	detail?: string | null;
 	/**
 	 * Pictures and files to show with the question (migration 030).
@@ -316,6 +322,7 @@ export function createRequest(
 	const baseConfig = assertConfig(kind, options, input);
 	const { projectId, updateId, messageId } = anchor(ctx, input);
 	const timeoutS = assertTimeout(input.timeoutS);
+	const priority = assertPriority(input.priority ?? 'medium');
 
 	// Checked before the insert, exactly as a card's are: an approval that
 	// appeared without the screenshot it was asking about would be a decision the
@@ -352,6 +359,7 @@ export function createRequest(
 		detail,
 		options,
 		config,
+		priority,
 		expiresAt: ctx.now() + timeoutS * 1_000
 	});
 
@@ -915,7 +923,8 @@ function toRequest(row: Approval): OwnerRequest {
 		answeredAt: row.decidedAt,
 		answer: answerOf(row),
 		editedAt: row.editedAt,
-		pinned: row.pinned
+		pinned: row.pinned,
+		priority: row.priority
 	};
 }
 
