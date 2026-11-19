@@ -104,7 +104,7 @@ export type UpdateLevel = 'info' | 'success' | 'warn' | 'error';
  * whether it can wait. A routine `error` from a flaky test is low priority; an
  * `info` that a migration is about to run against production is high.
  */
-export type UpdatePriority = 'low' | 'medium' | 'high' | 'critical';
+export type UpdatePriority = 'low' | 'medium' | 'high';
 
 export type Update = Keyed & {
 	projectId: string;
@@ -514,8 +514,6 @@ export type Approval = Keyed & {
 	editedAt: number | null;
 	/** Kept at the top of the feed by the owner (migration 034). */
 	pinned: boolean;
-	/** How much it needs the owner now (migration 048). */
-	priority: UpdatePriority;
 };
 
 /**

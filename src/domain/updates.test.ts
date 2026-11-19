@@ -415,19 +415,3 @@ describe('updates on a task', () => {
 		).toBeNull();
 	});
 });
-
-describe('a critical update', () => {
-	it('is accepted, kept and can be edited down', () => {
-		const h = harness();
-		const agentId = h.agent('scout');
-		createProject(h, { name: 'Fees', slug: 'fees' });
-		const update = postUpdate(h, {
-			project: 'fees',
-			agentId,
-			body: 'prod is down',
-			priority: 'critical'
-		});
-		expect(update.priority).toBe('critical');
-		expect(editUpdate(h, { updateId: update.id, agentId, priority: 'high' }).priority).toBe('high');
-	});
-});

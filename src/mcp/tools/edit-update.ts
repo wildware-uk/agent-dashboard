@@ -16,7 +16,6 @@
  * than dropping them: attaching is `attach_media`'s job and detaching is nobody's
  * yet, so an argument that half worked would be worse than no argument.
  */
-import { CRITICAL_PRIORITY } from './priority';
 import { BODY_MAX_LENGTH, TITLE_MAX_LENGTH, editUpdate } from '$domain';
 import { z } from 'zod';
 import { guard, ok, updateView } from '../results';
@@ -47,7 +46,7 @@ const inputSchema = {
 				`alone; pass null to remove the headline entirely.`
 		),
 	priority: z
-		.enum(['low', 'medium', 'high', 'critical'])
+		.enum(['low', 'medium', 'high'])
 		.optional()
 		.describe(
 			'How much this needs your owner NOW: "low", "medium" (the default) or "high". A ' +
@@ -55,8 +54,7 @@ const inputSchema = {
 				'wait. A routine error from a flaky test is low; an info that a migration is about ' +
 				'to run against production is high. Your owner filters notifications on this, per ' +
 				'device, so "high" is what reaches a phone at 2am. Use it sparingly or it stops ' +
-				'meaning anything. ' +
-				CRITICAL_PRIORITY
+				'meaning anything.'
 		),
 	level: z
 		.enum(['info', 'success', 'warn', 'error'])
@@ -83,9 +81,8 @@ export const editUpdateTool: McpTool<typeof inputSchema> = {
 			`- title (optional): the replacement headline, at most ${TITLE_MAX_LENGTH} characters, or`,
 			'  null to remove it.',
 			'- level (optional): "info", "success", "warn" or "error".',
-			'- priority (optional): "low", "medium", "high" or "critical". Demote something that has stopped',
+			'- priority (optional): "low", "medium" or "high". Demote something that has stopped',
 			'  mattering rather than leaving it shouting.',
-			`  ${CRITICAL_PRIORITY}`,
 			'',
 			'At least one of body, title, level or priority must be given.',
 			'',

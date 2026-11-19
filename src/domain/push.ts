@@ -92,32 +92,9 @@ export type Notifiable = {
 	type: PushType;
 	/** Updates only: what kind of thing happened. */
 	level?: UpdateLevel;
-	/** Updates and requests: whether it can wait. */
+	/** Updates only: whether it can wait. */
 	priority?: UpdatePriority;
-	/** Who sent it, for a device that lets only some agents page it. */
-	agentId?: string;
-	/** Its project's slug, for a device that lets only some projects page it. */
-	projectSlug?: string | null;
 };
-
-/**
- * Whether this pages the device: marked `critical`, and the device turned critical
- * alerts on for this agent and project. Paging is how the phone breaks through Do
- * Not Disturb, so it is never on by default and the allow-lists only ever narrow it.
- */
-export function pages(prefs: PushPrefs | null | undefined, about: Notifiable): boolean {
-	if (about.priority !== 'critical' || prefs?.critical !== true) return false;
-	if (prefs.criticalAgents && !(about.agentId && prefs.criticalAgents.includes(about.agentId))) {
-		return false;
-	}
-	if (
-		prefs.criticalProjects &&
-		!(about.projectSlug && prefs.criticalProjects.includes(about.projectSlug))
-	) {
-		return false;
-	}
-	return true;
-}
 
 /**
  * Whether this device wants to hear about this.
@@ -131,19 +108,13 @@ export function pages(prefs: PushPrefs | null | undefined, about: Notifiable): b
  * being true.
  */
 export function notifies(prefs: PushPrefs | null | undefined, about: Notifiable): boolean {
-	// A device that asked to be paged for this is told, whatever else it filters out.
-	if (pages(prefs, about)) return true;
 	const types = prefs?.types ?? DEFAULT_PUSH_TYPES;
 	if (!types.includes(about.type)) return false;
 	if (about.type !== 'update') return true;
 
 	if (prefs?.levels && about.level && !prefs.levels.includes(about.level)) return false;
-	if (prefs?.priorities && about.priority) {
-		// Critical outranks high: a device that wants high-priority updates hears critical ones.
-		const wanted =
-			prefs.priorities.includes(about.priority) ||
-			(about.priority === 'critical' && prefs.priorities.includes('high'));
-		if (!wanted) return false;
+	if (prefs?.priorities && about.priority && !prefs.priorities.includes(about.priority)) {
+		return false;
 	}
 	return true;
 }
@@ -180,39 +151,8 @@ export function assertPushPrefs(input: unknown): PushPrefs | null {
 	if (body.priorities !== undefined) {
 		prefs.priorities = list(body.priorities, 'priorities', UPDATE_PRIORITIES);
 	}
-	if (body.critical !== undefined) {
-		if (typeof body.critical !== 'boolean') throw invalid('critical must be true or false');
-		prefs.critical = body.critical;
-	}
-	const names = (value: unknown, field: string): string[] => {
-		if (!Array.isArray(value)) throw invalid(`${field} must be a list`);
-		if (value.some((member) => typeof member !== 'string')) {
-			throw invalid(`${field} must be a list of strings`);
-		}
-		return [...new Set(value as string[])];
-	};
-	if (body.criticalAgents !== undefined) {
-		prefs.criticalAgents = names(body.criticalAgents, 'criticalAgents');
-	}
-	if (body.criticalProjects !== undefined) {
-		prefs.criticalProjects = names(body.criticalProjects, 'criticalProjects');
-	}
 
 	return Object.keys(prefs).length === 0 ? null : prefs;
-}
-
-/** What a request is, for a device's filter and its critical allow-lists. */
-export function requestAbout(ctx: DomainContext, requestId: string): Notifiable {
-	const request = findRequest(ctx, requestId);
-	if (!request) return { type: 'request' };
-	return {
-		type: 'request',
-		priority: request.priority,
-		agentId: request.agentId,
-		projectSlug: request.projectId
-			? (findProjectById(ctx.db, request.projectId)?.slug ?? null)
-			: null
-	};
 }
 
 /** How many consecutive transient failures before a subscription is given up on. */
@@ -559,13 +499,7 @@ export function updateMessage(
 			url: projectUrl(ctx, update.projectId, base, update.id),
 			tag: `update-${update.id}`
 		},
-		about: {
-			type: 'update',
-			level: update.level,
-			priority: update.priority,
-			agentId: update.agentId,
-			projectSlug: findProjectById(ctx.db, update.projectId)?.slug ?? null
-		}
+		about: { type: 'update', level: update.level, priority: update.priority }
 	};
 }
 
@@ -713,7 +647,7 @@ export function startRequestPusher(options: RequestPusherOptions = {}): () => vo
 					const built = message(ctx, event.payload.requestId, base);
 					if (built === null) return;
 					await sendPush(ctx, built, {
-						about: requestAbout(ctx, event.payload.requestId),
+						about: { type: 'request' },
 						settings: options.settings,
 						send: options.send
 					});

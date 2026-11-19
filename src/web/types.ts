@@ -16,7 +16,7 @@
 export type UpdateLevel = 'info' | 'success' | 'warn' | 'error';
 
 /** Whether an update can wait. A different axis from its level (design §7). */
-export type UpdatePriority = 'low' | 'medium' | 'high' | 'critical';
+export type UpdatePriority = 'low' | 'medium' | 'high';
 
 export type ProjectStatus = 'active' | 'archived';
 

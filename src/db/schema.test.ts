@@ -188,9 +188,7 @@ const DESIGN_COLUMNS: Record<string, string[]> = {
 		// Migration 033: when the asking agent last rewrote the question.
 		'edited_at',
 		// Migration 034: a question can be kept at the top of the feed too.
-		'pinned',
-		// Migration 048: how much it needs the owner now; `critical` pages their phones.
-		'priority'
+		'pinned'
 	],
 	// Where a notification is delivered when the dashboard is not open (design §7).
 	// A public link to one card, the only unauthenticated read in the product (§8).

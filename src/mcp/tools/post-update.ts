@@ -14,7 +14,6 @@
  * argument that is accepted and then ignored is worse documentation than an
  * argument that is not there yet.
  */
-import { CRITICAL_PRIORITY } from './priority';
 import {
 	BODY_MAX_LENGTH,
 	APPS_PER_POST_MAX,
@@ -52,7 +51,7 @@ const inputSchema = {
 				`Omit for a body-only note.`
 		),
 	priority: z
-		.enum(['low', 'medium', 'high', 'critical'])
+		.enum(['low', 'medium', 'high'])
 		.optional()
 		.describe(
 			'How much this needs your owner NOW: "low", "medium" (the default) or "high". A ' +
@@ -60,8 +59,7 @@ const inputSchema = {
 				'wait. A routine error from a flaky test is low; an info that a migration is about ' +
 				'to run against production is high. Your owner filters notifications on this, per ' +
 				'device, so "high" is what reaches a phone at 2am. Use it sparingly or it stops ' +
-				'meaning anything. ' +
-				CRITICAL_PRIORITY
+				'meaning anything.'
 		),
 	level: z
 		.enum(['info', 'success', 'warn', 'error'])
@@ -148,9 +146,8 @@ export const postUpdateTool: McpTool<typeof inputSchema> = {
 			`- title (optional): a headline, at most ${TITLE_MAX_LENGTH} characters.`,
 			'- level (optional): "info" (default), "success", "warn" or "error". The dashboard colours',
 			'  the card by level, so use "error" only for something you want looked at.',
-			'- priority (optional): "low", "medium" (default), "high" or "critical" — whether it can',
-			'  wait. Your owner filters notifications on it per device, so "high" is what reaches a',
-			`  phone. ${CRITICAL_PRIORITY}`,
+			'- priority (optional): "low", "medium" (default) or "high" — whether it can wait. Your',
+			'  owner filters notifications on it per device, so "high" is what reaches a phone.',
 			`- media_ids (optional): up to ${MEDIA_PER_UPDATE_MAX} ids from create_upload whose bytes`,
 			'  you have already uploaded. Images and video render on the card; anything else is',
 			'  listed as a download.',

@@ -33,9 +33,7 @@ import { context as sharedContext, type DomainContext } from './context';
 import { deviceWantsAlert, forgetDeviceToken } from './devices';
 import {
 	notifies,
-	pages,
 	replyMessage,
-	requestAbout,
 	requestMessage,
 	updateMessage,
 	type Notifiable,
@@ -314,43 +312,22 @@ export type ApnsAlert = {
 	markdown: string;
 };
 
-/**
- * How a page reaches a phone that turned critical alerts on.
- *
- * `time-sensitive` breaks through Focus and Do Not Disturb wherever the owner
- * allowed the app to, which needs only the Time Sensitive capability. `critical`
- * also plays through the silent switch, at full volume, and Apple grants the
- * entitlement for it by request only: once it has, change this one word.
- */
-export const CRITICAL_STYLE: 'time-sensitive' | 'critical' = 'time-sensitive';
-
-/** How one phone gets this alert: paged (and how), or not. */
-export type AlertDelivery = { page?: false | 'time-sensitive' | 'critical' };
-
-export function alertPayload(
-	alert: ApnsAlert,
-	delivery: AlertDelivery = {}
-): Record<string, unknown> {
-	const page = delivery.page ?? false;
-	const level = page || (alert.category === 'REQUEST' ? 'time-sensitive' : 'active');
+export function alertPayload(alert: ApnsAlert): Record<string, unknown> {
 	const payload: Record<string, unknown> = {
 		aps: {
 			alert: { title: alert.message.title, body: alert.message.body },
-			// A critical alert's sound plays through the silent switch, loud.
-			sound: page === 'critical' ? { critical: 1, name: 'default', volume: 1 } : 'default',
+			sound: 'default',
 			'thread-id': alert.threadId,
 			category: alert.category,
 			// Only a question needs the phone's extension (it adds the answer buttons); waking it for
 			// every alert holds each one back while the extension starts.
 			...(alert.category === 'REQUEST' && { 'mutable-content': 1 }),
-			'interruption-level': level
+			'interruption-level': alert.category === 'REQUEST' ? 'time-sensitive' : 'active'
 		},
 		url: alert.message.url,
 		tag: alert.message.tag,
 		markdown: truncateBytes(alert.markdown, MARKDOWN_MAX_BYTES)
 	};
-	// The app marks it as critical wherever it shows it, paged or not.
-	if (alert.about.priority === 'critical') payload.priority = 'critical';
 	if (alert.request) {
 		payload.requestId = alert.request.id;
 		payload.requestKind = alert.request.kind;
@@ -395,7 +372,7 @@ export function apnsAlertFor(
 			category: 'REQUEST',
 			threadId: threadFor(ctx, request.projectId),
 			projectId: request.projectId,
-			about: requestAbout(ctx, request.id),
+			about: { type: 'request' },
 			markdown: request.question,
 			request: {
 				id: request.id,
@@ -454,8 +431,7 @@ export async function sendApnsAlert(
 			notifies(device.alertPrefs, alert.about)
 	);
 	const headers = alertHeaders(options.settings.bundleId, alert.message.tag, ctx.now());
-	const normal = alertPayload(alert);
-	const paged = alertPayload(alert, { page: CRITICAL_STYLE });
+	const payload = alertPayload(alert);
 
 	const outcomes = await Promise.all(
 		devices.map((device) =>
@@ -465,8 +441,7 @@ export async function sendApnsAlert(
 				device,
 				'apns_token',
 				headers,
-				// Paged only on a phone that turned critical alerts on, for this agent and project.
-				pages(device.alertPrefs, alert.about) ? paged : normal,
+				payload,
 				options.onError
 			)
 		)

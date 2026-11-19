@@ -13,7 +13,6 @@
  * MCP server (`../server.ts`), so this description is the contract. It is
  * written for an agent that has never seen this server before.
  */
-import { CRITICAL_PRIORITY } from './priority';
 import { EMBEDS_PER_POST_MAX, MEDIA_PER_UPDATE_MAX, requestInput, type RequestKind } from '$domain';
 import { z } from 'zod';
 import { guarded, requestResult } from '../results';
@@ -157,15 +156,6 @@ const inputSchema = {
 				`ticket — instead of pasting them as flat text. At most ${EMBEDS_PER_POST_MAX}. Call ` +
 				`list_embed_types for the looks and the values each one reads.`
 		),
-	priority: z
-		.enum(['low', 'medium', 'high', 'critical'])
-		.optional()
-		.describe(
-			'How much this needs your owner NOW: "low", "medium" (the default), "high" or ' +
-				'"critical". A question already reaches their phone as one that cannot wait for ' +
-				'long; priority says how loudly. ' +
-				CRITICAL_PRIORITY
-		),
 	timeout_s: z
 		.number()
 		.int()
@@ -213,8 +203,6 @@ export const requestInputTool: McpTool<typeof inputSchema, Promise<CallToolResul
 			'discussing — it is the difference between "what about this?" answered in context and',
 			'a prompt your owner has to reconstruct.',
 			'timeout_s is how long the request stays answerable, one hour by default.',
-			'priority is "low", "medium" (default), "high" or "critical".',
-			CRITICAL_PRIORITY,
 			'',
 			'media_ids and embeds put things on the card, exactly as they do on an update: the',
 			'screenshot the question is about, the Slack message you are asking whether to send.',
@@ -293,7 +281,6 @@ export const requestInputTool: McpTool<typeof inputSchema, Promise<CallToolResul
 						update: args.update,
 						message: args.message_id,
 						timeoutS: args.timeout_s,
-						priority: args.priority,
 						mediaIds: args.media_ids,
 						optionMedia: args.option_media,
 						embeds: args.embeds?.map((embed) => ({

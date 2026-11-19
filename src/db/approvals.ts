@@ -20,14 +20,7 @@
 import type { Db } from './connection';
 import { newId } from './ids';
 import { jsonOf, jsonText, orNull } from './rows';
-import type {
-	Approval,
-	ApprovalState,
-	RequestAnswer,
-	RequestConfig,
-	RequestKind,
-	UpdatePriority
-} from './types';
+import type { Approval, ApprovalState, RequestAnswer, RequestConfig, RequestKind } from './types';
 
 type Row = {
 	seq: number;
@@ -48,11 +41,10 @@ type Row = {
 	answer: string | null;
 	edited_at: number | null;
 	pinned: number;
-	priority: UpdatePriority;
 };
 
 const COLUMNS = `seq, id, agent_id, project_id, update_id, message_id, kind, question, detail, options, config,
-	state, expires_at, decided_at, decided_value, answer, edited_at, pinned, priority`;
+	state, expires_at, decided_at, decided_value, answer, edited_at, pinned`;
 
 function toApproval(row: Row): Approval {
 	return {
@@ -73,15 +65,12 @@ function toApproval(row: Row): Approval {
 		decidedValue: row.decided_value,
 		answer: jsonOf<RequestAnswer>(row.answer),
 		editedAt: row.edited_at,
-		pinned: row.pinned === 1,
-		priority: row.priority
+		pinned: row.pinned === 1
 	};
 }
 
 export type NewApproval = {
 	id?: string;
-	/** How much it needs the owner now (migration 048); `medium` unless said. */
-	priority?: UpdatePriority;
 	agentId: string;
 	projectId?: string | null;
 	updateId?: string | null;
@@ -114,18 +103,17 @@ export function insertApproval(db: Db, input: NewApproval): Approval {
 		options: input.options ? jsonText([...input.options]) : null,
 		config: jsonText(input.config),
 		state: input.state ?? 'pending',
-		expires_at: input.expiresAt,
-		priority: input.priority ?? 'medium'
+		expires_at: input.expiresAt
 	};
 
 	const inserted = db
 		.prepare<typeof row, Row>(
 			`INSERT INTO approvals
 				(id, agent_id, project_id, update_id, message_id, kind, question, detail, options, config, state,
-				 expires_at, priority)
+				 expires_at)
 			 VALUES
 				(:id, :agent_id, :project_id, :update_id, :message_id, :kind, :question, :detail, :options, :config,
-				 :state, :expires_at, :priority)
+				 :state, :expires_at)
 			 RETURNING ${COLUMNS}`
 		)
 		.get(row)!;
